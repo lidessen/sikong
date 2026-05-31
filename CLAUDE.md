@@ -4,36 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`agent-loop` is a unified agent-loop library over four backends — Claude Agent
-SDK, Codex app-server, Cursor Agent SDK, and the Vercel AI SDK — with **runtime ⊥
-provider**: the loop engine (runtime) and the LLM+credentials (provider) are
-orthogonal, so one credential can drive any runtime it's compatible with. One
-`loop.run(input)` call = one full agent loop. Source is shipped as `.ts` (no build
-step; `package.json` points `module`/`exports` straight at `src/`).
+A **bun-workspaces monorepo** (`agent-workspace-monorepo`, private). Two packages:
+
+- **`packages/agent-loop`** — the unified agent-loop library over four backends —
+  Claude Agent SDK, Codex app-server, Cursor Agent SDK, Vercel AI SDK — with
+  **runtime ⊥ provider**: the loop engine (runtime) and the LLM+credentials
+  (provider) are orthogonal, so one credential can drive any runtime it's
+  compatible with. One `loop.run(input)` = one full loop; `runTask` is the outer
+  multi-run supervisor on top. This is where ~all the code is.
+- **`packages/agent-workspace`** — the coordination layer over `agent-loop`
+  (depends on it via `workspace:*`). **Scope TBD — placeholder** that re-exports
+  task primitives; real API not built yet.
+
+Packages ship `.ts` source (no build step; `package.json` `module`/`exports`
+point straight at `src/`). Paths in the Architecture section below are relative to
+`packages/agent-loop/src/` unless noted.
 
 ## Commands
 
 ```sh
-bun install
-bun run typecheck            # tsc -p tsconfig.json --noEmit  (the real gate)
-bun run test                 # vitest run  (runs under bun)
-bun run test:watch           # vitest
+bun install                         # at root — links workspaces
 
-# single test file / name
-bunx vitest run src/test/dx.test.ts
-bunx vitest run -t "textStream yields assistant text only"
+# root fan-out (the CI gate) — runs the script in every package
+bun run typecheck                   # = bun run --filter '*' typecheck
+bun run test                        # = bun run --filter '*' test
+bun run --filter agent-loop test    # one package
 
-# live smokes (need creds in the *interactive* shell — see "Credentials")
+# inside packages/agent-loop (its own scripts):
+bun run typecheck                   # tsc -p tsconfig.json --noEmit
+bun run test                        # vitest run
+bunx vitest run src/test/dx.test.ts                       # single file
+bunx vitest run -t "textStream yields assistant text only" # single test
+
+# live smokes — run from packages/agent-loop (creds via the *interactive* shell, see Credentials)
 bun scripts/smoke-provider.ts        # one DeepSeek key across runtimes
 bun scripts/smoke-run.ts [all|claude|codex|cursor|ai-sdk]
 bun scripts/repl.ts [runtime] [--provider deepseek|...] [--model ...]   # manual REPL
 ```
 
 There is no lint step and no bundler. `bun run typecheck` + `bun run test` are the
-full CI gate. **Verify before committing**: run typecheck/test in a *separate*
-step from `git commit` and read the result first — do not batch the verify and the
-commit into one parallel tool call (they run independently; the commit will fire
-even if the verify fails).
+full CI gate. **Verify before committing (hard rule):** a `git commit` must be its
+OWN tool batch, sent only after reading a green typecheck/test from a PRIOR batch —
+never batch the verify with the commit (they run independently; the commit fires
+even if the verify fails). String edits here also fail *silently* (no-op on
+mismatch), so after multi-file edits `grep -c` that each change actually landed
+before trusting it.
 
 ## Architecture
 
@@ -61,6 +76,13 @@ events flow back up normalized.
   `claudeCodeLoop`, `codexLoop`, `cursorLoop`, `mockLoop`).
 - **providers/index.ts** — built-in providers (`deepseek`, `anthropic`, `openai`,
   `openaiCompatible`, `anthropicCompatible`, `gateway`).
+- **task/** — the OUTER "ralph" loop over many runs. `run-task.ts` (`runTask()`
+  supervisor: fresh run per round, bridged by handoffs; threshold-steer on
+  `usedRatio`; terminates completed/exhausted/stuck/cancelled), `exit-tools.ts`
+  (`task_complete`/`task_handoff` injected as real tools — the model's choice is
+  the round's outcome), `handoff.ts` (`Handoff` + `memoryStore`/`fileStore` for
+  resume). Only consumes `AgentLoop`, so rounds can switch runtime/provider;
+  needs the `tools` capability (claude-code / ai-sdk), rejects codex/cursor.
 - **index.ts** — the public barrel. **caps.ts** — per-runtime capability lists.
 
 ### Non-obvious invariants (read before changing core/adapters)
@@ -146,6 +168,17 @@ Strict, `verbatimModuleSyntax` (use `import type` for types),
 `noUncheckedIndexedAccess`, `moduleResolution: bundler`, ESM, `noEmit`. Relative
 imports are extensionless. Two adapter-authoring escape hatches stay typed-as-data:
 `runtimeOptions` and provider specs are cast at the boundary.
+
+## Context-window signal
+
+`usage` events carry optional `contextWindow`/`usedRatio` — the signal the task
+supervisor uses to decide when to hand off. `core/context-window.ts`
+`resolveContextWindow(modelId, override)` looks up a known-model table by
+substring (explicit override wins; unknown → undefined, never guessed); each
+adapter exposes it on `BackendRun.contextWindow` and the executor fills the
+fields centrally. ai-sdk can only infer it from a provider spec's model id (a raw
+`LanguageModel` has no id) — pass `contextWindow` explicitly there. Note
+claude/codex self-compact, so `usedRatio` is a hint, not a guarantee.
 
 ## Reference
 
