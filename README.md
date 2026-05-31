@@ -34,26 +34,66 @@ const loop = aiSdkLoop({ provider: deepseek({ apiKey: process.env.DEEPSEEK_API_K
 const run = loop.run({
   prompt: "Refactor the auth module",
   system: "You are a senior engineer.",
-  hooks: {
-    onToolUse: (call) =>
-      call.name === "rm" ? { action: "deny", reason: "no destructive ops" } : { action: "continue" },
-    onMessage: (m) => process.stdout.write(m.text),
-  },
 });
 
-for await (const ev of run) {
-  // normalized LoopEvent: text | thinking | tool_call_start | tool_call_end
-  //                       | usage | step | steer | hook | error | unknown
-}
+// Just want the text? Stream the deltas:
+for await (const chunk of run.textStream) process.stdout.write(chunk);
 
-await run.steer("run the tests before continuing"); // injected mid-loop
-const result = await run.result; // { text, usage, durationMs, status, events }
+// …or the whole reply when done:
+const text = await run.text; // string
 ```
 
 Every loop — whatever runtime/provider — exposes the same interface:
-`loop.run(input)`, `loop.capabilities`, `loop.preflight()`, `loop.dispose()`.
-`run` returns a `RunHandle`: `AsyncIterable<LoopEvent>` plus `.result`,
-`.steer(msg)`, `.cancel()`.
+`loop.run(input)`, `loop.supports(cap)`, `loop.capabilities`, `loop.preflight()`,
+`loop.dispose()`.
+
+## Consuming a run
+
+`run` (a `RunHandle`) gives you several independent, replayable views — pick
+whichever fits; consuming one never drains the others, and you can subscribe even
+after the run finishes:
+
+```ts
+const run = loop.run("explain this repo");
+
+for await (const ev of run) { /* every LoopEvent */ }       // full event stream
+for await (const t of run.textStream) { /* string deltas */ } // assistant text only
+const text   = await run.text;    // Promise<string>
+const usage  = await run.usage;   // Promise<TokenUsage>
+const result = await run.result;  // { text, usage, durationMs, status, events, error? }
+
+await run.steer("run the tests first"); // inject mid-loop -> { mode: live|deferred|rejected }
+run.cancel();                            // stop the run
+```
+
+`LoopEvent` is the normalized union every runtime emits:
+`text | thinking | tool_call_start | tool_call_end | usage | step | steer | hook | error | unknown`.
+
+**Iteration never throws.** A failure surfaces as an `error` event *and*
+`result.status === "error"` with `result.error` set — so `await run.result` is
+always safe to await without a try/catch.
+
+### Hooks vs. events
+
+Two ways to observe a run — use whichever suits:
+
+- **Events / `textStream`** — pull-based, for rendering and consuming output.
+- **`hooks`** — push-based callbacks for *control*. Only `onToolUse` can change
+  behavior (`deny` / `replaceArgs` a tool call before it runs, or `steer` / `stop`),
+  and only on runtimes with the `hooks` capability; the rest (`onMessage`,
+  `onToolResult`, `onUsage`, `onStep`, `onEnd`, …) are observational and fire on
+  every runtime. Reach for hooks when you need to *intervene*; iterate events when
+  you just need to *watch*.
+
+```ts
+loop.run({
+  prompt,
+  hooks: {
+    onToolUse: (c) =>
+      c.name === "rm" ? { action: "deny", reason: "no destructive ops" } : { action: "continue" },
+  },
+});
+```
 
 ## Providers
 
@@ -72,6 +112,19 @@ A provider declares `supportedRuntimes`; pairing it with a runtime it can't driv
 throws **`ProviderRuntimeError`** at the factory call — agent-loop never pretends.
 For the AI SDK runtime you can also skip providers and pass a constructed
 `LanguageModel` directly: `aiSdkLoop({ model })`.
+
+### Model precedence
+
+The model id is resolved highest-wins:
+
+1. **per-run** — `loop.run({ runtimeOptions: { model } })` (one call only)
+2. **per-loop** — the factory's `model` option (e.g. `claudeCodeLoop({ model })`)
+3. **provider default** — e.g. `deepseek({ model })`, else the provider's built-in default
+
+```ts
+const loop = claudeCodeLoop({ provider: anthropic({ apiKey }), model: "sonnet" });
+loop.run({ prompt, runtimeOptions: { model: "opus" } }); // this run uses opus
+```
 
 ### Runtime ⇄ provider compatibility
 
@@ -103,15 +156,26 @@ step) — and the outcome (`live` / `deferred` / `rejected`) is reported back.
 ## Skills, MCP, tools
 
 ```ts
+import { defineTool } from "agent-loop";
+
+const grep = defineTool({
+  description: "Search files",
+  inputSchema: z.object({ q: z.string() }), // execute args are inferred from this
+  execute: ({ q }) => search(q),            // ({ q }: { q: string }) — typed, no casts
+});
+
 loop.run({
   prompt,
   skills: [{ name: "reviewer", instructions: "Be terse.", tools: { /* ... */ } }],
-  tools: { grep: { description: "...", inputSchema: z.object({ q: z.string() }), execute } },
+  tools: { grep },
   mcp: { github: { type: "http", url: "https://...", bearerTokenEnvVar: "GH_TOKEN" } },
 });
 ```
 
-Skills compile into the system prompt + merged tools/MCP.
+`defineTool` infers `execute`'s argument type from `inputSchema` (any Zod /
+Standard Schema). Skills compile into the system prompt + merged tools/MCP. Tools
+and MCP require the runtime's `tools` / `mcp` capability (else
+`CapabilityNotSupportedError`).
 
 ## Interactive REPL
 
