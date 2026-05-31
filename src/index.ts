@@ -37,6 +37,13 @@ export {
   codexProviderOverrides,
   resolveRuntimeConfig,
 } from "./core/provider";
+export {
+  configureProviders,
+  isAutoDiscoverEnabled,
+  MissingCredentialError,
+  resolveApiKey,
+} from "./core/credentials";
+export type { ProvidersConfig } from "./core/credentials";
 export type {
   AiSdkProviderSpec,
   AiSdkRuntimeConfig,

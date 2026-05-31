@@ -100,11 +100,11 @@ loop.run({
 ```ts
 import { deepseek, anthropic, openai, openaiCompatible, anthropicCompatible, gateway } from "agent-loop";
 
-deepseek({ apiKey })                                   // claude-code + ai-sdk
-anthropic({ apiKey, model? })                          // claude-code + ai-sdk
-openai({ apiKey, model? })                             // codex + ai-sdk
-openaiCompatible({ id, apiKey, baseURL, model })       // codex + ai-sdk  (any OpenAI-wire endpoint)
-anthropicCompatible({ id, apiKey, baseURL, model })    // claude-code + ai-sdk
+deepseek({ apiKey? })                                  // claude-code + ai-sdk
+anthropic({ apiKey?, model? })                         // claude-code + ai-sdk
+openai({ apiKey?, model? })                            // codex + ai-sdk
+openaiCompatible({ id, apiKey?, baseURL, model })      // codex + ai-sdk  (any OpenAI-wire endpoint)
+anthropicCompatible({ id, apiKey?, baseURL, model })   // claude-code + ai-sdk
 gateway({ apiKey?, model: "deepseek/deepseek-chat" })  // ai-sdk only (Vercel AI Gateway)
 ```
 
@@ -112,6 +112,33 @@ A provider declares `supportedRuntimes`; pairing it with a runtime it can't driv
 throws **`ProviderRuntimeError`** at the factory call — agent-loop never pretends.
 For the AI SDK runtime you can also skip providers and pass a constructed
 `LanguageModel` directly: `aiSdkLoop({ model })`.
+
+### API keys: auto-discovery + explicit
+
+`apiKey` is **optional**. Resolution is explicit-first, then auto-discovery from
+the provider's conventional env var:
+
+```ts
+deepseek()                  // auto-discovers DEEPSEEK_API_KEY
+deepseek({ apiKey })        // explicit wins
+// conventional vars: DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY,
+// CURSOR_API_KEY, AI_GATEWAY_API_KEY; custom providers use <ID>_API_KEY
+// (override with apiKeyEnvVar). A provider with no key throws MissingCredentialError.
+```
+
+**Stateless / multi-tenant workers** must not read ambient env (one worker could
+inherit another's key). Disable discovery once at startup — then every credential
+must be passed explicitly:
+
+```ts
+import { configureProviders } from "agent-loop";
+configureProviders({ autoDiscover: false }); // deepseek() now throws; deepseek({ apiKey }) still works
+```
+
+This switch also gates the native-auth adapters (cursor's `CURSOR_API_KEY`
+fallback). Resolution happens once at factory-call time and is baked into the
+provider as data, so the rest of the pipeline still injects credentials per-run
+and never touches `process.env` again.
 
 ### Model precedence
 

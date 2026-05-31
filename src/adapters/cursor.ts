@@ -17,6 +17,7 @@ import type {
 } from "../adapter/adapter";
 import type { CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
+import { resolveApiKey } from "../core/credentials";
 import { estimateTokens, type LoopEvent, type TokenUsage } from "../core/events";
 import type { McpServers, PreflightResult } from "../core/types";
 
@@ -248,8 +249,16 @@ export class CursorAdapter implements BackendAdapter {
     };
   }
 
+  // Explicit key wins; else auto-discover CURSOR_API_KEY, gated by the same
+  // global `autoDiscover` switch as providers. required:false — a missing key
+  // surfaces via preflight, not a throw here.
   private resolveApiKey(): string | undefined {
-    return this.opts.apiKey ?? process.env.CURSOR_API_KEY;
+    return resolveApiKey({
+      providerId: "cursor",
+      explicit: this.opts.apiKey,
+      envVars: ["CURSOR_API_KEY"],
+      required: false,
+    });
   }
 }
 

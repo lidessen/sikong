@@ -115,7 +115,7 @@ async function buildLoop(name: Runtime): Promise<AgentLoop> {
       if (opts.gateway) {
         return aiSdkLoop({ provider: gateway({ model: opts.model ?? "deepseek/deepseek-chat" }) });
       }
-      return aiSdkLoop({ provider: deepseek({ apiKey: process.env.DEEPSEEK_API_KEY ?? "", ...(opts.model ? { model: opts.model } : {}) }) });
+      return aiSdkLoop({ provider: deepseek(opts.model ? { model: opts.model } : {}) });
     }
     case "claude":
       return claudeCodeLoop({

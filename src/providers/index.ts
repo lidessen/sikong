@@ -1,3 +1,4 @@
+import { resolveApiKey } from "../core/credentials";
 import {
   codexProviderOverrides,
   ProviderRuntimeError,
@@ -12,9 +13,14 @@ import {
  * imports here — the AI SDK is loaded lazily by the ai-sdk adapter only.
  *
  *   import { deepseek, claudeCodeLoop, aiSdkLoop } from "agent-loop";
- *   const provider = deepseek({ apiKey });   // one key…
- *   claudeCodeLoop({ provider });            // …drives claude-code (Anthropic wire)
- *   aiSdkLoop({ provider });                 // …and ai-sdk (in-process)
+ *   const provider = deepseek();              // auto-discovers DEEPSEEK_API_KEY
+ *   const provider = deepseek({ apiKey });    // …or pass it explicitly
+ *   claudeCodeLoop({ provider });             // drives claude-code (Anthropic wire)
+ *   aiSdkLoop({ provider });                  // …and ai-sdk (in-process)
+ *
+ * `apiKey` is optional: explicit value wins, else it's auto-discovered from the
+ * conventional env var (disable with `configureProviders({ autoDiscover: false })`).
+ * A provider with no key available throws `MissingCredentialError` at call time.
  *
  * Runtime ⊥ provider: a provider declares which runtimes it can actually drive
  * via `supportedRuntimes`; an unsupported combination throws ProviderRuntimeError.
@@ -34,6 +40,11 @@ function unsupported(
   throw new ProviderRuntimeError(id, runtime, supported, detail);
 }
 
+/** Derive a conventional env var name from a provider id, e.g. "my-llm" -> "MY_LLM_API_KEY". */
+function envVarFor(id: string): string {
+  return `${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+}
+
 /**
  * DeepSeek — speaks the Anthropic wire (for claude-code) and is a native AI SDK
  * provider. It does NOT drive codex: codex (>= ~0.135) requires the OpenAI
@@ -41,7 +52,12 @@ function unsupported(
  * codex→DeepSeek connection is impossible without a Responses↔Chat proxy. Use
  * `openaiCompatible({ wireApi: "responses", baseURL: <proxy> })` for that.
  */
-export function deepseek(opts: { apiKey: string; model?: string }): ModelProvider {
+export function deepseek(opts: { apiKey?: string; model?: string } = {}): ModelProvider {
+  const apiKey = resolveApiKey({
+    providerId: "deepseek",
+    explicit: opts.apiKey,
+    envVars: ["DEEPSEEK_API_KEY"],
+  })!;
   const model = opts.model ?? "deepseek-chat";
   const supportedRuntimes: RuntimeType[] = ["claude-code", "ai-sdk"];
   return {
@@ -55,12 +71,12 @@ export function deepseek(opts: { apiKey: string; model?: string }): ModelProvide
             model,
             env: {
               ANTHROPIC_BASE_URL: DEEPSEEK_ANTHROPIC,
-              ANTHROPIC_API_KEY: opts.apiKey,
+              ANTHROPIC_API_KEY: apiKey,
               ANTHROPIC_MODEL: model,
             },
           };
         case "ai-sdk":
-          return { runtime, spec: { kind: "deepseek", apiKey: opts.apiKey, model } };
+          return { runtime, spec: { kind: "deepseek", apiKey, model } };
         case "codex":
           return unsupported(
             "deepseek",
@@ -77,7 +93,12 @@ export function deepseek(opts: { apiKey: string; model?: string }): ModelProvide
 }
 
 /** Anthropic (native) — Anthropic wire: claude-code + ai-sdk. */
-export function anthropic(opts: { apiKey: string; model?: string }): ModelProvider {
+export function anthropic(opts: { apiKey?: string; model?: string } = {}): ModelProvider {
+  const apiKey = resolveApiKey({
+    providerId: "anthropic",
+    explicit: opts.apiKey,
+    envVars: ["ANTHROPIC_API_KEY"],
+  })!;
   const model = opts.model ?? "claude-sonnet-4-6";
   const supportedRuntimes: RuntimeType[] = ["claude-code", "ai-sdk"];
   return {
@@ -91,12 +112,12 @@ export function anthropic(opts: { apiKey: string; model?: string }): ModelProvid
             model,
             env: {
               ANTHROPIC_BASE_URL: ANTHROPIC_BASE,
-              ANTHROPIC_API_KEY: opts.apiKey,
+              ANTHROPIC_API_KEY: apiKey,
               ANTHROPIC_MODEL: model,
             },
           };
         case "ai-sdk":
-          return { runtime, spec: { kind: "anthropic", apiKey: opts.apiKey, model } };
+          return { runtime, spec: { kind: "anthropic", apiKey, model } };
         default:
           return unsupported("anthropic", runtime, supportedRuntimes);
       }
@@ -106,10 +127,15 @@ export function anthropic(opts: { apiKey: string; model?: string }): ModelProvid
 
 /** OpenAI (native) — OpenAI wire: codex (Responses) + ai-sdk. */
 export function openai(opts: {
-  apiKey: string;
+  apiKey?: string;
   model?: string;
   wireApi?: "chat" | "responses";
-}): ModelProvider {
+} = {}): ModelProvider {
+  const apiKey = resolveApiKey({
+    providerId: "openai",
+    explicit: opts.apiKey,
+    envVars: ["OPENAI_API_KEY"],
+  })!;
   const model = opts.model ?? "gpt-5.1";
   const supportedRuntimes: RuntimeType[] = ["codex", "ai-sdk"];
   return {
@@ -121,7 +147,7 @@ export function openai(opts: {
           return {
             runtime,
             model,
-            env: { OPENAI_API_KEY: opts.apiKey },
+            env: { OPENAI_API_KEY: apiKey },
             // Note: codex reserves the id "openai", so define a distinct one.
             configOverrides: codexProviderOverrides({
               id: "openai-direct",
@@ -133,7 +159,7 @@ export function openai(opts: {
             }),
           };
         case "ai-sdk":
-          return { runtime, spec: { kind: "openai", apiKey: opts.apiKey, model } };
+          return { runtime, spec: { kind: "openai", apiKey, model } };
         default:
           return unsupported("openai", runtime, supportedRuntimes);
       }
@@ -144,16 +170,25 @@ export function openai(opts: {
 /** Any OpenAI-wire-compatible endpoint (codex + ai-sdk). */
 export function openaiCompatible(opts: {
   id: string;
-  apiKey: string;
+  apiKey?: string;
   baseURL: string;
   model: string;
   name?: string;
+  /** Override the env var auto-discovery reads. Default `<ID>_API_KEY`. */
+  apiKeyEnvVar?: string;
   /** codex wire: "responses" for codex >= 0.135; "chat" only on older codex. */
   wireApi?: "chat" | "responses";
   headers?: Record<string, string>;
 }): ModelProvider {
+  const discoveryVar = opts.apiKeyEnvVar ?? envVarFor(opts.id);
+  const apiKey = resolveApiKey({
+    providerId: opts.id,
+    explicit: opts.apiKey,
+    envVars: [discoveryVar],
+  })!;
   const supportedRuntimes: RuntimeType[] = ["codex", "ai-sdk"];
-  const envKey = `${opts.id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+  // The codex child receives the key under a stable, codex-side env_key.
+  const codexEnvKey = envVarFor(opts.id);
   return {
     id: opts.id,
     supportedRuntimes,
@@ -163,12 +198,12 @@ export function openaiCompatible(opts: {
           return {
             runtime,
             model: opts.model,
-            env: { [envKey]: opts.apiKey },
+            env: { [codexEnvKey]: apiKey },
             configOverrides: codexProviderOverrides({
               id: opts.id,
               name: opts.name ?? opts.id,
               baseURL: opts.baseURL,
-              envKey,
+              envKey: codexEnvKey,
               model: opts.model,
               wireApi: opts.wireApi ?? "responses",
             }),
@@ -180,7 +215,7 @@ export function openaiCompatible(opts: {
               kind: "openai-compatible",
               name: opts.id,
               baseURL: opts.baseURL,
-              apiKey: opts.apiKey,
+              apiKey,
               model: opts.model,
               ...(opts.headers ? { headers: opts.headers } : {}),
             },
@@ -195,12 +230,19 @@ export function openaiCompatible(opts: {
 /** Any Anthropic-wire-compatible endpoint (claude-code + ai-sdk). */
 export function anthropicCompatible(opts: {
   id: string;
-  apiKey: string;
+  apiKey?: string;
   baseURL: string;
   model: string;
+  /** Override the env var auto-discovery reads. Default `<ID>_API_KEY`. */
+  apiKeyEnvVar?: string;
   /** "x-api-key" (default) or "bearer" (Authorization: Bearer). */
   authStyle?: "x-api-key" | "bearer";
 }): ModelProvider {
+  const apiKey = resolveApiKey({
+    providerId: opts.id,
+    explicit: opts.apiKey,
+    envVars: [opts.apiKeyEnvVar ?? envVarFor(opts.id)],
+  })!;
   const supportedRuntimes: RuntimeType[] = ["claude-code", "ai-sdk"];
   const keyVar = opts.authStyle === "bearer" ? "ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY";
   return {
@@ -214,14 +256,14 @@ export function anthropicCompatible(opts: {
             model: opts.model,
             env: {
               ANTHROPIC_BASE_URL: opts.baseURL,
-              [keyVar]: opts.apiKey,
+              [keyVar]: apiKey,
               ANTHROPIC_MODEL: opts.model,
             },
           };
         case "ai-sdk":
           return {
             runtime,
-            spec: { kind: "anthropic", apiKey: opts.apiKey, baseURL: opts.baseURL, model: opts.model },
+            spec: { kind: "anthropic", apiKey, baseURL: opts.baseURL, model: opts.model },
           };
         default:
           return unsupported(opts.id, runtime, supportedRuntimes);
@@ -230,8 +272,19 @@ export function anthropicCompatible(opts: {
   };
 }
 
-/** Vercel AI Gateway — ai-sdk only; model is a "provider/model" string. */
+/**
+ * Vercel AI Gateway — ai-sdk only; model is a "provider/model" string. The key
+ * is optional: when omitted it's auto-discovered from `AI_GATEWAY_API_KEY`, and
+ * if still absent the AI SDK gateway falls back to that same var itself — so this
+ * provider never throws for a missing key.
+ */
 export function gateway(opts: { apiKey?: string; model: string }): ModelProvider {
+  const apiKey = resolveApiKey({
+    providerId: "gateway",
+    explicit: opts.apiKey,
+    envVars: ["AI_GATEWAY_API_KEY"],
+    required: false,
+  });
   const supportedRuntimes: RuntimeType[] = ["ai-sdk"];
   return {
     id: "gateway",
@@ -240,7 +293,7 @@ export function gateway(opts: { apiKey?: string; model: string }): ModelProvider
       if (runtime !== "ai-sdk") return unsupported("gateway", runtime, supportedRuntimes);
       return {
         runtime,
-        spec: { kind: "gateway", ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), model: opts.model },
+        spec: { kind: "gateway", ...(apiKey ? { apiKey } : {}), model: opts.model },
       };
     },
   };
