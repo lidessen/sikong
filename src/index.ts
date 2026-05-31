@@ -61,6 +61,21 @@ export type { AgentLoop } from "./loop";
 /** Advanced: build a loop over a custom `BackendAdapter`. */
 export { makeLoop } from "./loop";
 
+// ---- Task layer (outer "ralph" loop over many runs) -----------------------
+//
+//   import { runTask, claudeCodeLoop, deepseek } from "agent-loop";
+//   const r = await runTask({ goal, loop: () => claudeCodeLoop({ provider: deepseek() }) });
+export { runTask, createExitTools, memoryStore, fileStore, renderHandoffs } from "./task";
+export type {
+  TaskInput,
+  TaskHooks,
+  TaskResult,
+  TaskStatus,
+  ExitOutcome,
+  Handoff,
+  HandoffStore,
+} from "./task";
+
 // ---- Core types & helpers --------------------------------------------------
 export type { LoopEvent, TokenUsage } from "./core/events";
 export { addUsage, emptyUsage, estimateTokens } from "./core/events";

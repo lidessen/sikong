@@ -19,6 +19,19 @@ export interface MockAdapterOptions {
   thinking?: string;
   /** If set, fail the run with this message (drives the error path in tests). */
   failWith?: string;
+  /**
+   * If set, actually EXECUTE an injected tool (req.tools[name].execute) and emit
+   * its start/end events. Unlike `simulateTool` (which only exercises the
+   * pre-tool hook bridge), this drives real tool execution — used to test the
+   * task layer's exit tools.
+   */
+  callTool?: { name: string; args?: Record<string, unknown> };
+  /**
+   * Declared context-window size (tokens). Exposed on BackendRun so the executor
+   * fills usage.usedRatio = totalTokens / contextWindow. A tiny value forces a
+   * high usedRatio (used to test context-pressure steering).
+   */
+  contextWindow?: number;
 }
 
 /**
@@ -91,6 +104,14 @@ export class MockAdapter implements BackendAdapter {
         }
       }
 
+      if (this.opts.callTool) {
+        const { name, args = {} } = this.opts.callTool;
+        const def = req.tools[name];
+        ch.push({ type: "tool_call_start", name, callId: "mock-call-1", args });
+        const out = def?.execute ? await def.execute(args, { callId: "mock-call-1" }) : undefined;
+        ch.push({ type: "tool_call_end", name, callId: "mock-call-1", result: out });
+      }
+
       const response =
         this.opts.response ??
         (cancelled ? "(cancelled)" : `mock response to: ${req.prompt}`);
@@ -119,6 +140,7 @@ export class MockAdapter implements BackendAdapter {
     return {
       [Symbol.asyncIterator]: () => ch.iterable[Symbol.asyncIterator](),
       result,
+      ...(this.opts.contextWindow ? { contextWindow: this.opts.contextWindow } : {}),
       steer: async (message: string) => {
         steers.push(message);
         return "deferred";
