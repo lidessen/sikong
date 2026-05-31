@@ -1,30 +1,44 @@
 /**
- * Interactive REPL for manually testing agent-loop backends.
+ * Interactive REPL for manually testing agent-loop runtimes + providers.
  *
- *   bun scripts/repl.ts [backend] [--model <id>] [--gateway] [--cwd <dir>] [--deny-destructive]
+ *   bun scripts/repl.ts [runtime] [options]
  *
- *   backend : ai-sdk (default) | claude | codex | cursor | mock
- *   --model : model id (ai-sdk: deepseek model or gateway string; claude: opus|sonnet|haiku)
- *   --gateway : for ai-sdk, route through the Vercel AI Gateway via a "provider/model" string
+ *   runtime : ai-sdk (default) | claude | codex | cursor | mock
  *
- * Type a line to run it as a prompt. While a run streams you can type:
- *   /steer <msg>   inject a steer message (live on codex, deferred elsewhere)
- *   /cancel        cancel the active run
- * Anytime:
- *   /backend <n>   switch backend       /model <id>   set model (re-creates loop)
- *   /caps          show capabilities    /preflight    run preflight
- *   /tool          run a tool-triggering demo prompt
- *   /help          help                 /quit         exit
+ * Provider (orthogonal to runtime) — one credential drives any runtime it supports:
+ *   --provider deepseek|anthropic|openai|openai-compatible|gateway
+ *   --api-key <key>        (else read from the provider's usual env var)
+ *   --model <id>           model id (provider default otherwise)
+ *   --base-url <url>       for --provider openai-compatible
+ *   --provider-id <id>     for --provider openai-compatible (default "custom")
+ *
+ * Without --provider:
+ *   ai-sdk uses DeepSeek via DEEPSEEK_API_KEY (or --gateway for AI Gateway);
+ *   claude/codex/cursor use their native auth.
+ *
+ * Examples:
+ *   bun scripts/repl.ts claude --provider deepseek      # Claude Code engine on DeepSeek
+ *   bun scripts/repl.ts ai-sdk --provider deepseek
+ *   bun scripts/repl.ts codex  --provider openai-compatible --base-url https://… --model m
+ *
+ * Type a prompt to run it. While a run streams, a bare line is sent as a steer.
+ * Commands: /runtime /provider /model /caps /preflight /tool /steer /cancel /deny /help /quit
  */
 import * as readline from "node:readline";
 import {
   aiSdkLoop,
+  anthropic,
   claudeCodeLoop,
   codexLoop,
   cursorLoop,
+  deepseek,
+  gateway,
   mockLoop,
+  openai,
+  openaiCompatible,
   type AgentLoop,
   type LoopEvent,
+  type ModelProvider,
   type RunHandle,
 } from "../src/index";
 
@@ -35,58 +49,89 @@ const C = {
   red: "\x1b[31m",
   green: "\x1b[32m",
   yellow: "\x1b[33m",
-  blue: "\x1b[34m",
-  magenta: "\x1b[35m",
   cyan: "\x1b[36m",
+  magenta: "\x1b[35m",
   gray: "\x1b[90m",
 };
 const paint = (c: string, s: string) => `${c}${s}${C.reset}`;
 
-type Backend = "ai-sdk" | "claude" | "codex" | "cursor" | "mock";
-
-interface Opts {
-  model?: string;
-  gateway: boolean;
-  cwd?: string;
-  denyDestructive: boolean;
-}
+type Runtime = "ai-sdk" | "claude" | "codex" | "cursor" | "mock";
+type ProviderKind = "deepseek" | "anthropic" | "openai" | "openai-compatible" | "gateway";
 
 const argv = process.argv.slice(2);
-let backend = (argv.find((a) => !a.startsWith("--")) as Backend) ?? "ai-sdk";
-const opts: Opts = {
-  model: flagValue("--model"),
+const flag = (name: string): string | undefined => {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+
+let runtime = (argv.find((a) => !a.startsWith("--")) as Runtime) ?? "ai-sdk";
+const opts = {
+  providerKind: flag("--provider") as ProviderKind | undefined,
+  apiKey: flag("--api-key"),
+  model: flag("--model"),
+  baseURL: flag("--base-url"),
+  providerId: flag("--provider-id") ?? "custom",
   gateway: argv.includes("--gateway"),
-  cwd: flagValue("--cwd") ?? process.cwd(),
+  cwd: flag("--cwd") ?? process.cwd(),
   denyDestructive: argv.includes("--deny-destructive"),
 };
 
-function flagValue(name: string): string | undefined {
-  const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : undefined;
+const ENV_KEY: Record<ProviderKind, string> = {
+  deepseek: "DEEPSEEK_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  openai: "OPENAI_API_KEY",
+  "openai-compatible": "API_KEY",
+  gateway: "AI_GATEWAY_API_KEY",
+};
+
+function buildProvider(): ModelProvider | undefined {
+  if (!opts.providerKind) return undefined;
+  const apiKey = opts.apiKey ?? process.env[ENV_KEY[opts.providerKind]] ?? "";
+  switch (opts.providerKind) {
+    case "deepseek":
+      return deepseek({ apiKey, ...(opts.model ? { model: opts.model } : {}) });
+    case "anthropic":
+      return anthropic({ apiKey, ...(opts.model ? { model: opts.model } : {}) });
+    case "openai":
+      return openai({ apiKey, ...(opts.model ? { model: opts.model } : {}) });
+    case "gateway":
+      return gateway({ apiKey: apiKey || undefined, model: opts.model ?? "deepseek/deepseek-chat" });
+    case "openai-compatible":
+      if (!opts.baseURL) throw new Error("--provider openai-compatible requires --base-url");
+      return openaiCompatible({
+        id: opts.providerId,
+        apiKey,
+        baseURL: opts.baseURL,
+        model: opts.model ?? "default",
+      });
+  }
 }
 
-async function buildLoop(name: Backend): Promise<AgentLoop> {
+async function buildLoop(name: Runtime): Promise<AgentLoop> {
+  const provider = buildProvider();
   switch (name) {
     case "ai-sdk": {
-      let model: unknown;
+      if (provider) return aiSdkLoop({ provider });
       if (opts.gateway) {
-        model = opts.model ?? "deepseek/deepseek-chat"; // routed via AI_GATEWAY_API_KEY
-      } else {
-        const { deepseek } = await import("@ai-sdk/deepseek");
-        model = deepseek(opts.model ?? "deepseek-chat");
+        return aiSdkLoop({ provider: gateway({ model: opts.model ?? "deepseek/deepseek-chat" }) });
       }
-      return aiSdkLoop({ model: model as never });
+      return aiSdkLoop({ provider: deepseek({ apiKey: process.env.DEEPSEEK_API_KEY ?? "", ...(opts.model ? { model: opts.model } : {}) }) });
     }
     case "claude":
       return claudeCodeLoop({
-        model: opts.model ?? "sonnet",
+        ...(provider ? { provider } : { model: opts.model ?? "sonnet" }),
         permissionMode: "bypassPermissions",
         cwd: opts.cwd,
       });
     case "codex":
-      return codexLoop({ model: opts.model, fullAuto: true, sandbox: "workspace-write", cwd: opts.cwd });
+      return codexLoop({
+        ...(provider ? { provider } : opts.model ? { model: opts.model } : {}),
+        fullAuto: true,
+        sandbox: "workspace-write",
+        cwd: opts.cwd,
+      });
     case "cursor":
-      return cursorLoop({ model: opts.model, cwd: opts.cwd });
+      return cursorLoop({ ...(opts.model ? { model: opts.model } : {}), cwd: opts.cwd });
     case "mock":
       return mockLoop({ response: "mock reply", thinking: "mock thinking", simulateTool: "demo" });
   }
@@ -97,17 +142,20 @@ let activeRun: RunHandle | null = null;
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 function prompt() {
-  rl.setPrompt(paint(C.bold, `\nagent-loop:${backend}${activeRun ? " (running)" : ""}> `));
+  const tag = opts.providerKind ? `${runtime}/${opts.providerKind}` : runtime;
+  rl.setPrompt(paint(C.bold, `\nagent-loop:${tag}${activeRun ? " (running)" : ""}> `));
   rl.prompt();
 }
 
-async function setBackend(name: Backend) {
+async function setRuntime(name: Runtime) {
   if (loop) await loop.dispose().catch(() => {});
-  backend = name;
-  loop = await buildLoop(name);
-  console.log(
-    paint(C.gray, `backend=${loop.id}  capabilities=[${loop.capabilities.join(", ")}]`),
-  );
+  runtime = name;
+  try {
+    loop = await buildLoop(name);
+    console.log(paint(C.gray, `runtime=${loop.id}  capabilities=[${loop.capabilities.join(", ")}]`));
+  } catch (e) {
+    console.log(paint(C.red, `build failed: ${e instanceof Error ? e.message : String(e)}`));
+  }
 }
 
 function fmt(v: unknown, n = 140): string {
@@ -134,15 +182,10 @@ function printEvent(ev: LoopEvent) {
       );
       break;
     case "usage":
-      console.log(
-        paint(C.gray, `\n  [usage in=${ev.inputTokens} out=${ev.outputTokens} (${ev.source})]`),
-      );
+      console.log(paint(C.gray, `\n  [usage in=${ev.inputTokens} out=${ev.outputTokens} (${ev.source})]`));
       break;
     case "steer":
       console.log(paint(C.magenta, `\n  ↻ steered (${ev.mode}): ${fmt(ev.message, 60)}`));
-      break;
-    case "hook":
-      console.log(paint(C.gray, `  · hook ${ev.name}/${ev.hookEvent} ${ev.phase}`));
       break;
     case "error":
       console.log(paint(C.red, `\n  ⚠ ${ev.error.message}`));
@@ -156,7 +199,10 @@ function runPrompt(text: string) {
     maxSteps: 12,
     hooks: {
       onToolUse: (c) => {
-        if (opts.denyDestructive && /\b(rm|rmdir|del|delete|drop)\b/i.test(JSON.stringify(c.args ?? {}) + " " + c.name)) {
+        if (
+          opts.denyDestructive &&
+          /\b(rm|rmdir|del|delete|drop)\b/i.test(JSON.stringify(c.args ?? {}) + " " + c.name)
+        ) {
           console.log(paint(C.red, `\n  ⛔ denied ${c.name} (destructive)`));
           return { action: "deny", reason: "destructive op blocked by REPL" };
         }
@@ -186,11 +232,11 @@ function runPrompt(text: string) {
 
 const HELP = `
 ${paint(C.bold, "commands")}
-  /backend <ai-sdk|claude|codex|cursor|mock>   switch backend
+  /runtime <ai-sdk|claude|codex|cursor|mock>   switch runtime (re-creates the loop)
+  /provider <deepseek|anthropic|openai|gateway|openai-compatible|none>   set provider
   /model <id>        set model (re-creates the loop)
-  /gateway           toggle AI Gateway routing for ai-sdk (re-creates loop)
   /caps              show capabilities
-  /preflight         run the backend preflight check
+  /preflight         run the runtime+provider preflight check
   /tool              run a demo prompt that should trigger a tool/command
   /steer <msg>       inject a steer message into the active run
   /cancel            cancel the active run
@@ -205,7 +251,6 @@ async function handle(line: string) {
 
   if (!trimmed.startsWith("/")) {
     if (activeRun) {
-      // A bare line while running == steer for convenience.
       const o = await activeRun.steer(trimmed);
       console.log(paint(C.magenta, `  ↻ steer -> ${o.mode}`));
       return;
@@ -225,17 +270,17 @@ async function handle(line: string) {
       rl.close();
       process.exit(0);
       break;
-    case "backend":
-      await setBackend((arg || "ai-sdk") as Backend);
+    case "runtime":
+      await setRuntime((arg || "ai-sdk") as Runtime);
+      break;
+    case "provider":
+      opts.providerKind = arg === "none" || !arg ? undefined : (arg as ProviderKind);
+      console.log(paint(C.gray, `provider=${opts.providerKind ?? "(native)"}`));
+      await setRuntime(runtime);
       break;
     case "model":
       opts.model = arg || undefined;
-      await setBackend(backend);
-      break;
-    case "gateway":
-      opts.gateway = !opts.gateway;
-      console.log(paint(C.gray, `gateway=${opts.gateway}`));
-      await setBackend(backend);
+      await setRuntime(runtime);
       break;
     case "caps":
       console.log(paint(C.gray, `[${loop.capabilities.join(", ")}]`));
@@ -247,7 +292,7 @@ async function handle(line: string) {
     }
     case "tool":
       runPrompt("Use your shell/command tool to run `echo TOOL_OK`, then reply DONE.");
-      return; // runPrompt re-prompts
+      return;
     case "steer":
       if (!activeRun) console.log(paint(C.yellow, "no active run"));
       else {
@@ -270,7 +315,7 @@ async function handle(line: string) {
 }
 
 console.log(paint(C.bold, "agent-loop interactive REPL") + paint(C.gray, "  (/help for commands)"));
-await setBackend(backend);
+await setRuntime(runtime);
 const pf = await loop.preflight().catch((e) => ({ ok: false, reason: String(e) }));
 console.log(pf.ok ? paint(C.green, "preflight ok") : paint(C.yellow, `preflight: ${pf.reason ?? "n/a"} (you can still try)`));
 prompt();

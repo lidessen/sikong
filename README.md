@@ -1,30 +1,35 @@
 # agent-loop
 
-A unified **agent loop** over multiple backends. One call = one complete agent
-loop. Pick a backend — Claude Agent SDK, Codex app-server, Cursor Agent SDK, or
-the Vercel AI SDK — and drive all of them through one identical interface: the
-same event stream, the same skills / MCP / tools inputs, and the same
-cross-backend lifecycle hooks (including mid-run steering).
+A unified **agent loop** over multiple backends, with **runtime ⊥ provider**:
+
+- **Runtime** = the loop engine: Claude Agent SDK, Codex app-server, Cursor Agent
+  SDK, or the Vercel AI SDK.
+- **Provider** = the LLM + credentials: DeepSeek, Anthropic, OpenAI, any
+  OpenAI-/Anthropic-compatible endpoint, or the Vercel AI Gateway.
+
+They're orthogonal. One credential drives every runtime it's compatible with —
+the provider knows how to inject itself into each runtime (env vars, CLI config,
+or an in-process model), and credentials travel **as data per run** (never via
+`process.env`), so workers with different keys run concurrently without clobber.
 
 ```ts
-import { aiSdkLoop, claudeCodeLoop, codexLoop, cursorLoop } from "agent-loop";
+import { deepseek, claudeCodeLoop, aiSdkLoop } from "agent-loop";
+
+const provider = deepseek({ apiKey });   // one credential…
+claudeCodeLoop({ provider });            // …Claude Code engine, on DeepSeek (Anthropic wire)
+aiSdkLoop({ provider });                 // …and the AI SDK runtime (in-process)
 ```
 
-Every factory returns the **same** `AgentLoop` interface — the backend is the
-only thing that differs. Adapters (and their heavy SDKs) load lazily on first
-use, so importing one factory never requires the others' dependencies.
-
-> Status: all backends implemented; typecheck + unit tests green. Live-smoked:
-> **ai-sdk (DeepSeek), codex, cursor pass**; claude passes once Anthropic/Claude
-> credentials are present.
+> Status: implemented + verified — typecheck clean, unit tests green. Live-smoked:
+> `ai-sdk × deepseek` and `claude-code × deepseek` both return real output;
+> `codex × deepseek` is rejected by design (see matrix).
 
 ## Quick start
 
 ```ts
-import { aiSdkLoop } from "agent-loop";
-import { deepseek } from "@ai-sdk/deepseek";
+import { aiSdkLoop, deepseek } from "agent-loop";
 
-const loop = aiSdkLoop({ model: deepseek("deepseek-chat") });
+const loop = aiSdkLoop({ provider: deepseek({ apiKey: process.env.DEEPSEEK_API_KEY! }) });
 
 const run = loop.run({
   prompt: "Refactor the auth module",
@@ -45,23 +50,55 @@ await run.steer("run the tests before continuing"); // injected mid-loop
 const result = await run.result; // { text, usage, durationMs, status, events }
 ```
 
-### Other backends — same interface
+Every loop — whatever runtime/provider — exposes the same interface:
+`loop.run(input)`, `loop.capabilities`, `loop.preflight()`, `loop.dispose()`.
+`run` returns a `RunHandle`: `AsyncIterable<LoopEvent>` plus `.result`,
+`.steer(msg)`, `.cancel()`.
+
+## Providers
 
 ```ts
-import { claudeCodeLoop, codexLoop, cursorLoop, mockLoop } from "agent-loop";
+import { deepseek, anthropic, openai, openaiCompatible, anthropicCompatible, gateway } from "agent-loop";
 
-const claude = claudeCodeLoop({ model: "sonnet", permissionMode: "bypassPermissions" });
-const codex  = codexLoop({ fullAuto: true, sandbox: "workspace-write" });
-const cursor = cursorLoop({});            // CURSOR_API_KEY
-const mock   = mockLoop({ response: "hi" }); // in-process, no SDK/network
-
-for await (const ev of codex.run("list the files")) { /* ... */ }
-await codex.steer("focus on *.ts only");   // codex steers LIVE mid-turn
+deepseek({ apiKey })                                   // claude-code + ai-sdk
+anthropic({ apiKey, model? })                          // claude-code + ai-sdk
+openai({ apiKey, model? })                             // codex + ai-sdk
+openaiCompatible({ id, apiKey, baseURL, model })       // codex + ai-sdk  (any OpenAI-wire endpoint)
+anthropicCompatible({ id, apiKey, baseURL, model })    // claude-code + ai-sdk
+gateway({ apiKey?, model: "deepseek/deepseek-chat" })  // ai-sdk only (Vercel AI Gateway)
 ```
 
-Every loop exposes: `loop.run(input)`, `loop.capabilities`, `loop.preflight()`,
-`loop.dispose()`. `run` returns a `RunHandle`: `AsyncIterable<LoopEvent>` plus
-`.result`, `.steer(msg)`, `.cancel()`.
+A provider declares `supportedRuntimes`; pairing it with a runtime it can't drive
+throws **`ProviderRuntimeError`** at the factory call — agent-loop never pretends.
+For the AI SDK runtime you can also skip providers and pass a constructed
+`LanguageModel` directly: `aiSdkLoop({ model })`.
+
+### Runtime ⇄ provider compatibility
+
+| Provider \ Runtime | claude-code | codex | ai-sdk | cursor |
+| ------------------ | ----------- | ----- | ------ | ------ |
+| deepseek           | ✓ (Anthropic wire) | ✗¹ | ✓ | — |
+| anthropic          | ✓ | — | ✓ | — |
+| openai             | — | ✓ (Responses) | ✓ | — |
+| openai-compatible  | — | ✓ | ✓ | — |
+| anthropic-compatible | ✓ | — | ✓ | — |
+| gateway            | — | — | ✓ | — |
+| (cursor native)    | — | — | — | ✓² |
+
+¹ codex (≥ 0.135) requires the OpenAI **Responses** wire; DeepSeek serves only
+Chat Completions, so a direct codex→DeepSeek link is impossible. Use
+`openaiCompatible({ wireApi: "responses", baseURL: <responses-proxy> })`.
+² Cursor is native-only: the credential is the Cursor cloud key (`cursorLoop({ apiKey })`),
+not an external provider.
+
+## Capabilities, hooks, steering
+
+Adapters declare what they can do (`tools`, `mcp`, `hooks`, `steer.live`,
+`steer.deferred`, `thinking`, `usage`, `sessionResume`, `interrupt`); passing a
+feature a runtime can't do throws `CapabilityNotSupportedError`. Steering maps to
+the runtime's native mechanism — Codex `turn/steer` is **live**; Claude
+streaming-input and AI SDK `prepareStep` are **deferred** (applied at the next
+step) — and the outcome (`live` / `deferred` / `rejected`) is reported back.
 
 ## Skills, MCP, tools
 
@@ -74,53 +111,37 @@ loop.run({
 });
 ```
 
-Skills are compiled into the system prompt + merged tools/MCP. Passing a feature
-a backend can't do throws `CapabilityNotSupportedError` — agent-loop never
-pretends.
-
-## Backend ⇄ capability matrix (as wired & smoke-verified)
-
-| Backend | tools | mcp | hooks (pre-tool) | steer | usage |
-| ------- | ----- | --- | ---------------- | -------- | ------- |
-| ai-sdk  | ✓     | —   | ✓                | deferred | runtime |
-| claude  | ✓     | ✓   | ✓                | deferred | runtime |
-| codex   | —     | ✓   | —                | **live** | runtime |
-| cursor  | —     | ✓   | —                | —        | estimate |
-| mock    | ✓     | ✓   | ✓                | deferred | estimate |
-
-Steering maps to each backend's native mechanism (Codex `turn/steer` = live;
-Claude streaming-input, AI SDK `prepareStep` = deferred). Where mid-turn isn't
-possible the steer is applied at the next step boundary and reported `deferred`;
-if a backend can't steer at all it's reported `rejected`.
+Skills compile into the system prompt + merged tools/MCP.
 
 ## Interactive REPL
 
-A manual test harness for any backend:
-
 ```sh
-bun scripts/repl.ts ai-sdk            # default; DeepSeek via DEEPSEEK_API_KEY
-bun scripts/repl.ts ai-sdk --gateway  # route DeepSeek via Vercel AI Gateway
-bun scripts/repl.ts codex
-bun scripts/repl.ts claude --model sonnet
+bun scripts/repl.ts claude --provider deepseek   # Claude Code engine on DeepSeek
+bun scripts/repl.ts ai-sdk --provider deepseek
+bun scripts/repl.ts ai-sdk --gateway             # DeepSeek via Vercel AI Gateway
+bun scripts/repl.ts codex                        # native codex login
+bun scripts/repl.ts cursor                       # CURSOR_API_KEY
 ```
 
-Type a prompt to run it; stream is printed live. In-REPL commands: `/backend`,
+Type a prompt to run it (streamed live). In-REPL: `/runtime`, `/provider`,
 `/model`, `/caps`, `/preflight`, `/tool`, `/steer <msg>`, `/cancel`, `/deny`,
 `/help`, `/quit`. While a run streams, a bare line is sent as a steer.
 
 ## Design
 
 - **core** — normalized `LoopEvent` stream, `TokenUsage`, capabilities, hooks,
-  errors, the public `RunInput` / `RunResult` / `RunHandle` contract.
-- **adapter** — the small `BackendAdapter` interface each backend implements;
-  translates a native protocol into the normalized stream and exposes a pre-tool
-  hook bridge.
+  errors, the `RunInput` / `RunResult` / `RunHandle` contract, and the
+  `ModelProvider` ⊥ runtime abstraction (`core/provider.ts`).
+- **providers** — built-in providers; pure data + per-runtime launch config.
+- **adapter** — the small `BackendAdapter` interface each runtime implements.
 - **executor** — the generic spine: compiles skills, gates capabilities, drives
   the unified hook bus off the event stream, routes steer, aggregates the result.
-- **factories** (`aiSdkLoop`, …) wrap a lazily-loaded adapter as an `AgentLoop`.
+- **factories** (`aiSdkLoop`, …) wrap a lazily-loaded adapter as an `AgentLoop`
+  and inject the provider's launch config.
 
-Write a custom backend by implementing `BackendAdapter` and wrapping it with
-`makeLoop(id, capabilities, () => Promise<BackendAdapter>)`.
+Custom runtime: implement `BackendAdapter`, wrap with `makeLoop(id, caps, load)`.
+Custom provider: implement `ModelProvider` (declare `supportedRuntimes` +
+`configureFor`).
 
 ## Development
 
@@ -128,7 +149,7 @@ Write a custom backend by implementing `BackendAdapter` and wrapping it with
 bun install
 bun run typecheck   # tsc --noEmit
 bun run test        # vitest
-bun scripts/smoke-run.ts all   # live smoke (needs creds per backend)
+bun scripts/smoke-provider.ts   # live: one DeepSeek key across runtimes
 ```
 
 ## License
