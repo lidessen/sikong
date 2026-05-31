@@ -45,6 +45,11 @@ export interface AiSdkAdapterOptions {
   instructions?: string;
   /** Default soft cap on agent steps; overridable via `req.maxSteps`. */
   maxSteps?: number;
+  /**
+   * Override the model's context-window size (tokens) for usage.usedRatio.
+   * Recommended when passing a raw `model` (no id to infer the window from).
+   */
+  contextWindow?: number;
 }
 
 /**
@@ -211,6 +216,7 @@ export class AiSdkAdapter implements BackendAdapter {
     return {
       [Symbol.asyncIterator]: () => ch.iterable[Symbol.asyncIterator](),
       result,
+      contextWindow,
       steer: async (message: string) => {
         pendingSteers.push(message);
         return "deferred";

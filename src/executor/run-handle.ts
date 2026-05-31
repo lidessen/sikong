@@ -160,7 +160,8 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
         if (backendRun.steer) publish({ type: "steer", message, mode: await backendRun.steer(message) });
       }
 
-      for await (const ev of backendRun) {
+      for await (const rawEv of backendRun) {
+        let ev = rawEv;
         switch (ev.type) {
           case "text":
             text += ev.text;
@@ -178,10 +179,17 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
               durationMs: ev.durationMs,
             });
             break;
-          case "usage":
+          case "usage": {
+            // Fill contextWindow/usedRatio from the backend's declared window
+            // when the adapter didn't already (central, DRY).
+            const ctx = backendRun.contextWindow;
+            if (ctx && ev.usedRatio === undefined) {
+              ev = { ...ev, contextWindow: ctx, usedRatio: ev.totalTokens / ctx };
+            }
             usage = addUsage(usage, ev);
             await hooks.onUsage?.(ev);
             break;
+          }
           case "step":
             if (ev.phase === "end") await applyDecision(await hooks.onStep?.({ index: ev.index }));
             break;

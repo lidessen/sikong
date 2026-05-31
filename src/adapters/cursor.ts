@@ -17,6 +17,7 @@ import type {
 } from "../core/adapter";
 import type { CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
+import { resolveContextWindow } from "../core/context-window";
 import { resolveApiKey } from "../core/credentials";
 import { estimateTokens, type LoopEvent, type TokenUsage } from "../core/events";
 import type { McpServers, PreflightResult } from "../core/types";
@@ -33,6 +34,8 @@ export interface CursorAdapterOptions {
   apiKey?: string;
   /** Model id, e.g. "composer-2". Defaults to "composer-2". */
   model?: string;
+  /** Override the model's context-window size (tokens) for usage.usedRatio. */
+  contextWindow?: number;
   /** Resume / target a specific Cursor agent id. */
   agentId?: string;
   /** Cursor local setting sources. Defaults to ["project"]. */
@@ -101,6 +104,7 @@ export class CursorAdapter implements BackendAdapter {
       .join("\n\n");
     const prompt = buildPrompt(req.system, req.prompt, instructions);
     const model = o.model ?? this.opts.model;
+    const contextWindow = resolveContextWindow(model, this.opts.contextWindow);
 
     let activeRun: Run | null = null;
     let cancelled = false;
@@ -171,6 +175,7 @@ export class CursorAdapter implements BackendAdapter {
     return {
       [Symbol.asyncIterator]: () => ch.iterable[Symbol.asyncIterator](),
       result,
+      contextWindow,
       cancel: (_reason?: string) => {
         cancelled = true;
         abort.abort();

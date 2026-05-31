@@ -59,6 +59,8 @@ export interface ClaudeAdapterOptions {
   extraArgs?: string[];
   /** Reserved: idle timeout (ms). Currently unused by the SDK transport. */
   idleTimeout?: number;
+  /** Override the model's context-window size (tokens) for usage.usedRatio. */
+  contextWindow?: number;
   /** Provider-injected child env (set by `claudeCodeLoop({ provider })`). */
   providerEnv?: Record<string, string>;
   /** Provider-injected default model id. */
@@ -118,6 +120,10 @@ export class ClaudeAdapter implements BackendAdapter {
 
   start(req: ResolvedRequest): BackendRun {
     const o = (req.runtimeOptions ?? {}) as ClaudeRuntimeOptions;
+    const contextWindow = resolveContextWindow(
+      resolveClaudeModel(o.model ?? this.opts.model ?? this.opts.providerModel),
+      this.opts.contextWindow,
+    );
     const ch = createEventChannel<LoopEvent>();
     const abortController = new AbortController();
 
@@ -268,6 +274,7 @@ export class ClaudeAdapter implements BackendAdapter {
     return {
       [Symbol.asyncIterator]: () => ch.iterable[Symbol.asyncIterator](),
       result,
+      contextWindow,
       steer: async (message: string) => {
         pushSteer?.(message);
         return "deferred";

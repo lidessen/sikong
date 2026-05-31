@@ -24,6 +24,8 @@ import type { McpServers, PreflightResult } from "../core/types";
  */
 export interface CodexAdapterOptions {
   model?: string;
+  /** Override the model's context-window size (tokens) for usage.usedRatio. */
+  contextWindow?: number;
   cwd?: string;
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   /**
@@ -551,6 +553,10 @@ export class CodexAdapter implements BackendAdapter {
 
   start(req: ResolvedRequest): BackendRun {
     const o = (req.runtimeOptions ?? {}) as CodexRuntimeOptions;
+    const contextWindow = resolveContextWindow(
+      this.opts.model ?? this.opts.providerModel,
+      this.opts.contextWindow,
+    );
     const ch = createEventChannel<LoopEvent>();
     const startedAt = Date.now();
 

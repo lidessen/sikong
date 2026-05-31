@@ -50,6 +50,12 @@ export interface BackendRun extends AsyncIterable<LoopEvent> {
   /** Present iff the backend declares a steer capability. */
   steer?(message: string): Promise<"live" | "deferred">;
   cancel(reason?: string): void;
+  /**
+   * The model's context window in tokens, if known. The executor uses it to
+   * fill `usedRatio` on `usage` events (the signal an outer supervisor uses to
+   * decide when to hand off). Undefined when unknown — never fabricated.
+   */
+  readonly contextWindow?: number;
 }
 
 /**
