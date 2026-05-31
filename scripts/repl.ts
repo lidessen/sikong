@@ -137,7 +137,7 @@ async function buildLoop(name: Runtime): Promise<AgentLoop> {
   }
 }
 
-let loop: AgentLoop;
+let loop!: AgentLoop;
 let activeRun: RunHandle | null = null;
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
