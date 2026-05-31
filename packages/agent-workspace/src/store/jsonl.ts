@@ -1,6 +1,7 @@
 import { mkdir, appendFile, readFile, writeFile, rename, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { matchesChronicle } from "./memory";
+import { dataFileCandidates, isDataFile, parseDataFile, stringifyYaml, yamlFile } from "../config-file";
 import type { NewEvent, Task, TaskEvent } from "../workflow/types";
 import { DEFAULT_PROJECT, type Project } from "../project";
 import type { Worker } from "../worker";
@@ -20,6 +21,8 @@ import type {
  * engine wrote. Layout under `dir`:
  *   events/<taskId>.jsonl      — append-only event log (system of record)
  *   projections/<taskId>.json  — current task projection (read side, written atomically)
+ *   projects/<id>.yaml         — project definitions
+ *   workers/<id>.yaml          — worker definitions
  *   chronicle.jsonl            — append-only activity log
  *
  * CONTRACT: exactly ONE writer process per `dir` (the engine daemon); the CLI is
@@ -31,6 +34,18 @@ import type {
 /** Filenames are taskId-derived; ids are validated upstream (see assertValidTaskId). */
 function sanitize(id: string): string {
   return id.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+async function readFirstDataFile<T>(root: string, basename: string): Promise<T | null> {
+  for (const file of dataFileCandidates(root, basename)) {
+    try {
+      return parseDataFile<T>(await readFile(file, "utf8"), file);
+    } catch (err) {
+      if (isENOENT(err)) continue;
+      throw err;
+    }
+  }
+  return null;
 }
 
 function isENOENT(err: unknown): boolean {
@@ -181,7 +196,7 @@ export class JsonProjectionStore implements ProjectionStore {
   }
 }
 
-/** Durable `ProjectStore` (projects/<id>.json, atomic writes). The builtin `default` is always available. */
+/** Durable `ProjectStore` (projects/<id>.yaml, atomic writes). The builtin `default` is always available. */
 export class JsonProjectStore implements ProjectStore {
   private readonly queue = new WriteQueue();
 
@@ -191,16 +206,11 @@ export class JsonProjectStore implements ProjectStore {
     return join(this.dir, "projects");
   }
   private file(id: string): string {
-    return join(this.root, `${sanitize(id)}.json`);
+    return yamlFile(this.root, sanitize(id));
   }
 
   async get(id: string): Promise<Project | null> {
-    try {
-      return JSON.parse(await readFile(this.file(id), "utf8")) as Project;
-    } catch (err) {
-      if (isENOENT(err)) return id === DEFAULT_PROJECT.id ? DEFAULT_PROJECT : null;
-      throw err;
-    }
+    return (await readFirstDataFile<Project>(this.root, sanitize(id))) ?? (id === DEFAULT_PROJECT.id ? DEFAULT_PROJECT : null);
   }
 
   put(project: Project): Promise<void> {
@@ -208,7 +218,7 @@ export class JsonProjectStore implements ProjectStore {
       await mkdir(this.root, { recursive: true });
       const file = this.file(project.id);
       const tmp = `${file}.${process.pid}.tmp`;
-      await writeFile(tmp, JSON.stringify(project, null, 2));
+      await writeFile(tmp, stringifyYaml(project));
       await rename(tmp, file);
     });
   }
@@ -223,9 +233,10 @@ export class JsonProjectStore implements ProjectStore {
       throw err;
     }
     for (const name of names) {
-      if (!name.endsWith(".json")) continue;
+      if (!isDataFile(name)) continue;
       try {
-        const p = JSON.parse(await readFile(join(this.root, name), "utf8")) as Project;
+        const file = join(this.root, name);
+        const p = parseDataFile<Project>(await readFile(file, "utf8"), file);
         out.set(p.id, p);
       } catch {
         // skip a torn/invalid project file
@@ -235,7 +246,7 @@ export class JsonProjectStore implements ProjectStore {
   }
 }
 
-/** Durable `WorkerStore` (workers/<id>.json, atomic writes). No builtins. */
+/** Durable `WorkerStore` (workers/<id>.yaml, atomic writes). No builtins. */
 export class JsonWorkerStore implements WorkerStore {
   private readonly queue = new WriteQueue();
   constructor(private readonly dir: string) {}
@@ -243,22 +254,17 @@ export class JsonWorkerStore implements WorkerStore {
     return join(this.dir, "workers");
   }
   private file(id: string): string {
-    return join(this.root, `${sanitize(id)}.json`);
+    return yamlFile(this.root, sanitize(id));
   }
   async get(id: string): Promise<Worker | null> {
-    try {
-      return JSON.parse(await readFile(this.file(id), "utf8")) as Worker;
-    } catch (err) {
-      if (isENOENT(err)) return null;
-      throw err;
-    }
+    return await readFirstDataFile<Worker>(this.root, sanitize(id));
   }
   put(worker: Worker): Promise<void> {
     return this.queue.run(async () => {
       await mkdir(this.root, { recursive: true });
       const file = this.file(worker.id);
       const tmp = `${file}.${process.pid}.tmp`;
-      await writeFile(tmp, JSON.stringify(worker, null, 2));
+      await writeFile(tmp, stringifyYaml(worker));
       await rename(tmp, file);
     });
   }
@@ -270,16 +276,18 @@ export class JsonWorkerStore implements WorkerStore {
       if (isENOENT(err)) return [];
       throw err;
     }
-    const out: Worker[] = [];
+    const out = new Map<string, Worker>();
     for (const name of names) {
-      if (!name.endsWith(".json")) continue;
+      if (!isDataFile(name)) continue;
       try {
-        out.push(JSON.parse(await readFile(join(this.root, name), "utf8")) as Worker);
+        const file = join(this.root, name);
+        const worker = parseDataFile<Worker>(await readFile(file, "utf8"), file);
+        out.set(worker.id, worker);
       } catch {
         /* skip torn/invalid */
       }
     }
-    return out;
+    return [...out.values()];
   }
 }
 

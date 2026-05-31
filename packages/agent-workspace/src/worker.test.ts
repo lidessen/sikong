@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockLoop } from "agent-loop";
@@ -39,6 +39,8 @@ describe("workers", () => {
       const ws = new JsonWorkerStore(dir);
       expect(await ws.list()).toEqual([]);
       await ws.put(FLASH);
+      expect(await readdir(join(dir, "workers"))).toEqual(["flash.yaml"]);
+      expect(await readFile(join(dir, "workers", "flash.yaml"), "utf8")).toContain("deepseek");
       expect((await ws.get("flash"))?.model).toBe("deepseek-v4-flash");
       expect((await new JsonWorkerStore(dir).list()).map((w) => w.id)).toEqual(["flash"]);
     } finally {

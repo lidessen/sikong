@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockLoop } from "agent-loop";
@@ -43,6 +43,8 @@ describe("projects", () => {
       const ps = new JsonProjectStore(dir);
       expect((await ps.get("default"))?.id).toBe("default"); // builtin, no file
       await ps.put({ id: "web", name: "Web", root: "/repo/web", defaultWorker: "flash" });
+      expect(await readdir(join(dir, "projects"))).toEqual(["web.yaml"]);
+      expect(await readFile(join(dir, "projects", "web.yaml"), "utf8")).toContain("flash");
       expect((await ps.get("web"))?.root).toBe("/repo/web");
       const ids = (await ps.list()).map((p) => p.id).sort();
       expect(ids).toContain("default");

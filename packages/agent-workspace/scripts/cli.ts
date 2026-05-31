@@ -7,7 +7,7 @@
  *   create <request> [--workflow <id>] [--project <id>] [--id <id>]   publish a task (intake-routed unless --workflow)
  *   run [--task <id>]                                                 drive pending task(s) to done/quiet (exit 1 if any wake errored)
  *   submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>
- *   register <workflow.json>                                          register a workflow definition
+ *   register <workflow.yaml>                                          register a workflow definition
  *   status [--project <id>] [--json] | task <id> [--json] | chronicle [--task <id>] [-n N] [--json]
  *   --dir <path>   workspace dir (default $AGENT_WORKSPACE_DIR or ./.agent-workspace)
  *
@@ -19,6 +19,7 @@ import { readFile } from "node:fs/promises";
 import { JsonlChronicleStore, JsonlEventStore, JsonProjectionStore, JsonProjectStore, JsonWorkerStore } from "../src/store";
 import { renderStatus, renderTaskDetail, taskDetail, workspaceStatus } from "../src/inspect";
 import { acquireLock, getDefaultWorker, openWorkspace, saveWorkflow, setDefaultWorker, type Workspace } from "../src/workspace";
+import { parseDataFile } from "../src/config-file";
 import { isValidProjectId, type Project } from "../src/project";
 import { discoverWorkers, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "../src/worker";
 import type { Command } from "../src/workflow";
@@ -245,10 +246,10 @@ switch (cmd) {
   }
   case "register": {
     const file = positional[1];
-    if (!file) fail("usage: cli register <workflow.json>");
+    if (!file) fail("usage: cli register <workflow.yaml>");
     let def: unknown;
     try {
-      def = JSON.parse(await readFile(file!, "utf8"));
+      def = parseDataFile(await readFile(file!, "utf8"), file!);
     } catch (err) {
       fail(`cannot read ${file}: ${(err as Error).message}`, 1);
     }
@@ -367,7 +368,7 @@ switch (cmd) {
         "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--id <id>]\n" +
         "  run [--task <id>]\n" +
         "  submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>\n" +
-        "  register <workflow.json>\n" +
+        "  register <workflow.yaml>\n" +
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>]\n" +
         "  worker discover | create <id> --runtime <r> --provider <p> --model <m> [--desc <d>] | default <id>\n" +
         "read:\n" +

@@ -14,14 +14,15 @@
   "files": ["src"],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "bunx --bun vitest run",
+    "test:watch": "bunx --bun vitest"
   },
   "license": "MIT",
   "dependencies": {
     "agent-loop": "workspace:*"
   },
   "devDependencies": {
+    "@types/bun": "latest",
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"

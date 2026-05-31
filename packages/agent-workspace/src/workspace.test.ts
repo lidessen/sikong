@@ -1,9 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockLoop } from "agent-loop";
-import { loadWorkflows, openWorkspace, saveWorkflow } from "./workspace";
+import { getDefaultWorker, loadWorkflows, openWorkspace, saveWorkflow, setDefaultWorker } from "./workspace";
 import type { LoopFactory } from "./engine";
 import type { WorkflowDef } from "./workflow/types";
 
@@ -141,9 +141,33 @@ describe("workspace (CLI wiring)", () => {
     const dir = await tmp();
     try {
       await saveWorkflow(dir, BUG);
+      expect(await readdir(join(dir, "workflows"))).toEqual(["bug@1.yaml"]);
       expect((await loadWorkflows(dir)).map((w) => w.id)).toContain("bug");
+      expect(await readFile(join(dir, "workflows", "bug@1.yaml"), "utf8")).toContain("bug");
       const ws = await openWorkspace(dir, { loop: () => mockLoop({ response: "x" }) });
       expect(ws.registry.get("bug")?.id).toBe("bug");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loadWorkflows still accepts legacy JSON workflow definitions", async () => {
+    const dir = await tmp();
+    try {
+      await mkdir(join(dir, "workflows"), { recursive: true });
+      await writeFile(join(dir, "workflows", "bug@1.json"), JSON.stringify(BUG, null, 2));
+      expect((await loadWorkflows(dir)).map((w) => w.id)).toEqual(["bug"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace config is stored as YAML", async () => {
+    const dir = await tmp();
+    try {
+      await setDefaultWorker(dir, "flash");
+      expect(await readFile(join(dir, "config.yaml"), "utf8")).toContain("flash");
+      expect(await getDefaultWorker(dir)).toBe("flash");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

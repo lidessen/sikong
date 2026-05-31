@@ -22,6 +22,7 @@ import {
   JsonWorkerStore,
   MemoryWorkflowRegistry,
 } from "./store";
+import { dataFileCandidates, isDataFile, parseDataFile, stringifyYaml, yamlFile } from "./config-file";
 
 /** Build the AgentLoop a worker describes (provider key auto-discovered at this point). */
 export function resolveWorkerLoop(worker: Worker): AgentLoop {
@@ -39,12 +40,15 @@ interface WorkspaceConfig {
 }
 
 async function readConfig(dir: string): Promise<WorkspaceConfig> {
-  try {
-    return JSON.parse(await readFile(join(dir, "config.json"), "utf8")) as WorkspaceConfig;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return {};
-    throw err;
+  for (const file of dataFileCandidates(dir, "config")) {
+    try {
+      return parseDataFile(await readFile(file, "utf8"), file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+      throw err;
+    }
   }
+  return {};
 }
 
 /** Set the workspace-wide default worker (the global "hire X by default" preference). */
@@ -52,7 +56,7 @@ export async function setDefaultWorker(dir: string, workerId: string): Promise<v
   const cfg = await readConfig(dir);
   cfg.defaultWorkerId = workerId;
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "config.json"), JSON.stringify(cfg, null, 2));
+  await writeFile(yamlFile(dir, "config"), stringifyYaml(cfg));
 }
 
 export async function getDefaultWorker(dir: string): Promise<string | undefined> {
@@ -83,7 +87,7 @@ export interface Workspace {
 }
 
 /**
- * Open a durable workspace at `dir`: JSONL/JSON stores + a registry seeded with
+ * Open a durable workspace at `dir`: JSONL event stores, YAML definition stores + a registry seeded with
  * GENERAL, any workflows persisted under `dir/workflows/`, and `extraWorkflows`,
  * plus an engine wired to DeepSeek worker + intake loops by default. This is the
  * shared wiring used by the CLI (and tests, via injected mock loops). The default
@@ -138,7 +142,7 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   return { engine, events, projections, chronicle, registry, projects, workers };
 }
 
-/** Load valid workflow defs persisted under `dir/workflows/*.json` (skips invalid). */
+/** Load valid workflow defs persisted under `dir/workflows/*.{yaml,yml,json}` (skips invalid). */
 export async function loadWorkflows(dir: string): Promise<WorkflowDef[]> {
   const root = join(dir, "workflows");
   let names: string[];
@@ -150,9 +154,10 @@ export async function loadWorkflows(dir: string): Promise<WorkflowDef[]> {
   }
   const out: WorkflowDef[] = [];
   for (const name of names) {
-    if (!name.endsWith(".json")) continue;
+    if (!isDataFile(name)) continue;
     try {
-      const def = JSON.parse(await readFile(join(root, name), "utf8")) as WorkflowDef;
+      const file = join(root, name);
+      const def = parseDataFile<WorkflowDef>(await readFile(file, "utf8"), file);
       assertValidWorkflow(def);
       out.push(def);
     } catch (err) {
@@ -168,7 +173,7 @@ export async function saveWorkflow(dir: string, def: WorkflowDef): Promise<void>
   assertValidWorkflow(def);
   const root = join(dir, "workflows");
   await mkdir(root, { recursive: true });
-  await writeFile(join(root, `${def.id}@${def.version}.json`), JSON.stringify(def, null, 2));
+  await writeFile(yamlFile(root, `${def.id}@${def.version}`), stringifyYaml(def));
 }
 
 export interface WorkspaceLock {

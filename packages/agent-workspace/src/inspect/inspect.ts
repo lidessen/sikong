@@ -4,7 +4,7 @@ import type { ChronicleEntry, ChronicleStore, EventStore, ProjectionStore } from
 /**
  * Observability: read-only views over the durable stores, plus terse renderers
  * meant for an AGENT to read (the lead agent asking "what's going on") — not a
- * human GUI. Works against any store impl; the CLI points them at the JSONL/JSON
+ * human GUI. Works against any store impl; the CLI points them at the file-backed
  * stores so it can inspect a running engine's workspace dir out-of-process.
  */
 
