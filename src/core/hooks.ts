@@ -1,4 +1,4 @@
-import type { BackendId } from "./types";
+import type { RuntimeId } from "./types";
 
 /** Anything a hook may return: a value or a promise of it. */
 type Awaitable<T> = T | Promise<T>;
@@ -20,7 +20,7 @@ export type ToolHookDecision =
   | { action: "replaceArgs"; args: Record<string, unknown> };
 
 export interface RunStartContext {
-  backend: BackendId;
+  backend: RuntimeId;
   system: string;
   prompt: string;
 }

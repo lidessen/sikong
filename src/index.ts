@@ -80,7 +80,7 @@ export type {
 } from "./core/hooks";
 export { defineTool } from "./core/types";
 export type {
-  BackendId,
+  RuntimeId,
   McpServerConfig,
   McpServers,
   PreflightResult,
@@ -106,7 +106,7 @@ export type {
 export type { LazyBackend } from "./executor/run-handle";
 
 // ---- Per-backend constructor option types ---------------------------------
-export type { AiSdkAdapterOptions, AiSdkBackendOptions } from "./adapters/ai-sdk";
+export type { AiSdkAdapterOptions, AiSdkRuntimeOptions } from "./adapters/ai-sdk";
 export type { ClaudeAdapterOptions } from "./adapters/claude";
 export type { CodexAdapterOptions } from "./adapters/codex";
 export type { CursorAdapterOptions } from "./adapters/cursor";

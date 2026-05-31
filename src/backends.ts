@@ -62,7 +62,7 @@ export function claudeCodeLoop(options: ClaudeLoopOptions = {}): AgentLoop {
     opts.providerModel = cfg.model;
     opts.hasInjectedProvider = true;
   }
-  return makeLoop("claude", CLAUDE_CAPS, async () => {
+  return makeLoop("claude-code", CLAUDE_CAPS, async () => {
     const { ClaudeAdapter } = await import("./adapters/claude");
     return new ClaudeAdapter(opts);
   });

@@ -47,11 +47,11 @@ export interface CursorAdapterOptions {
 }
 
 /**
- * Per-run escape hatch for Cursor-native options (`req.backendOptions`). Lets a
+ * Per-run escape hatch for Cursor-native options (`req.runtimeOptions`). Lets a
  * caller override the model or inject extra instructions for a single run
  * without reconstructing the adapter.
  */
-export interface CursorBackendOptions {
+export interface CursorRuntimeOptions {
   /** Override the model id for this run only. */
   model?: string;
   /** Override the agent id for this run only (forces a fresh agent). */
@@ -84,7 +84,7 @@ export class CursorAdapter implements BackendAdapter {
   constructor(private readonly opts: CursorAdapterOptions = {}) {}
 
   start(req: ResolvedRequest): BackendRun {
-    const o = (req.backendOptions ?? {}) as CursorBackendOptions;
+    const o = (req.runtimeOptions ?? {}) as CursorRuntimeOptions;
     const ch = createEventChannel<LoopEvent>();
     const abort = new AbortController();
     const startedAt = Date.now();

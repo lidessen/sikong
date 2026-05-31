@@ -1,9 +1,12 @@
 import type { LoopEvent, TokenUsage } from "./events";
 import type { Hooks } from "./hooks";
 
-/** Built-in backend identifiers. Open-ended so custom adapters can add their own. */
-export type BackendId =
-  | "claude"
+/**
+ * Canonical runtime identifiers (match `RuntimeType` in core/provider).
+ * Open-ended so custom adapters can add their own.
+ */
+export type RuntimeId =
+  | "claude-code"
   | "codex"
   | "cursor"
   | "ai-sdk"
@@ -111,7 +114,7 @@ export interface RunInput {
   maxSteps?: number;
   signal?: AbortSignal;
   /** Typed-per-adapter escape hatch for backend-native options. */
-  backendOptions?: unknown;
+  runtimeOptions?: unknown;
   metadata?: Record<string, unknown>;
 }
 

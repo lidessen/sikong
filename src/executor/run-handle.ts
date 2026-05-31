@@ -9,7 +9,7 @@ import { createEventChannel } from "../core/channel";
 import { addUsage, emptyUsage, type LoopEvent, type TokenUsage } from "../core/events";
 import { CapabilityNotSupportedError } from "../core/errors";
 import type { HookDecision, Hooks, ToolHookDecision } from "../core/hooks";
-import type { BackendId, RunHandle, RunInput, RunResult, SteerOutcome } from "../core/types";
+import type { RuntimeId, RunHandle, RunInput, RunResult, SteerOutcome } from "../core/types";
 import { compileRequest } from "./skills";
 
 /**
@@ -18,7 +18,7 @@ import { compileRequest } from "./skills";
  * loading anything.
  */
 export interface LazyBackend {
-  id: BackendId;
+  id: RuntimeId;
   capabilities: CapabilityList;
   getAdapter(): Promise<BackendAdapter>;
 }
@@ -136,7 +136,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
 
   async function pump(): Promise<void> {
     try {
-      await hooks.onStart?.({ backend: backend.id, system, prompt: input.prompt });
+      await hooks.onStart?.({ runtime: backend.id, system, prompt: input.prompt });
 
       const adapter = await backend.getAdapter();
       if (cancelledBeforeStart) {
@@ -151,7 +151,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
         mcp,
         maxSteps: input.maxSteps,
         signal: input.signal,
-        backendOptions: input.backendOptions,
+        runtimeOptions: input.runtimeOptions,
         hooks: bridge,
       });
 

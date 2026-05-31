@@ -68,10 +68,10 @@ export interface ClaudeAdapterOptions {
 }
 
 /**
- * Per-run escape hatch, read from `req.backendOptions`. Lets a caller override
+ * Per-run escape hatch, read from `req.runtimeOptions`. Lets a caller override
  * adapter defaults for a single run without reconstructing the adapter.
  */
-export interface ClaudeBackendOptions {
+export interface ClaudeRuntimeOptions {
   model?: string;
   /** Override the soft turn cap (otherwise derived from `req.maxSteps`). */
   maxTurns?: number;
@@ -102,7 +102,7 @@ const STREAM_SESSION_ID = "agent-loop-claude";
  *  - interrupt -> cancel() aborts the controller and interrupts the query.
  */
 export class ClaudeAdapter implements BackendAdapter {
-  readonly id = "claude";
+  readonly id = "claude-code";
   readonly capabilities: CapabilityList = [
     "tools",
     "mcp",
@@ -117,7 +117,7 @@ export class ClaudeAdapter implements BackendAdapter {
   constructor(private readonly opts: ClaudeAdapterOptions = {}) {}
 
   start(req: ResolvedRequest): BackendRun {
-    const o = (req.backendOptions ?? {}) as ClaudeBackendOptions;
+    const o = (req.runtimeOptions ?? {}) as ClaudeRuntimeOptions;
     const ch = createEventChannel<LoopEvent>();
     const abortController = new AbortController();
 
@@ -326,7 +326,7 @@ export class ClaudeAdapter implements BackendAdapter {
 function buildOptions(args: {
   req: ResolvedRequest;
   opts: ClaudeAdapterOptions;
-  o: ClaudeBackendOptions;
+  o: ClaudeRuntimeOptions;
   mcpServers?: Record<string, SdkMcpServerConfig>;
   preToolUse: ClaudeAgentOptions["hooks"];
   abortController: AbortController;

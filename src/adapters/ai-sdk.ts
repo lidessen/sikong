@@ -22,7 +22,7 @@ import type { AiSdkProviderSpec } from "../core/provider";
 import type { PreflightResult, ToolDefinition, ToolSet } from "../core/types";
 
 /** Per-backend escape hatch for the AI SDK adapter. */
-export interface AiSdkBackendOptions {
+export interface AiSdkRuntimeOptions {
   /** Extra/override system instructions appended to `req.system`. */
   instructions?: string;
   /** Override the soft step cap for this run (otherwise `req.maxSteps`). */
@@ -75,7 +75,7 @@ export class AiSdkAdapter implements BackendAdapter {
   constructor(private readonly options: AiSdkAdapterOptions = {}) {}
 
   start(req: ResolvedRequest): BackendRun {
-    const o = (req.backendOptions ?? {}) as AiSdkBackendOptions;
+    const o = (req.runtimeOptions ?? {}) as AiSdkRuntimeOptions;
 
     const ch = createEventChannel<LoopEvent>();
     const startedAt = Date.now();

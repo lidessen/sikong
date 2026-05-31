@@ -1,6 +1,6 @@
 import type { BackendAdapter } from "./adapter/adapter";
 import { hasCapability, type Capability, type CapabilityList } from "./core/capabilities";
-import type { BackendId, PreflightResult, RunHandle, RunInput } from "./core/types";
+import type { RuntimeId, PreflightResult, RunHandle, RunInput } from "./core/types";
 import { startRun, type LazyBackend } from "./executor/run-handle";
 
 /**
@@ -11,7 +11,7 @@ import { startRun, type LazyBackend } from "./executor/run-handle";
  * / `cursorLoop` / `mockLoop` — the backend is the only thing that differs.
  */
 export interface AgentLoop {
-  readonly id: BackendId;
+  readonly id: RuntimeId;
   readonly capabilities: CapabilityList;
   /** True if this loop's runtime supports `cap` (e.g. `loop.supports("tools")`). */
   supports(cap: Capability): boolean;
@@ -32,7 +32,7 @@ export interface AgentLoop {
  * loading anything.
  */
 export function makeLoop(
-  id: BackendId,
+  id: RuntimeId,
   capabilities: CapabilityList,
   load: () => Promise<BackendAdapter>,
 ): AgentLoop {

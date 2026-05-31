@@ -57,9 +57,9 @@ export interface CodexAdapterOptions {
 }
 
 /**
- * Per-run escape hatch carried on `req.backendOptions`.
+ * Per-run escape hatch carried on `req.runtimeOptions`.
  */
-export interface CodexBackendOptions {
+export interface CodexRuntimeOptions {
   /** Resume an existing thread by id. */
   threadId?: string;
   /** Path to a previously persisted thread id (read-only here). */
@@ -550,7 +550,7 @@ export class CodexAdapter implements BackendAdapter {
   constructor(private readonly opts: CodexAdapterOptions = {}) {}
 
   start(req: ResolvedRequest): BackendRun {
-    const o = (req.backendOptions ?? {}) as CodexBackendOptions;
+    const o = (req.runtimeOptions ?? {}) as CodexRuntimeOptions;
     const ch = createEventChannel<LoopEvent>();
     const startedAt = Date.now();
 

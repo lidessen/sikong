@@ -2,7 +2,7 @@ import type { CapabilityList } from "../core/capabilities";
 import type { LoopEvent, TokenUsage } from "../core/events";
 import type { ToolHookDecision, ToolUseHookEvent } from "../core/hooks";
 import type {
-  BackendId,
+  RuntimeId,
   McpServers,
   PreflightResult,
   ToolSet,
@@ -31,7 +31,7 @@ export interface ResolvedRequest {
   mcp: McpServers;
   maxSteps?: number;
   signal?: AbortSignal;
-  backendOptions?: unknown;
+  runtimeOptions?: unknown;
   hooks: AdapterHookBridge;
 }
 
@@ -57,7 +57,7 @@ export interface BackendRun extends AsyncIterable<LoopEvent> {
  * skills, hook dispatch, steer routing and capability gating on top.
  */
 export interface BackendAdapter {
-  readonly id: BackendId;
+  readonly id: RuntimeId;
   readonly capabilities: CapabilityList;
   /** Start one loop. Must not block; return the in-progress run immediately. */
   start(req: ResolvedRequest): BackendRun;
