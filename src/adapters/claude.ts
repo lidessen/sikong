@@ -59,6 +59,12 @@ export interface ClaudeAdapterOptions {
   extraArgs?: string[];
   /** Reserved: idle timeout (ms). Currently unused by the SDK transport. */
   idleTimeout?: number;
+  /** Provider-injected child env (set by `claudeCodeLoop({ provider })`). */
+  providerEnv?: Record<string, string>;
+  /** Provider-injected default model id. */
+  providerModel?: string;
+  /** True when a provider supplied credentials — preflight then trusts it. */
+  hasInjectedProvider?: boolean;
 }
 
 /**
@@ -279,6 +285,8 @@ export class ClaudeAdapter implements BackendAdapter {
   }
 
   async preflight(): Promise<PreflightResult> {
+    // A provider injected credentials as data (via child env) — trust it.
+    if (this.opts.hasInjectedProvider) return { ok: true };
     // Auth paths the Agent SDK can actually use when spawned headlessly:
     //  - an env credential (the common case; e.g. CLAUDE_CODE_OAUTH_TOKEN set
     //    in your shell rc, ANTHROPIC_API_KEY, AWS creds, or Google ADC), or
@@ -331,13 +339,28 @@ function buildOptions(args: {
     opts.allowedTools || o.allowedTools
       ? [...(opts.allowedTools ?? []), ...(o.allowedTools ?? [])]
       : undefined;
-  const env =
-    opts.env || o.env ? { ...opts.env, ...o.env } : undefined;
+  // The SDK's Options.env REPLACES the child env entirely (it is NOT merged
+  // with process.env). So whenever we inject anything we must also carry the
+  // parent env (PATH/HOME/...) or the spawn fails — spread process.env first,
+  // injected values win. process.env is only READ, never mutated, so concurrent
+  // runs with different provider keys stay isolated.
+  const injected: Record<string, string> = {};
+  if (opts.providerEnv) Object.assign(injected, opts.providerEnv);
+  if (opts.env) Object.assign(injected, opts.env);
+  if (o.env) Object.assign(injected, o.env);
+  let env: Record<string, string> | undefined;
+  if (Object.keys(injected).length > 0) {
+    env = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (typeof value === "string") env[key] = value;
+    }
+    Object.assign(env, injected);
+  }
 
   return {
     abortController,
     cwd: opts.cwd,
-    model: resolveClaudeModel(o.model ?? opts.model),
+    model: resolveClaudeModel(o.model ?? opts.model ?? opts.providerModel),
     env,
     additionalDirectories: opts.allowedPaths,
     allowedTools,

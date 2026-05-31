@@ -2,7 +2,7 @@
 //
 //   import { aiSdkLoop, claudeCodeLoop, codexLoop, cursorLoop, mockLoop } from "agent-loop";
 //
-// Every factory returns the same `AgentLoop` interface; the backend is the only
+// Every factory returns the same `AgentLoop` interface; the runtime is the only
 // thing that differs. Adapters (and their SDKs) load lazily on first use.
 export {
   aiSdkLoop,
@@ -11,6 +11,43 @@ export {
   cursorLoop,
   mockLoop,
 } from "./backends";
+export type {
+  AiSdkLoopOptions,
+  ClaudeLoopOptions,
+  CodexLoopOptions,
+  CursorLoopOptions,
+} from "./backends";
+
+// ---- Providers (orthogonal to runtime) ------------------------------------
+//
+//   import { deepseek, claudeCodeLoop, aiSdkLoop } from "agent-loop";
+//   const provider = deepseek({ apiKey });   // one credential…
+//   claudeCodeLoop({ provider });            // …drives claude-code
+//   aiSdkLoop({ provider });                 // …and ai-sdk
+export {
+  anthropic,
+  anthropicCompatible,
+  deepseek,
+  gateway,
+  openai,
+  openaiCompatible,
+} from "./providers";
+export {
+  ProviderRuntimeError,
+  codexProviderOverrides,
+  resolveRuntimeConfig,
+} from "./core/provider";
+export type {
+  AiSdkProviderSpec,
+  AiSdkRuntimeConfig,
+  ClaudeRuntimeConfig,
+  CodexRuntimeConfig,
+  CursorRuntimeConfig,
+  ModelProvider,
+  RuntimeConfig,
+  RuntimeConfigFor,
+  RuntimeType,
+} from "./core/provider";
 
 // ---- The unified loop interface -------------------------------------------
 export type { AgentLoop } from "./loop";
@@ -68,7 +105,7 @@ export type {
 export type { LazyBackend } from "./executor/run-handle";
 
 // ---- Per-backend constructor option types ---------------------------------
-export type { AiSdkAdapterOptions } from "./adapters/ai-sdk";
+export type { AiSdkAdapterOptions, AiSdkBackendOptions } from "./adapters/ai-sdk";
 export type { ClaudeAdapterOptions } from "./adapters/claude";
 export type { CodexAdapterOptions } from "./adapters/codex";
 export type { CursorAdapterOptions } from "./adapters/cursor";

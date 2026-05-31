@@ -46,6 +46,14 @@ export interface CodexAdapterOptions {
   idleTimeout?: number;
   /** Base instructions forwarded to the codex thread (separate from req.system). */
   instructions?: string;
+  /** Provider-injected `-c` overrides defining + selecting a custom provider. */
+  providerOverrides?: string[];
+  /** Provider-injected child env (holds the api key under its env_key). */
+  providerEnv?: Record<string, string>;
+  /** Provider-injected default model id. */
+  providerModel?: string;
+  /** True when a provider supplied credentials — preflight then trusts it. */
+  hasInjectedProvider?: boolean;
 }
 
 /**
@@ -718,12 +726,22 @@ export class CodexAdapter implements BackendAdapter {
 
       const mcpFlags = buildCodexMcpOverrides(req.mcp);
       const args = ["app-server", "--listen", "stdio://", ...mcpFlags];
+      // Provider-injected `-c model_provider/model/model_providers.*` overrides.
+      if (this.opts.providerOverrides) args.push(...this.opts.providerOverrides);
+
+      // Provider api key (under its env_key) merged over opts.env.
+      // JsonRpcStdioClient spreads process.env first, so these win; process.env
+      // is never mutated -> concurrent runs with different keys stay isolated.
+      const childEnv =
+        this.opts.env || this.opts.providerEnv
+          ? { ...this.opts.env, ...this.opts.providerEnv }
+          : undefined;
 
       client = new JsonRpcStdioClient({
         command: "codex",
         args,
         cwd: this.opts.cwd,
-        env: this.opts.env,
+        env: childEnv,
         handleRequest: (request) =>
           codexServerRequestResponse(request, this.opts.fullAuto === true),
       });
@@ -741,7 +759,7 @@ export class CodexAdapter implements BackendAdapter {
       const threadMethod = resumeThreadId ? "thread/resume" : "thread/start";
       const threadResp = (await client.request(threadMethod, {
         cwd: this.opts.cwd,
-        model: this.opts.model ?? undefined,
+        model: this.opts.model ?? this.opts.providerModel ?? undefined,
         threadId: resumeThreadId ?? undefined,
         approvalPolicy: this.opts.fullAuto ? "never" : "on-request",
         sandbox:
@@ -770,7 +788,7 @@ export class CodexAdapter implements BackendAdapter {
         threadId,
         input: [{ type: "text", text: req.prompt, text_elements: [] }],
         cwd: this.opts.cwd,
-        model: this.opts.model ?? undefined,
+        model: this.opts.model ?? this.opts.providerModel ?? undefined,
         serviceTier: this.opts.serviceTier ?? undefined,
         effort: this.opts.effort ?? undefined,
         summary: this.opts.summary ?? undefined,
@@ -852,6 +870,10 @@ export class CodexAdapter implements BackendAdapter {
         reason: "`codex` CLI not found on PATH. Install the Codex CLI.",
       };
     }
+
+    // A provider injected credentials as data (`-c` + child env) — trust it
+    // (the CLI itself was already verified above).
+    if (this.opts.hasInjectedProvider) return { ok: true };
 
     // Codex needs no API key — it authenticates via `codex login`, stored in
     // ~/.codex/auth.json (or $CODEX_HOME/auth.json). An env key also works.
