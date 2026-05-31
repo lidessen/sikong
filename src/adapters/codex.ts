@@ -1,6 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import { execa } from "execa";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type {
   BackendAdapter,
@@ -850,14 +853,16 @@ export class CodexAdapter implements BackendAdapter {
       };
     }
 
-    if (
-      !process.env.OPENAI_API_KEY &&
-      !process.env.CODEX_API_KEY &&
-      !process.env.CODEX_HOME
-    ) {
-      // Not necessarily fatal (codex may be logged in via `codex login`), so
-      // report missing env rather than hard-failing.
-      return { ok: true, missingEnv: ["OPENAI_API_KEY"] };
+    // Codex needs no API key — it authenticates via `codex login`, stored in
+    // ~/.codex/auth.json (or $CODEX_HOME/auth.json). An env key also works.
+    const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+    const loggedIn = existsSync(join(codexHome, "auth.json"));
+    const envKey = Boolean(process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY);
+    if (!loggedIn && !envKey) {
+      return {
+        ok: false,
+        reason: "Codex is not authenticated — run `codex login` (no API key required).",
+      };
     }
     return { ok: true };
   }

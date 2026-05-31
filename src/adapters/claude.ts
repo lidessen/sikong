@@ -13,6 +13,9 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 import type {
   BackendAdapter,
@@ -276,25 +279,35 @@ export class ClaudeAdapter implements BackendAdapter {
   }
 
   async preflight(): Promise<PreflightResult> {
-    const missingEnv: string[] = [];
-    const hasAuth =
+    // Auth paths the Agent SDK can actually use when spawned headlessly:
+    //  - an env credential (the common case; e.g. CLAUDE_CODE_OAUTH_TOKEN set
+    //    in your shell rc, ANTHROPIC_API_KEY, AWS creds, or Google ADC), or
+    //  - a credentials *file* (~/.claude/.credentials.json) on systems that use
+    //    one (Linux). On macOS the interactive CLI keeps the token in the
+    //    Keychain, which the spawned SDK does NOT read — so a keychain entry is
+    //    deliberately NOT treated as usable here (it would be a false positive:
+    //    preflight "ok" but the run 401s). Export CLAUDE_CODE_OAUTH_TOKEN for
+    //    headless use.
+    const envAuth =
       Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) ||
       Boolean(process.env.ANTHROPIC_API_KEY) ||
       Boolean(process.env.AWS_REGION && process.env.AWS_ACCESS_KEY_ID) ||
       Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS) ||
       Boolean(process.env.GOOGLE_CLOUD_PROJECT);
+    if (envAuth) return { ok: true };
 
-    if (!hasAuth) {
-      missingEnv.push("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN");
-      return {
-        ok: false,
-        reason:
-          "Claude Agent SDK requires Claude Code OAuth or provider credentials (e.g. CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, AWS creds, or Google ADC).",
-        missingEnv,
-      };
+    if (existsSync(join(homedir(), ".claude", ".credentials.json"))) {
+      return { ok: true };
     }
 
-    return { ok: true };
+    return {
+      ok: false,
+      reason:
+        "No Claude credentials available to a headless run. Set CLAUDE_CODE_OAUTH_TOKEN " +
+        "(or ANTHROPIC_API_KEY / AWS creds / Google ADC). On macOS a Keychain-only " +
+        "Claude Code login is not usable by the spawned SDK — export the token.",
+      missingEnv: ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    };
   }
 }
 
