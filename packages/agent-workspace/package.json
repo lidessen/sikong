@@ -13,6 +13,8 @@
   },
   "files": ["src"],
   "scripts": {
+    "build": "bun run build:cli",
+    "build:cli": "bun build scripts/cli.ts --compile --outfile dist/agent-workspace",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bunx --bun vitest run",
     "test:watch": "bunx --bun vitest"

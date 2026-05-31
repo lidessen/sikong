@@ -5,6 +5,8 @@
   "type": "module",
   "workspaces": ["packages/*"],
   "scripts": {
+    "build": "bun run --filter agent-workspace build",
+    "build:cli": "bun run --filter agent-workspace build:cli",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun run --filter '*' test"
   },

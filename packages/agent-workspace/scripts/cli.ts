@@ -66,6 +66,8 @@ const hasFlag = (name: string): boolean => flags.has(name);
 const dir = flag("--dir") || process.env.AGENT_WORKSPACE_DIR || ".agent-workspace";
 const json = hasFlag("--json");
 const cmd = positional[0];
+const argv1 = process.argv[1] ?? "agent-workspace";
+const cli = argv1.endsWith(".ts") ? `bun ${argv1}` : argv1;
 
 function parseLeadCommand(op: string, rest: string[]): Command {
   switch (op) {
@@ -207,7 +209,7 @@ switch (cmd) {
       fail((err as Error).message, 1);
     }
     console.log(`created ${task!.id} → workflow "${task!.workflowId}" @ "${task!.stageId}" (${task!.status})`);
-    console.log(`drive it: bun scripts/cli.ts run --task ${task!.id} --dir ${dir}`);
+    console.log(`drive it: ${cli} run --task ${task!.id} --dir ${dir}`);
     break;
   }
   case "run": {
@@ -241,7 +243,7 @@ switch (cmd) {
     } catch (err) {
       fail((err as Error).message, 1);
     }
-    console.log(`submitted ${op} to ${id} — apply with: bun scripts/cli.ts run --task ${id} --dir ${dir}`);
+    console.log(`submitted ${op} to ${id} — apply with: ${cli} run --task ${id} --dir ${dir}`);
     break;
   }
   case "register": {
@@ -308,7 +310,7 @@ switch (cmd) {
       if (d.suggestions.length === 0) console.log("  (none available in this environment)");
       for (const s of d.suggestions)
         console.log(
-          `  bun scripts/cli.ts worker create ${s.id} --runtime ${s.runtime} --provider ${s.provider} --model ${s.model} --desc "${s.description}" --dir ${dir}`,
+          `  ${cli} worker create ${s.id} --runtime ${s.runtime} --provider ${s.provider} --model ${s.model} --desc "${s.description}" --dir ${dir}`,
         );
       break;
     }

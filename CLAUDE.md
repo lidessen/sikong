@@ -16,14 +16,16 @@ A **bun-workspaces monorepo** (`agent-workspace-monorepo`, private). Two package
   (depends on it via `workspace:*`). **Scope TBD — placeholder** that re-exports
   task primitives; real API not built yet.
 
-Packages ship `.ts` source (no build step; `package.json` `module`/`exports`
-point straight at `src/`). Paths in the Architecture section below are relative to
+Library packages ship `.ts` source (`package.json` `module`/`exports`
+point straight at `src/`). The `agent-workspace` CLI has a Bun single-file
+executable build. Paths in the Architecture section below are relative to
 `packages/agent-loop/src/` unless noted.
 
 ## Commands
 
 ```sh
 bun install                         # at root — links workspaces
+bun run build                       # compile packages/agent-workspace/dist/agent-workspace
 
 # root fan-out (the CI gate) — runs the script in every package
 bun run typecheck                   # = bun run --filter '*' typecheck
@@ -40,6 +42,10 @@ bunx vitest run -t "textStream yields assistant text only" # single test
 bun scripts/smoke-provider.ts        # one DeepSeek key across runtimes
 bun scripts/smoke-run.ts [all|claude|codex|cursor|ai-sdk]
 bun scripts/repl.ts [runtime] [--provider deepseek|...] [--model ...]   # manual REPL
+
+# agent-workspace CLI executable
+bun run --filter agent-workspace build:cli
+packages/agent-workspace/dist/agent-workspace help
 ```
 
 ## Design docs
@@ -48,7 +54,7 @@ bun scripts/repl.ts [runtime] [--provider deepseek|...] [--model ...]   # manual
 `design/README.md` for the system shape, then the relevant area document under
 `design/areas/` before changing behavior or package boundaries.
 
-Durable shape changes require a design decision in `docs/decisions/` before
+Durable shape changes require a design decision in `design/decisions/` before
 implementation: module boundaries, state model, protocol/schema semantics,
 persistence behavior, scheduling mechanics, runtime contracts, or user-visible
 workflow behavior. Keep design docs in English.

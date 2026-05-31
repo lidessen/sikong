@@ -1,7 +1,8 @@
 # agent-workspace
 
-Monorepo for the agent-workspace stack. Bun workspaces; packages ship `.ts`
-source (no build step).
+Monorepo for the agent-workspace stack. Bun workspaces; libraries ship `.ts`
+source. The `agent-workspace` CLI can also be compiled to a standalone Bun
+executable.
 
 ## Packages
 
@@ -14,6 +15,7 @@ source (no build step).
 
 ```sh
 bun install
+bun run build       # compiles packages/agent-workspace/dist/agent-workspace
 bun run typecheck   # tsc --noEmit in every package
 bun run test        # vitest in every package
 ```
@@ -23,6 +25,7 @@ Per-package (run inside a package dir, or with `--filter`):
 ```sh
 bun run --filter agent-loop test
 bun run --filter agent-loop typecheck
+bun run --filter agent-workspace build:cli
 ```
 
 ## Design

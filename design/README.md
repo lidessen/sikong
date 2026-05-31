@@ -11,7 +11,7 @@ Read this file before changing behavior. Then read the relevant area document:
 | [areas/runtime-loop.md](areas/runtime-loop.md) | `agent-loop`: runtime/provider boundary, adapter contract, run handle, hooks, capabilities, task supervisor |
 | [areas/workspace-engine.md](areas/workspace-engine.md) | `agent-workspace`: workflow definitions, task timelines, reducer/guard model, wake engine, subtask direction |
 
-Design decisions live in [`../docs/decisions`](../docs/decisions). Write a
+Design decisions live in [`./decisions`](./decisions). Write a
 decision record before changing durable shape: module boundaries, state model,
 event or command schemas, persistence semantics, scheduling mechanics, runtime
 contracts, or user-visible workflow behavior.
@@ -91,7 +91,7 @@ surfaces are still open design/implementation work.
 
 Small implementation changes can land with focused tests. Durable shape changes
 need a decision record first. Use the existing format in
-[`../docs/decisions/0000-template.md`](../docs/decisions/0000-template.md).
+[`./decisions/0000-template.md`](./decisions/0000-template.md).
 
 A decision record is required for:
 

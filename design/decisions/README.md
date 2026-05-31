@@ -3,7 +3,7 @@
 This directory records durable project decisions that should survive beyond chat
 threads, issue comments, and inline code notes.
 
-The design entrypoint is [`../../design/README.md`](../../design/README.md).
+The design entrypoint is [`../README.md`](../README.md).
 
 Use a decision record when a change affects core behavior, public contracts,
 data model semantics, persistence, runtime boundaries, or long-term operational
