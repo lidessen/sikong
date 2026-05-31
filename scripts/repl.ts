@@ -76,31 +76,26 @@ const opts = {
   denyDestructive: argv.includes("--deny-destructive"),
 };
 
-const ENV_KEY: Record<ProviderKind, string> = {
-  deepseek: "DEEPSEEK_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-  openai: "OPENAI_API_KEY",
-  "openai-compatible": "API_KEY",
-  gateway: "AI_GATEWAY_API_KEY",
-};
-
+// apiKey is optional everywhere: pass --api-key to override, otherwise the
+// provider auto-discovers its conventional env var (DEEPSEEK_API_KEY, etc.).
 function buildProvider(): ModelProvider | undefined {
   if (!opts.providerKind) return undefined;
-  const apiKey = opts.apiKey ?? process.env[ENV_KEY[opts.providerKind]] ?? "";
+  const key = opts.apiKey ? { apiKey: opts.apiKey } : {};
+  const model = opts.model ? { model: opts.model } : {};
   switch (opts.providerKind) {
     case "deepseek":
-      return deepseek({ apiKey, ...(opts.model ? { model: opts.model } : {}) });
+      return deepseek({ ...key, ...model });
     case "anthropic":
-      return anthropic({ apiKey, ...(opts.model ? { model: opts.model } : {}) });
+      return anthropic({ ...key, ...model });
     case "openai":
-      return openai({ apiKey, ...(opts.model ? { model: opts.model } : {}) });
+      return openai({ ...key, ...model });
     case "gateway":
-      return gateway({ apiKey: apiKey || undefined, model: opts.model ?? "deepseek/deepseek-chat" });
+      return gateway({ ...key, model: opts.model ?? "deepseek/deepseek-chat" });
     case "openai-compatible":
       if (!opts.baseURL) throw new Error("--provider openai-compatible requires --base-url");
       return openaiCompatible({
         id: opts.providerId,
-        apiKey,
+        ...key,
         baseURL: opts.baseURL,
         model: opts.model ?? "default",
       });
