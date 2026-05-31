@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { emptyUsage, type AgentLoop, type LoopEvent, type RunResult } from "agent-loop";
+import {
+  createProjectTools,
+  emptyUsage,
+  type AgentLoop,
+  type LoopEvent,
+  type RunResult,
+} from "agent-loop";
 import {
   filterValidFields,
   initTask,
@@ -331,13 +337,18 @@ export class WorkflowEngine {
       throw new Error(
         `task ${taskId}: worker runtime "${loop.id}" lacks the "tools" capability that command tools require (use claude-code or ai-sdk, not codex/cursor)`,
       );
-    const { tools, drain } = buildCommandTools(wf, stage);
+    const { tools: commandTools, drain } = buildCommandTools(wf, stage);
+    const projectTools =
+      loop.id === "ai-sdk" && project?.root
+        ? await createProjectTools({ cwd: project.root, ...(project.env ? { env: project.env } : {}) })
+        : {};
+    const tools = { ...projectTools, ...commandTools };
     this.o.hooks?.onWakeStart?.({ taskId, wakeId, stageId: task.stageId });
     await this.chron({ type: "wake.start", taskId, wakeId, summary: `wake @ "${task.stageId}"` });
 
     const controller = new AbortController();
     const run = loop.run({
-      system: buildSystem(task, wf, stage),
+      system: buildSystem(task, wf, stage, Object.keys(projectTools)),
       prompt: buildPrompt(task, wf, stage),
       tools,
       signal: controller.signal,

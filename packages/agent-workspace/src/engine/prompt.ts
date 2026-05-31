@@ -19,7 +19,12 @@ function renderValue(value: unknown): string {
  * context-rot discipline). M1 keeps this minimal; richer context (a rolling
  * timeline summary, retrieval tool) is a later refinement.
  */
-export function buildSystem(task: Task, wf: WorkflowDef, stage: StageDef | undefined): string {
+export function buildSystem(
+  task: Task,
+  wf: WorkflowDef,
+  stage: StageDef | undefined,
+  projectToolNames: readonly string[] = [],
+): string {
   const lines: string[] = [
     `# Workflow: ${wf.name}`,
     wf.description,
@@ -48,6 +53,14 @@ export function buildSystem(task: Task, wf: WorkflowDef, stage: StageDef | undef
     `Tools available this stage: ${toolNames.map((n) => `\`${n}\``).join(", ")}.`,
     "Update the task's state with these tools. When this stage's work is done, call `request_transition`. You cannot transition or complete the task directly — the workflow decides when it advances based on its guards, so make sure the fields they read are set first.",
   );
+  if (projectToolNames.length) {
+    lines.push(
+      "",
+      "## Project tools",
+      `Project tools available to this worker: ${projectToolNames.map((n) => `\`${n}\``).join(", ")}.`,
+      "Use them to inspect and edit the project, search code, and fetch web context when the stage requires it. Local project tools are scoped to the project root. They do not replace the workflow state tools; record durable progress with the stage tools above.",
+    );
+  }
   return lines.join("\n");
 }
 

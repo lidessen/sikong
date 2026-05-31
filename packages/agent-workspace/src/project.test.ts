@@ -42,10 +42,17 @@ describe("projects", () => {
     try {
       const ps = new JsonProjectStore(dir);
       expect((await ps.get("default"))?.id).toBe("default"); // builtin, no file
-      await ps.put({ id: "web", name: "Web", root: "/repo/web", defaultWorker: "flash" });
+      await ps.put({
+        id: "web",
+        name: "Web",
+        root: "/repo/web",
+        defaultWorker: "flash",
+        permissionMode: "dontAsk",
+      });
       expect(await readdir(join(dir, "projects"))).toEqual(["web.yaml"]);
       expect(await readFile(join(dir, "projects", "web.yaml"), "utf8")).toContain("flash");
       expect((await ps.get("web"))?.root).toBe("/repo/web");
+      expect((await ps.get("web"))?.permissionMode).toBe("dontAsk");
       const ids = (await ps.list()).map((p) => p.id).sort();
       expect(ids).toContain("default");
       expect(ids).toContain("web");

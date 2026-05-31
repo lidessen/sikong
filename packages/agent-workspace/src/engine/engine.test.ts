@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   mockLoop,
@@ -15,6 +18,7 @@ import type { WorkflowDef } from "../workflow/types";
 import {
   MemoryChronicleStore,
   MemoryEventStore,
+  MemoryProjectStore,
   MemoryProjectionStore,
   MemoryWorkflowRegistry,
 } from "../store/memory";
@@ -270,6 +274,38 @@ describe("WorkflowEngine wake cycle", () => {
     expect(t?.status).toBe("in_progress");
   });
 
+  test("injects project tools for ai-sdk wakes scoped to the task project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-workspace-project-tools-"));
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "src", "a.txt"), "needle\n", "utf8");
+    let sawRg = false;
+    let sawProjectPrompt = false;
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop: () =>
+        scriptLoop(async (input) => {
+          sawRg = Boolean(input.tools?.rg);
+          sawProjectPrompt = Boolean(input.system?.includes("Project tools"));
+          const result = (await input.tools?.rg?.execute?.(
+            { pattern: "needle", path: "src" },
+            {},
+          )) as { matches?: string[] } | undefined;
+          expect(result?.matches).toEqual(["src/a.txt:1:needle"]);
+          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+        }, "ai-sdk"),
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "ai-tools", fields: { request: "search" } });
+    await engine.idle();
+
+    expect(sawRg).toBe(true);
+    expect(sawProjectPrompt).toBe(true);
+    expect((await engine.getTask("ai-tools"))?.status).toBe("done");
+  });
+
   test("a worker spawns a subtask and the parent advances on childrenDone (DAG)", async () => {
     const CHILD: WorkflowDef = {
       id: "child",
@@ -379,10 +415,10 @@ describe("WorkflowEngine wake cycle", () => {
 });
 
 /** A loop whose run() executes `body` (which may await), resolving when it finishes. */
-function scriptLoop(body: (input: RunInput) => Promise<void>): AgentLoop {
+function scriptLoop(body: (input: RunInput) => Promise<void>, id = "scripted"): AgentLoop {
   const capabilities: CapabilityList = ["tools"];
   return {
-    id: "scripted",
+    id,
     capabilities,
     supports: (c: Capability) => capabilities.includes(c),
     run(input: RunInput): RunHandle {

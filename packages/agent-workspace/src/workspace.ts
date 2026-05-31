@@ -23,16 +23,26 @@ import {
   MemoryWorkflowRegistry,
 } from "./store";
 import { dataFileCandidates, isDataFile, parseDataFile, stringifyYaml, yamlFile } from "./config-file";
+import type { Project } from "./project";
 
 /** Build the AgentLoop a worker describes (provider key auto-discovered at this point). */
-export function resolveWorkerLoop(worker: Worker): AgentLoop {
+export function resolveWorkerLoop(worker: Worker, opts: { project?: Project } = {}): AgentLoop {
   const provider: ModelProvider =
     worker.provider === "deepseek"
       ? deepseek({ model: worker.model })
       : worker.provider === "anthropic"
         ? anthropic({ model: worker.model })
         : openai({ model: worker.model });
-  return worker.runtime === "ai-sdk" ? aiSdkLoop({ provider }) : claudeCodeLoop({ provider });
+  if (worker.runtime === "ai-sdk") return aiSdkLoop({ provider });
+  const project = opts.project;
+  return claudeCodeLoop({
+    provider,
+    ...(project?.root ? { cwd: project.root, allowedPaths: [project.root] } : {}),
+    ...(project?.env ? { env: project.env } : {}),
+    ...(project?.permissionMode ?? worker.permissionMode
+      ? { permissionMode: project?.permissionMode ?? worker.permissionMode }
+      : {}),
+  });
 }
 
 interface WorkspaceConfig {
@@ -122,7 +132,9 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     return w;
   };
   const defaultLoop: LoopFactory = (ctx) =>
-    resolveWorkerLoop(hire(ctx.task.workerId ?? ctx.project?.defaultWorker, ctx.task.id));
+    resolveWorkerLoop(hire(ctx.task.workerId ?? ctx.project?.defaultWorker, ctx.task.id), {
+      ...(ctx.project ? { project: ctx.project } : {}),
+    });
   const defaultIntakeLoop = () => resolveWorkerLoop(hire(undefined, "intake"));
   const loop: LoopFactory = opts.loop ?? defaultLoop;
   const intakeLoop = opts.intakeLoop ?? defaultIntakeLoop;

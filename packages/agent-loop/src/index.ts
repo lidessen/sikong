@@ -88,6 +88,8 @@ export {
   CapabilityNotSupportedError,
   PreflightError,
 } from "./core/errors";
+export { createProjectTools } from "./tools";
+export type { ProjectToolOptions } from "./tools";
 export type {
   HookDecision,
   Hooks,

@@ -14,7 +14,8 @@
   "files": ["src"],
   "scripts": {
     "build": "bun run build:cli",
-    "build:cli": "bun build scripts/cli.ts --compile --outfile dist/agent-workspace",
+    "build:cli": "bun build src/cli.ts --compile --outfile dist/agent-workspace",
+    "smoke:deepseek-tools": "bun smokes/smoke-deepseek-project-tools.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bunx --bun vitest run",
     "test:watch": "bunx --bun vitest"

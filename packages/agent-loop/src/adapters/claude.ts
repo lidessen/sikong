@@ -12,7 +12,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
+import * as zod from "zod";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +35,10 @@ import type {
   ToolSet,
 } from "../core/types";
 
+export type ClaudePermissionMode = NonNullable<ClaudeAgentOptions["permissionMode"]>;
+
+const z = ((zod as unknown as { z?: typeof zod }).z ?? zod) as typeof zod;
+
 /**
  * Construction-time options for {@link ClaudeAdapter}. These configure the
  * adapter itself (model, working directory, permission posture). Everything
@@ -51,7 +55,7 @@ export interface ClaudeAdapterOptions {
   /** Tool allow-list passed straight to the SDK. */
   allowedTools?: string[];
   /** Permission posture. "bypassPermissions" also skips dangerous-op prompts. */
-  permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
+  permissionMode?: ClaudePermissionMode;
   /** Extra environment variables for the agent subprocess. */
   env?: Record<string, string>;
   /** Directories the agent may read/write beyond `cwd`. */
@@ -82,7 +86,7 @@ export interface ClaudeRuntimeOptions {
   resume?: string;
   /** Continue the most recent session. */
   continue?: boolean;
-  permissionMode?: "default" | "acceptEdits" | "bypassPermissions" | "plan";
+  permissionMode?: ClaudePermissionMode;
   /** Extra `allowedTools` merged with the adapter's. */
   allowedTools?: string[];
   /** Extra environment variables merged with the adapter's. */
@@ -199,6 +203,7 @@ export class ClaudeAdapter implements BackendAdapter {
       const streamState = { streamedText: "", streamedThinking: "" };
       let stepIndex = -1;
       let stepOpen = false;
+      let closedInputAfterAssistant = false;
 
       const openStep = () => {
         stepIndex += 1;
@@ -229,7 +234,13 @@ export class ClaudeAdapter implements BackendAdapter {
 
         for await (const message of q) {
           // A new assistant turn opens a step; the matching result closes it.
-          if (message.type === "assistant" && !stepOpen) openStep();
+          if (message.type === "assistant") {
+            if (!stepOpen) openStep();
+            if (!closedInputAfterAssistant) {
+              closedInputAfterAssistant = true;
+              endInput?.();
+            }
+          }
 
           const mapped = mapClaudeMessage(message, toolNames, streamState);
 
@@ -343,9 +354,10 @@ function buildOptions(args: {
 
   const permissionMode = o.permissionMode ?? opts.permissionMode;
   const append = req.system || opts.instructions;
+  const autoAllowedToolNames = inProcessToolAllowedNames(req.tools);
   const allowedTools =
-    opts.allowedTools || o.allowedTools
-      ? [...(opts.allowedTools ?? []), ...(o.allowedTools ?? [])]
+    opts.allowedTools || o.allowedTools || autoAllowedToolNames.length > 0
+      ? [...new Set([...autoAllowedToolNames, ...(opts.allowedTools ?? []), ...(o.allowedTools ?? [])])]
       : undefined;
   // The SDK's Options.env REPLACES the child env entirely (it is NOT merged
   // with process.env). So whenever we inject anything we must also carry the
@@ -503,12 +515,16 @@ function buildInProcessToolServer(
   return { name: serverName, config: instance };
 }
 
+function inProcessToolAllowedNames(tools: ToolSet): string[] {
+  return Object.keys(tools).flatMap((name) => [name, `mcp__agent_loop_tools__${name}`]);
+}
+
 function buildSdkTool(
   name: string,
   def: ToolDefinition,
   signal?: AbortSignal,
 ) {
-  const shape = toZodRawShape(def.inputSchema);
+  const shape = jsonSchemaToZodRawShape(def.inputSchema);
   return tool(
     name,
     def.description ?? name,
@@ -539,9 +555,10 @@ function buildSdkTool(
 /**
  * Coerce a tool's `inputSchema` (unknown by contract) into a Zod raw shape that
  * the SDK's `tool()` helper accepts. We support a Zod object schema directly,
- * pass through a raw shape, and otherwise fall back to an open object.
+ * pass through a raw shape, convert the JSON Schema object shape used by
+ * agent-loop tools, and otherwise fall back to an open object.
  */
-function toZodRawShape(schema: unknown): z.ZodRawShape {
+export function jsonSchemaToZodRawShape(schema: unknown): zod.ZodRawShape {
   if (!schema || typeof schema !== "object") return {};
   // A Zod object schema: lift its `.shape`.
   const maybeZod = schema as { shape?: unknown; _def?: unknown };
@@ -550,18 +567,121 @@ function toZodRawShape(schema: unknown): z.ZodRawShape {
     maybeZod.shape &&
     typeof maybeZod.shape === "object"
   ) {
-    return maybeZod.shape as z.ZodRawShape;
+    return maybeZod.shape as zod.ZodRawShape;
   }
   // Already a raw shape (record of Zod types).
   const values = Object.values(schema as Record<string, unknown>);
   if (
     values.length > 0 &&
-    values.every((v) => v instanceof z.ZodType)
+    values.every(isZodType)
   ) {
-    return schema as z.ZodRawShape;
+    return schema as zod.ZodRawShape;
   }
-  // JSON Schema or anything else: accept arbitrary input.
+
+  const maybeJson = schema as JsonSchemaLike;
+  if (maybeJson.type === "object" || maybeJson.properties) {
+    const required = new Set(maybeJson.required ?? []);
+    const shape: Record<string, zod.ZodType> = {};
+    for (const [key, value] of Object.entries(maybeJson.properties ?? {})) {
+      const item = zodFromJsonSchema(value);
+      shape[key] = required.has(key) ? item : item.optional();
+    }
+    return shape;
+  }
+
+  // Anything else: accept arbitrary input.
   return {};
+}
+
+interface JsonSchemaLike {
+  type?: string | readonly string[];
+  properties?: Record<string, unknown>;
+  required?: readonly string[];
+  enum?: readonly unknown[];
+  const?: unknown;
+  description?: string;
+  items?: unknown;
+  additionalProperties?: boolean | unknown;
+  anyOf?: readonly unknown[];
+  oneOf?: readonly unknown[];
+  nullable?: boolean;
+}
+
+function zodFromJsonSchema(schema: unknown): zod.ZodType {
+  if (!schema || typeof schema !== "object") return z.unknown();
+  if (isZodType(schema)) return schema as zod.ZodType;
+
+  const s = schema as JsonSchemaLike;
+  let out: zod.ZodType;
+
+  if (s.const !== undefined) {
+    out = literalFor(s.const);
+  } else if (s.enum && s.enum.length > 0) {
+    const values = s.enum;
+    if (values.every((v): v is string => typeof v === "string")) {
+      out = z.enum(values as [string, ...string[]]);
+    } else {
+      out = unionOrSingle(values.map(literalFor));
+    }
+  } else if (s.anyOf && s.anyOf.length > 0) {
+    out = unionOrSingle(s.anyOf.map(zodFromJsonSchema));
+  } else if (s.oneOf && s.oneOf.length > 0) {
+    out = unionOrSingle(s.oneOf.map(zodFromJsonSchema));
+  } else {
+    const type = Array.isArray(s.type) ? s.type.find((t) => t !== "null") : s.type;
+    switch (type) {
+      case "string":
+        out = z.string();
+        break;
+      case "number":
+        out = z.number();
+        break;
+      case "integer":
+        out = z.number().int();
+        break;
+      case "boolean":
+        out = z.boolean();
+        break;
+      case "array":
+        out = z.array(zodFromJsonSchema(s.items));
+        break;
+      case "object": {
+        const required = new Set(s.required ?? []);
+        const shape: Record<string, zod.ZodType> = {};
+        for (const [key, value] of Object.entries(s.properties ?? {})) {
+          const item = zodFromJsonSchema(value);
+          shape[key] = required.has(key) ? item : item.optional();
+        }
+        out = z.object(shape as zod.ZodRawShape);
+        if (s.additionalProperties === false) out = (out as zod.ZodObject<zod.ZodRawShape>).strict();
+        break;
+      }
+      case "null":
+        out = z.null();
+        break;
+      default:
+        out = z.unknown();
+    }
+  }
+
+  if (s.nullable || (Array.isArray(s.type) && s.type.includes("null"))) out = out.nullable();
+  return s.description ? out.describe(s.description) : out;
+}
+
+function literalFor(value: unknown): zod.ZodType {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null)
+    return z.literal(value);
+  return z.unknown();
+}
+
+function unionOrSingle(items: zod.ZodType[]): zod.ZodType {
+  if (items.length === 0) return z.unknown();
+  if (items.length === 1) return items[0]!;
+  return z.union(items as [zod.ZodType, zod.ZodType, ...zod.ZodType[]]);
+}
+
+function isZodType(value: unknown): boolean {
+  return !!value && typeof value === "object" && typeof (value as { safeParse?: unknown }).safeParse === "function";
 }
 
 function stringifyResult(out: unknown): string {

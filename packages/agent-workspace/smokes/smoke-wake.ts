@@ -2,12 +2,12 @@
  * Wake/intake smoke — drives a task through the M1 engine into durable stores.
  *
  *   # creds-free dry runs + inspect:
- *   bun scripts/smoke-wake.ts mock --dir /tmp/aw
- *   bun scripts/smoke-wake.ts mock --dir /tmp/aw --intake "login throws 500 on submit, high severity"
- *   bun scripts/cli.ts status --dir /tmp/aw
+ *   bun smokes/smoke-wake.ts mock --dir /tmp/aw
+ *   bun smokes/smoke-wake.ts mock --dir /tmp/aw --intake "login throws 500 on submit, high severity"
+ *   bun src/cli.ts status --dir /tmp/aw
  *
  *   # live DeepSeek v4 flash (creds via interactive shell):
- *   zsh -ic 'bun scripts/smoke-wake.ts ai-sdk --dir /tmp/aw --intake "the login page 500s on submit, high severity"'
+ *   zsh -ic 'bun smokes/smoke-wake.ts ai-sdk --dir /tmp/aw --intake "the login page 500s on submit, high severity"'
  */
 import { aiSdkLoop, claudeCodeLoop, deepseek, mockLoop } from "agent-loop";
 import {
@@ -104,5 +104,5 @@ await engine.idle();
 const final = await engine.getTask(task.id);
 console.log(`\nfinal: workflow="${final?.workflowId}" stage="${final?.stageId}" status=${final?.status}`);
 console.log(`summary: ${JSON.stringify(final?.fields.summary)}`);
-console.log(`\ninspect: bun scripts/cli.ts task ${task.id} --dir ${dir}`);
+console.log(`\ninspect: bun src/cli.ts task ${task.id} --dir ${dir}`);
 process.exit(final?.status === "done" ? 0 : 1);

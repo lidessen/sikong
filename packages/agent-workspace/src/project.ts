@@ -1,3 +1,5 @@
+import type { WorkerPermissionMode } from "./worker";
+
 /**
  * A Project is the container every task lives under (Task.projectId always
  * references one). It carries per-project isolation config — a working dir, a
@@ -16,6 +18,8 @@ export interface Project {
   defaultWorker?: string;
   /** Extra environment for this project's workers. */
   env?: Record<string, string>;
+  /** Runtime permission posture for this project's wakes, overriding the worker default when set. */
+  permissionMode?: WorkerPermissionMode;
 }
 
 /** The builtin fallback project — the zero-config default every task gets without `--project`. */

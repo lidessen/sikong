@@ -15,6 +15,8 @@ import { dirname, join } from "node:path";
 export type WorkerRuntime = "ai-sdk" | "claude-code";
 /** Built-in providers we can resolve a loop for. */
 export type WorkerProvider = "deepseek" | "anthropic" | "openai";
+/** Runtime permission posture. Currently applied by claude-code workers. */
+export type WorkerPermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
 
 export interface Worker {
   id: string;
@@ -24,6 +26,7 @@ export interface Worker {
   runtime: WorkerRuntime;
   provider: WorkerProvider;
   model: string;
+  permissionMode?: WorkerPermissionMode;
   // skills?/mcp? — a worker's "specialty" — deferred until skill injection lands.
 }
 

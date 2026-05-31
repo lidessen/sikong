@@ -14,5 +14,5 @@
     "resolveJsonModule": true,
     "types": ["node", "bun"]
   },
-  "include": ["src", "scripts"]
+  "include": ["src", "smokes"]
 }

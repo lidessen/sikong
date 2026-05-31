@@ -23,6 +23,7 @@ const FLASH: Worker = {
   runtime: "ai-sdk",
   provider: "deepseek",
   model: "deepseek-v4-flash",
+  permissionMode: "acceptEdits",
 };
 
 describe("workers", () => {
@@ -42,6 +43,7 @@ describe("workers", () => {
       expect(await readdir(join(dir, "workers"))).toEqual(["flash.yaml"]);
       expect(await readFile(join(dir, "workers", "flash.yaml"), "utf8")).toContain("deepseek");
       expect((await ws.get("flash"))?.model).toBe("deepseek-v4-flash");
+      expect((await ws.get("flash"))?.permissionMode).toBe("acceptEdits");
       expect((await new JsonWorkerStore(dir).list()).map((w) => w.id)).toEqual(["flash"]);
     } finally {
       await rm(dir, { recursive: true, force: true });

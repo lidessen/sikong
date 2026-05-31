@@ -16,17 +16,19 @@
  */
 import { unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { JsonlChronicleStore, JsonlEventStore, JsonProjectionStore, JsonProjectStore, JsonWorkerStore } from "../src/store";
-import { renderStatus, renderTaskDetail, taskDetail, workspaceStatus } from "../src/inspect";
-import { acquireLock, getDefaultWorker, openWorkspace, saveWorkflow, setDefaultWorker, type Workspace } from "../src/workspace";
-import { parseDataFile } from "../src/config-file";
-import { isValidProjectId, type Project } from "../src/project";
-import { discoverWorkers, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "../src/worker";
-import type { Command } from "../src/workflow";
+import { JsonlChronicleStore, JsonlEventStore, JsonProjectionStore, JsonProjectStore, JsonWorkerStore } from "./store";
+import { renderStatus, renderTaskDetail, taskDetail, workspaceStatus } from "./inspect";
+import { acquireLock, getDefaultWorker, openWorkspace, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
+import { parseDataFile } from "./config-file";
+import { isValidProjectId, type Project } from "./project";
+import { discoverWorkers, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
+import type { WorkerPermissionMode } from "./worker";
+import type { Command } from "./workflow";
 
 const VALUE_FLAGS = new Set([
   "--dir", "--project", "--workflow", "--id", "--task", "-n",
   "--root", "--name", "--model", "--worker", "--runtime", "--provider", "--desc",
+  "--permission", "--permission-mode",
 ]);
 const BOOL_FLAGS = new Set(["--json"]);
 const fail = (msg: string, code = 2): never => {
@@ -68,6 +70,22 @@ const json = hasFlag("--json");
 const cmd = positional[0];
 const argv1 = process.argv[1] ?? "agent-workspace";
 const cli = argv1.endsWith(".ts") ? `bun ${argv1}` : argv1;
+const PERMISSION_MODES = new Set<WorkerPermissionMode>([
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+  "dontAsk",
+  "auto",
+]);
+
+function permissionMode(): WorkerPermissionMode | undefined {
+  const raw = flag("--permission-mode") ?? flag("--permission");
+  if (raw === undefined) return undefined;
+  if (!PERMISSION_MODES.has(raw as WorkerPermissionMode))
+    fail("--permission must be default, acceptEdits, bypassPermissions, plan, dontAsk, or auto");
+  return raw as WorkerPermissionMode;
+}
 
 function parseLeadCommand(op: string, rest: string[]): Command {
   switch (op) {
@@ -282,12 +300,14 @@ switch (cmd) {
       const id = positional[2];
       if (!id || !isValidProjectId(id))
         fail("usage: cli project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--model <m>]");
+      const mode = permissionMode();
       const project: Project = {
         id: id!,
         name: flag("--name") ?? id!,
         root: flag("--root") ?? ".",
         ...(flag("--workflow") ? { defaultWorkflowId: flag("--workflow")! } : {}),
         ...(flag("--worker") ? { defaultWorker: flag("--worker")! } : {}),
+        ...(mode ? { permissionMode: mode } : {}),
       };
       await new JsonProjectStore(dir).put(project);
       console.log(`created project ${project.id} (root ${project.root})`);
@@ -339,6 +359,7 @@ switch (cmd) {
       if (provider !== "deepseek" && provider !== "anthropic" && provider !== "openai")
         fail("--provider must be deepseek, anthropic, or openai");
       if (!model) fail("--model is required");
+      const mode = permissionMode();
       const worker: Worker = {
         id: id!,
         name: flag("--name") ?? id!,
@@ -346,6 +367,7 @@ switch (cmd) {
         runtime: runtime as WorkerRuntime,
         provider: provider as WorkerProvider,
         model: model!,
+        ...(mode ? { permissionMode: mode } : {}),
       };
       await new JsonWorkerStore(dir).put(worker);
       console.log(`created worker ${worker.id} (${worker.runtime}·${worker.provider}·${worker.model})`);
@@ -371,8 +393,8 @@ switch (cmd) {
         "  run [--task <id>]\n" +
         "  submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>\n" +
         "  register <workflow.yaml>\n" +
-        "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>]\n" +
-        "  worker discover | create <id> --runtime <r> --provider <p> --model <m> [--desc <d>] | default <id>\n" +
+        "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
+        "  worker discover | create <id> --runtime <r> --provider <p> --model <m> [--desc <d>] [--permission <mode>] | default <id>\n" +
         "read:\n" +
         "  project list [--json]\n" +
         "  worker list [--json]\n" +
