@@ -11,7 +11,8 @@
   "files": [
     "bin/wakespace",
     "dist/wakespace",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "bun run build:cli",
@@ -45,6 +46,7 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^25.9.1",
+    "agent-loop": "workspace:*",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
   },

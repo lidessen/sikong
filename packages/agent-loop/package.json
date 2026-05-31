@@ -1,6 +1,7 @@
 {
   "name": "agent-loop",
   "version": "0.0.0",
+  "private": true,
   "description": "Unified agent loop over Claude Agent SDK, Codex app-server, Cursor Agent SDK, and Vercel AI SDK — runtime ⊥ provider. One call = one full loop, with skills, MCP, tools, and cross-runtime lifecycle hooks + steering.",
   "type": "module",
   "module": "./src/index.ts",
