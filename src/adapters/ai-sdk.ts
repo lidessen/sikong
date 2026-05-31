@@ -17,6 +17,7 @@ import type {
 } from "../core/adapter";
 import type { CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
+import { resolveContextWindow } from "../core/context-window";
 import type { LoopEvent } from "../core/events";
 import type { AiSdkProviderSpec } from "../core/provider";
 import type { PreflightResult, ToolDefinition, ToolSet } from "../core/types";
@@ -81,6 +82,13 @@ export class AiSdkAdapter implements BackendAdapter {
 
   start(req: ResolvedRequest): BackendRun {
     const o = (req.runtimeOptions ?? {}) as AiSdkRuntimeOptions;
+
+    // A raw `model` LanguageModel has no inspectable id; infer only from a
+    // provider spec's model id, else rely on the explicit override.
+    const contextWindow = resolveContextWindow(
+      this.options.spec?.model,
+      this.options.contextWindow,
+    );
 
     const ch = createEventChannel<LoopEvent>();
     const startedAt = Date.now();

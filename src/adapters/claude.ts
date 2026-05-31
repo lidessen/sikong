@@ -25,6 +25,7 @@ import type {
 } from "../core/adapter";
 import type { CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
+import { resolveContextWindow } from "../core/context-window";
 import { type LoopEvent } from "../core/events";
 import type {
   McpServerConfig,

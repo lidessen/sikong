@@ -827,6 +827,7 @@ export class CodexAdapter implements BackendAdapter {
     return {
       [Symbol.asyncIterator]: () => ch.iterable[Symbol.asyncIterator](),
       result,
+      contextWindow,
       steer: async (message: string) => {
         const turn = this.currentTurn;
         if (!turn) return "deferred";
