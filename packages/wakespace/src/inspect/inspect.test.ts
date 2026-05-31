@@ -1,6 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { MemoryChronicleStore, MemoryEventStore, MemoryProjectionStore } from "../store/memory";
-import { renderStatus, renderTaskDetail, taskDetail, workspaceStatus } from "./inspect";
+import {
+  MemoryChronicleStore,
+  MemoryEventStore,
+  MemoryProjectStore,
+  MemoryProjectionStore,
+  MemoryWorkerStore,
+} from "../store/memory";
+import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
 import { initTask, project } from "../workflow/reducer";
 import { GENERAL_WORKFLOW } from "../workflow/builtin";
 
@@ -53,5 +59,41 @@ describe("inspect", () => {
     expect(d?.task).toBeNull();
     expect(d?.timeline.length).toBe(1);
     expect(d && renderTaskDetail(d)).toContain("not yet materialized");
+  });
+
+  test("workspaceOverview combines projects, workers, tasks, and activity", async () => {
+    const events = new MemoryEventStore(() => 1);
+    const projects = new MemoryProjectStore([{ id: "p", name: "Project P", root: "/tmp/p", defaultWorker: "w" }]);
+    const workers = new MemoryWorkerStore([
+      {
+        id: "w",
+        name: "Worker W",
+        runtime: "ai-sdk",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        description: "does project work",
+      },
+    ]);
+    const projections = new MemoryProjectionStore();
+    const chronicle = new MemoryChronicleStore(() => 1);
+
+    await events.append("t1", initTask({ taskId: "t1", projectId: "p", workflow: GENERAL_WORKFLOW }));
+    await projections.put(project(await events.load("t1"), GENERAL_WORKFLOW));
+    await chronicle.append({ type: "task.created", taskId: "t1", summary: "created" });
+
+    const v = await workspaceOverview(
+      { projects, workers, projections, chronicle },
+      { defaultWorkerId: "w" },
+    );
+    expect(v.projects[0]?.id).toBe("p");
+    expect(v.projects[0]?.counts.in_progress).toBe(1);
+    expect(v.workers[0]?.isDefault).toBe(true);
+    expect(v.recentTasks[0]?.id).toBe("t1");
+
+    const rendered = renderOverview(v, { dir: ".wakespace" });
+    expect(rendered).toContain("Projects:");
+    expect(rendered).toContain("Project P");
+    expect(rendered).toContain("Workers:");
+    expect(rendered).toContain("t1");
   });
 });

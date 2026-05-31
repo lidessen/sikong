@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A **bun-workspaces monorepo** (`agent-workspace-monorepo`, private). Two packages:
+A **bun-workspaces monorepo** (`wakespace-monorepo`, private). Two packages:
 
 - **`packages/agent-loop`** — the unified agent-loop library over four backends —
   Claude Agent SDK, Codex app-server, Cursor Agent SDK, Vercel AI SDK — with
@@ -12,20 +12,21 @@ A **bun-workspaces monorepo** (`agent-workspace-monorepo`, private). Two package
   (provider) are orthogonal, so one credential can drive any runtime it's
   compatible with. One `loop.run(input)` = one full loop; `runTask` is the outer
   multi-run supervisor on top. This is where ~all the code is.
-- **`packages/agent-workspace`** — the coordination layer over `agent-loop`
-  (depends on it via `workspace:*`). **Scope TBD — placeholder** that re-exports
-  task primitives; real API not built yet.
+- **`packages/wakespace`** — the coordination layer over `agent-loop`
+  for CLI use: workflow tasks, wake engine, JSONL-backed durable stores,
+  project/worktree isolation, worker permission modes, CLI, and live smokes.
 
-Library packages ship `.ts` source (`package.json` `module`/`exports`
-point straight at `src/`). The `agent-workspace` CLI has a Bun single-file
-executable build. Paths in the Architecture section below are relative to
+`agent-loop` ships `.ts` source (`package.json` `module`/`exports` point
+straight at `src/`). `wakespace` is CLI-only for publishing: `npm` gets the Bun
+single-file executable at `dist/wakespace`, with `agent-loop` bundled into that
+binary. Paths in the Architecture section below are relative to
 `packages/agent-loop/src/` unless noted.
 
 ## Commands
 
 ```sh
 bun install                         # at root — links workspaces
-bun run build                       # compile packages/agent-workspace/dist/agent-workspace
+bun run build                       # compile packages/wakespace/dist/wakespace
 
 # root fan-out (the CI gate) — runs the script in every package
 bun run typecheck                   # = bun run --filter '*' typecheck
@@ -43,9 +44,9 @@ bun scripts/smoke-provider.ts        # one DeepSeek key across runtimes
 bun scripts/smoke-run.ts [all|claude|codex|cursor|ai-sdk]
 bun scripts/repl.ts [runtime] [--provider deepseek|...] [--model ...]   # manual REPL
 
-# agent-workspace CLI executable
-bun run --filter agent-workspace build:cli
-packages/agent-workspace/dist/agent-workspace help
+# wakespace CLI executable
+bun run --filter wakespace build:cli
+packages/wakespace/dist/wakespace help
 ```
 
 ## Design docs

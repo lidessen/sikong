@@ -9,7 +9,7 @@ Read this file before changing behavior. Then read the relevant area document:
 | Area | Scope |
 | --- | --- |
 | [areas/runtime-loop.md](areas/runtime-loop.md) | `agent-loop`: runtime/provider boundary, adapter contract, run handle, hooks, capabilities, task supervisor |
-| [areas/workspace-engine.md](areas/workspace-engine.md) | `agent-workspace`: workflow definitions, task timelines, reducer/guard model, wake engine, subtask direction |
+| [areas/workspace-engine.md](areas/workspace-engine.md) | `wakespace`: workflow definitions, task timelines, reducer/guard model, wake engine, subtask direction |
 
 Design decisions live in [`./decisions`](./decisions). Write a
 decision record before changing durable shape: module boundaries, state model,
@@ -25,7 +25,7 @@ The project has two layers:
    model providers are orthogonal: the runtime owns how a loop executes, while
    the provider owns credentials, endpoint facts, and runtime-specific launch
    configuration.
-2. `agent-workspace` is the coordination layer. It models work as workflow
+2. `wakespace` is the coordination layer. It models work as workflow
    instances backed by append-only task timelines. Agents do not mutate task
    state directly; they emit commands through tools, and a deterministic
    reducer plus guard evaluator decides which events are recorded and whether a
@@ -57,7 +57,7 @@ rebuilds, keep it out of the core until the mechanism is clear.
 - an outer `runTask` supervisor for multi-round handoff over tools-capable
   loops.
 
-`agent-workspace` is an early coordination kernel. It has:
+`wakespace` is an early coordination kernel. It has:
 
 - serializable workflow definitions;
 - event-sourced task timelines;

@@ -1,6 +1,6 @@
 # Workspace Engine Design
 
-`agent-workspace` is the coordination layer over `agent-loop`. Its job is to
+`wakespace` is the coordination layer over `agent-loop`. Its job is to
 turn work into deterministic workflow state changes while still letting agents
 perform the flexible parts of a stage.
 

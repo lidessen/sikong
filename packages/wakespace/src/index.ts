@@ -1,17 +1,17 @@
 /**
- * agent-workspace — the coordination layer over `agent-loop`.
+ * wakespace — the coordination layer over `agent-loop`.
  *
  * A persistent, headless, agent-facing workflow engine: a Workflow is a schema
  * of fields + staged state machine with declarative guards; a Task is a
  * workflow instance whose append-only event timeline is the system of record
  * and whose `fields` are the projection an agent reads. Agents emit Commands; a
  * deterministic reducer validates them against the schema + the next stage's
- * guard and records Events. `agent-loop`'s `runTask` is the worker that executes
- * a single wake.
+ * guard and records Events. `agent-loop`'s `runTask` is the worker primitive
+ * used inside wake execution.
  *
- * M0 (here): the workflow kernel — data model, reducer/guard/validate, and
- * in-memory stores. The wake engine, persistence backends, and MCP surface land
- * in later milestones.
+ * Current scope: workflow kernel, JSONL-backed stores/projections, wake engine,
+ * project/worktree isolation, worker permission modes, workspace wiring, CLI,
+ * and smokes.
  */
 
 // ---- Workflow kernel (M0) -------------------------------------------------
@@ -38,4 +38,4 @@ export * from "./worker";
 export * from "./workspace";
 
 /** Package version marker. */
-export const AGENT_WORKSPACE_VERSION = "0.0.0";
+export const WAKESPACE_VERSION = "0.0.0";

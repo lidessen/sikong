@@ -275,7 +275,7 @@ describe("WorkflowEngine wake cycle", () => {
   });
 
   test("injects project tools for ai-sdk wakes scoped to the task project", async () => {
-    const root = await mkdtemp(join(tmpdir(), "agent-workspace-project-tools-"));
+    const root = await mkdtemp(join(tmpdir(), "wakespace-project-tools-"));
     await mkdir(join(root, "src"), { recursive: true });
     await writeFile(join(root, "src", "a.txt"), "needle\n", "utf8");
     let sawRg = false;

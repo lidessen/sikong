@@ -27,7 +27,7 @@ const flag = (n: string): string | undefined => {
   return i >= 0 ? argv[i + 1] : undefined;
 };
 const runtime = argv[0] && !argv[0].startsWith("-") ? argv[0] : "mock";
-const dir = flag("--dir") ?? ".agent-workspace";
+const dir = flag("--dir") ?? ".wakespace";
 const intakeReq = flag("--intake");
 
 const BUG: WorkflowDef = {

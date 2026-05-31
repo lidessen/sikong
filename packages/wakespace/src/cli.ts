@@ -1,5 +1,6 @@
+#!/usr/bin/env bun
 /**
- * agent-workspace CLI — the surface a lead agent (Claude Code) drives the
+ * wakespace CLI — the surface a lead agent (Claude Code) drives the
  * workspace through (no MCP; agent-browser-style). Each command operates on the
  * durable workspace dir; `run` drives pending tasks' wakes to quiescence. Write
  * commands take an exclusive dir lock — don't run two writers on one --dir.
@@ -8,8 +9,11 @@
  *   run [--task <id>]                                                 drive pending task(s) to done/quiet (exit 1 if any wake errored)
  *   submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>
  *   register <workflow.yaml>                                          register a workflow definition
- *   status [--project <id>] [--json] | task <id> [--json] | chronicle [--task <id>] [-n N] [--json]
- *   --dir <path>   workspace dir (default $AGENT_WORKSPACE_DIR or ./.agent-workspace)
+ *   overview [--project <id>] [--json]                                  human workspace dashboard
+ *   status [--project <id>] [--text] | task <id> [--text] | chronicle [--task <id>] [-n N] [--text]
+ *   --dir <path>   workspace dir (default $WAKESPACE_DIR or ./.wakespace)
+ *
+ *   Agent-facing commands default to JSON. Use --text for ad-hoc human output.
  *
  *   set-field coerces by the field's declared type (string/enum kept literal;
  *   number/boolean/json JSON-parsed).
@@ -17,7 +21,7 @@
 import { unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { JsonlChronicleStore, JsonlEventStore, JsonProjectionStore, JsonProjectStore, JsonWorkerStore } from "./store";
-import { renderStatus, renderTaskDetail, taskDetail, workspaceStatus } from "./inspect";
+import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
 import { acquireLock, getDefaultWorker, openWorkspace, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
 import { parseDataFile } from "./config-file";
 import { isValidProjectId, type Project } from "./project";
@@ -30,7 +34,7 @@ const VALUE_FLAGS = new Set([
   "--root", "--name", "--model", "--worker", "--runtime", "--provider", "--desc",
   "--permission", "--permission-mode",
 ]);
-const BOOL_FLAGS = new Set(["--json"]);
+const BOOL_FLAGS = new Set(["--json", "--text", "--human"]);
 const fail = (msg: string, code = 2): never => {
   console.error(msg);
   process.exit(code);
@@ -65,10 +69,10 @@ const flag = (name: string): string | undefined => {
 };
 const hasFlag = (name: string): boolean => flags.has(name);
 
-const dir = flag("--dir") || process.env.AGENT_WORKSPACE_DIR || ".agent-workspace";
-const json = hasFlag("--json");
+const dir = flag("--dir") || process.env.WAKESPACE_DIR || ".wakespace";
+const text = (hasFlag("--text") || hasFlag("--human")) && !hasFlag("--json");
 const cmd = positional[0];
-const argv1 = process.argv[1] ?? "agent-workspace";
+const argv1 = process.argv[1] ?? "wakespace";
 const cli = argv1.endsWith(".ts") ? `bun ${argv1}` : argv1;
 const PERMISSION_MODES = new Set<WorkerPermissionMode>([
   "default",
@@ -85,6 +89,14 @@ function permissionMode(): WorkerPermissionMode | undefined {
   if (!PERMISSION_MODES.has(raw as WorkerPermissionMode))
     fail("--permission must be default, acceptEdits, bypassPermissions, plan, dontAsk, or auto");
   return raw as WorkerPermissionMode;
+}
+
+function printJson(value: unknown): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function printView<T>(value: T, render: (value: T) => string): void {
+  console.log(text ? render(value) : JSON.stringify(value, null, 2));
 }
 
 function parseLeadCommand(op: string, rest: string[]): Command {
@@ -147,13 +159,29 @@ if (needsLock) {
 
 switch (cmd) {
   // ---- read (no engine / credentials needed) ------------------------------
+  case "overview": {
+    const view = await workspaceOverview(
+      {
+        projects: new JsonProjectStore(dir),
+        workers: new JsonWorkerStore(dir),
+        projections: new JsonProjectionStore(dir),
+        chronicle: new JsonlChronicleStore(dir),
+      },
+      {
+        ...(flag("--project") ? { projectId: flag("--project")! } : {}),
+        ...(await getDefaultWorker(dir).then((defaultWorkerId) => defaultWorkerId ? { defaultWorkerId } : {})),
+      },
+    );
+    console.log(hasFlag("--json") ? JSON.stringify(view, null, 2) : renderOverview(view, { dir }));
+    break;
+  }
   case "status": {
     const view = await workspaceStatus(
       new JsonProjectionStore(dir),
       new JsonlChronicleStore(dir),
       flag("--project") ? { projectId: flag("--project")! } : {},
     );
-    console.log(json ? JSON.stringify(view, null, 2) : renderStatus(view));
+    printView(view, renderStatus);
     break;
   }
   case "task": {
@@ -166,10 +194,11 @@ switch (cmd) {
       new JsonlChronicleStore(dir),
     );
     if (!view) {
-      console.log(`no such task: ${id}`);
+      if (text) console.log(`no such task: ${id}`);
+      else printJson({ error: "not_found", taskId: id });
       process.exit(1);
     }
-    console.log(json ? JSON.stringify(view, null, 2) : renderTaskDetail(view));
+    printView(view, renderTaskDetail);
     break;
   }
   case "chronicle": {
@@ -178,8 +207,8 @@ switch (cmd) {
     const limit = nRaw === undefined ? 30 : Number(nRaw);
     if (!Number.isFinite(limit)) fail(`-n must be a number (got "${nRaw}")`);
     const entries = await new JsonlChronicleStore(dir).recent({ ...(taskId ? { taskId } : {}), limit });
-    if (json) {
-      console.log(JSON.stringify(entries, null, 2));
+    if (!text) {
+      printJson(entries);
       break;
     }
     for (const e of entries)
@@ -226,8 +255,17 @@ switch (cmd) {
     } catch (err) {
       fail((err as Error).message, 1);
     }
-    console.log(`created ${task!.id} → workflow "${task!.workflowId}" @ "${task!.stageId}" (${task!.status})`);
-    console.log(`drive it: ${cli} run --task ${task!.id} --dir ${dir}`);
+    const result = {
+      ok: true,
+      task,
+      next: { command: "run", taskId: task!.id, dir, argv: ["run", "--task", task!.id, "--dir", dir] },
+    };
+    if (text) {
+      console.log(`created ${task!.id} → workflow "${task!.workflowId}" @ "${task!.stageId}" (${task!.status})`);
+      console.log(`drive it: ${cli} run --task ${task!.id} --dir ${dir}`);
+    } else {
+      printJson(result);
+    }
     break;
   }
   case "run": {
@@ -237,7 +275,7 @@ switch (cmd) {
     });
     await ws.engine.runPending(flag("--task"));
     const view = await workspaceStatus(ws.projections, ws.chronicle);
-    console.log(json ? JSON.stringify(view, null, 2) : renderStatus(view));
+    printView(view, renderStatus);
     if (errors.length) {
       for (const e of errors) console.error(`‼ ${e}`);
       process.exit(1);
@@ -261,7 +299,8 @@ switch (cmd) {
     } catch (err) {
       fail((err as Error).message, 1);
     }
-    console.log(`submitted ${op} to ${id} — apply with: ${cli} run --task ${id} --dir ${dir}`);
+    if (text) console.log(`submitted ${op} to ${id} — apply with: ${cli} run --task ${id} --dir ${dir}`);
+    else printJson({ ok: true, taskId: id, command, next: { command: "run", taskId: id, dir, argv: ["run", "--task", id, "--dir", dir] } });
     break;
   }
   case "register": {
@@ -279,15 +318,16 @@ switch (cmd) {
       fail((err as Error).message, 1);
     }
     const d = def as { id: string; version: string };
-    console.log(`registered workflow ${d.id}@${d.version}`);
+    if (text) console.log(`registered workflow ${d.id}@${d.version}`);
+    else printJson({ ok: true, workflowId: d.id, version: d.version });
     break;
   }
   case "project": {
     const sub = positional[1];
     if (sub === "list") {
       const list = await new JsonProjectStore(dir).list();
-      if (json) {
-        console.log(JSON.stringify(list, null, 2));
+      if (!text) {
+        printJson(list);
         break;
       }
       for (const p of list)
@@ -310,7 +350,8 @@ switch (cmd) {
         ...(mode ? { permissionMode: mode } : {}),
       };
       await new JsonProjectStore(dir).put(project);
-      console.log(`created project ${project.id} (root ${project.root})`);
+      if (text) console.log(`created project ${project.id} (root ${project.root})`);
+      else printJson({ ok: true, project });
       break;
     }
     fail("usage: cli project <create <id> | list>");
@@ -320,8 +361,8 @@ switch (cmd) {
     const sub = positional[1];
     if (sub === "discover") {
       const d = await discoverWorkers();
-      if (json) {
-        console.log(JSON.stringify(d, null, 2));
+      if (!text) {
+        printJson(d);
         break;
       }
       console.log(`providers: ${d.providers.join(", ") || "(none — set a provider API key)"}`);
@@ -336,8 +377,8 @@ switch (cmd) {
     }
     if (sub === "list") {
       const list = await new JsonWorkerStore(dir).list();
-      if (json) {
-        console.log(JSON.stringify(list, null, 2));
+      if (!text) {
+        printJson(list);
         break;
       }
       const def = await getDefaultWorker(dir);
@@ -370,7 +411,8 @@ switch (cmd) {
         ...(mode ? { permissionMode: mode } : {}),
       };
       await new JsonWorkerStore(dir).put(worker);
-      console.log(`created worker ${worker.id} (${worker.runtime}·${worker.provider}·${worker.model})`);
+      if (text) console.log(`created worker ${worker.id} (${worker.runtime}·${worker.provider}·${worker.model})`);
+      else printJson({ ok: true, worker });
       break;
     }
     if (sub === "default") {
@@ -378,7 +420,8 @@ switch (cmd) {
       if (!id) fail("usage: cli worker default <id>");
       if (!(await new JsonWorkerStore(dir).get(id!))) fail(`worker "${id}" not found (create it first)`, 1);
       await setDefaultWorker(dir, id!);
-      console.log(`default worker set to ${id}`);
+      if (text) console.log(`default worker set to ${id}`);
+      else printJson({ ok: true, defaultWorkerId: id });
       break;
     }
     fail("usage: cli worker <discover | create <id> … | list | default <id>>");
@@ -387,7 +430,7 @@ switch (cmd) {
 
   default:
     console.log(
-      `agent-workspace CLI (dir: ${dir})\n\n` +
+      `wakespace CLI (dir: ${dir})\n\n` +
         "drive:\n" +
         "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--id <id>]\n" +
         "  run [--task <id>]\n" +
@@ -396,12 +439,14 @@ switch (cmd) {
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
         "  worker discover | create <id> --runtime <r> --provider <p> --model <m> [--desc <d>] [--permission <mode>] | default <id>\n" +
         "read:\n" +
-        "  project list [--json]\n" +
-        "  worker list [--json]\n" +
-        "  status [--project <id>] [--json]\n" +
-        "  task <id> [--json]\n" +
-        "  chronicle [--task <id>] [-n <N>] [--json]\n" +
-        "  --dir <path>   workspace dir ($AGENT_WORKSPACE_DIR or ./.agent-workspace)",
+        "  overview [--project <id>] [--json]     human dashboard (text by default)\n" +
+        "  project list [--text]\n" +
+        "  worker list [--text]\n" +
+        "  status [--project <id>] [--text]\n" +
+        "  task <id> [--text]\n" +
+        "  chronicle [--task <id>] [-n <N>] [--text]\n" +
+        "  --json is accepted for compatibility; agent-facing commands already default to JSON\n" +
+        "  --dir <path>   workspace dir ($WAKESPACE_DIR or ./.wakespace)",
     );
     if (cmd && cmd !== "help") process.exit(2);
 }

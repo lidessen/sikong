@@ -94,22 +94,46 @@ async function hasPackage(pkg: string): Promise<boolean> {
   }
 }
 
+async function hasAiSdkProvider(provider: WorkerProvider): Promise<boolean> {
+  if (await hasPackage(`@ai-sdk/${provider}`)) return true;
+  try {
+    switch (provider) {
+      case "deepseek":
+        await import("@ai-sdk/deepseek");
+        return true;
+      case "anthropic":
+        await import("@ai-sdk/anthropic");
+        return true;
+      case "openai":
+        await import("@ai-sdk/openai");
+        return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** Inspect the environment for usable providers/runtimes and suggest workers to create. */
 export async function discoverWorkers(): Promise<Discovery> {
   const providers = (Object.keys(PROVIDER_ENV) as WorkerProvider[]).filter((p) =>
     PROVIDER_ENV[p].some((v) => process.env[v]),
   );
 
+  const aiSdkProviderAvailable = new Map<WorkerProvider, boolean>();
+  for (const provider of providers) {
+    aiSdkProviderAvailable.set(provider, await hasAiSdkProvider(provider));
+  }
+
   const runtimes: WorkerRuntime[] = [];
   if (await onPath("claude")) runtimes.push("claude-code");
-  // ai-sdk needs the @ai-sdk/<provider> package for at least one available provider.
-  if ((await Promise.all(providers.map((p) => hasPackage(`@ai-sdk/${p}`)))).some(Boolean))
-    runtimes.push("ai-sdk");
+  // In the published CLI, these providers may be compiled into the binary rather
+  // than present as files under node_modules.
+  if ([...aiSdkProviderAvailable.values()].some(Boolean)) runtimes.push("ai-sdk");
 
   const suggestions: WorkerSuggestion[] = [];
   for (const runtime of runtimes)
     for (const provider of COMPATIBLE[runtime])
-      if (providers.includes(provider) && (runtime !== "ai-sdk" || (await hasPackage(`@ai-sdk/${provider}`))))
+      if (providers.includes(provider) && (runtime !== "ai-sdk" || aiSdkProviderAvailable.get(provider)))
         suggestions.push({
           id: `${provider}-${runtime === "ai-sdk" ? "sdk" : "cc"}`,
           runtime,

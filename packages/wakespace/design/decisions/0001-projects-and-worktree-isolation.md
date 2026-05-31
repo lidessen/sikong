@@ -5,7 +5,7 @@ Date: 2026-05-31
 
 ## Context
 
-The whole point of agent-workspace is parallelism across **multiple projects** and
+The whole point of wakespace is parallelism across **multiple projects** and
 many tasks per project, driven from one or more lead-agent (Claude Code / Codex)
 entry points. Today the kernel already carries a `projectId` on every `Task`
 (`src/workflow/types.ts`), but there is **no first-class Project entity** — no way

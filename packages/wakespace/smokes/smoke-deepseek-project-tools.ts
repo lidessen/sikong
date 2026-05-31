@@ -5,7 +5,7 @@
  *   DEEPSEEK_API_KEY=... bun smokes/smoke-deepseek-project-tools.ts --model deepseek-v4-flash
  *   DEEPSEEK_API_KEY=... bun smokes/smoke-deepseek-project-tools.ts --project-root /tmp/project --dir /tmp/aw
  *
- * The smoke creates a marker file under a unique .agent-loop-smoke-* directory,
+ * The smoke creates a marker file under a unique .wakespace-smoke-* directory,
  * asks a real DeepSeek worker to find it with project tools, then asserts both
  * the normalized tool events and the filesystem side effect.
  */
@@ -49,10 +49,10 @@ if (!process.env.DEEPSEEK_API_KEY) {
 }
 
 const model = flag("--model") ?? "deepseek-v4-flash";
-const workspaceDir = flag("--dir") ?? join(await mkTempDir("agent-loop-deepseek-workspace-"), ".agent-workspace");
-const projectRoot = flag("--project-root") ?? (await mkTempDir("agent-loop-deepseek-project-"));
+const workspaceDir = flag("--dir") ?? join(await mkTempDir("wakespace-deepseek-workspace-"), ".wakespace");
+const projectRoot = flag("--project-root") ?? (await mkTempDir("wakespace-deepseek-project-"));
 const marker = `ds-tool-smoke-${randomUUID().slice(0, 8)}`;
-const smokeDir = `agent-loop-smoke-${marker}`;
+const smokeDir = `.wakespace-smoke-${marker}`;
 const markerRel = `${smokeDir}/marker.txt`;
 const outputRel = `${smokeDir}/deepseek-smoke.txt`;
 const taskId = `deepseek-project-tools-live-${marker}`;

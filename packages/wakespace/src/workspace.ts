@@ -174,7 +174,7 @@ export async function loadWorkflows(dir: string): Promise<WorkflowDef[]> {
       out.push(def);
     } catch (err) {
       // don't let one bad file break startup, but make it observable
-      console.warn(`agent-workspace: skipping invalid workflow file "${name}": ${(err as Error).message}`);
+      console.warn(`wakespace: skipping invalid workflow file "${name}": ${(err as Error).message}`);
     }
   }
   return out;

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { mockLoop, runTask } from "agent-loop";
-import { AGENT_WORKSPACE_VERSION, GENERAL_WORKFLOW, validateWorkflow } from "./index";
+import { WAKESPACE_VERSION, GENERAL_WORKFLOW, validateWorkflow } from "./index";
 
-// Proves the monorepo wiring: agent-workspace resolves and drives agent-loop
+// Proves the monorepo wiring: wakespace resolves and drives agent-loop
 // across the package boundary (workspace:* symlink), and exposes its own kernel.
-describe("agent-workspace ⇄ agent-loop wiring", () => {
+describe("wakespace ⇄ agent-loop wiring", () => {
   test("can drive agent-loop's runTask across the package boundary", async () => {
     const result = await runTask({
       goal: "smoke",
@@ -16,7 +16,7 @@ describe("agent-workspace ⇄ agent-loop wiring", () => {
   });
 
   test("exports the workflow kernel + a version marker", () => {
-    expect(AGENT_WORKSPACE_VERSION).toBe("0.0.0");
+    expect(WAKESPACE_VERSION).toBe("0.0.0");
     expect(validateWorkflow(GENERAL_WORKFLOW)).toEqual([]);
   });
 });

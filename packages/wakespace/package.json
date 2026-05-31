@@ -1,0 +1,54 @@
+{
+  "name": "wakespace",
+  "version": "0.1.0",
+  "description": "Durable wake-loop workspace for agent-driven project development.",
+  "type": "module",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "bin": {
+    "wakespace": "bin/wakespace"
+  },
+  "files": [
+    "bin/wakespace",
+    "dist/wakespace",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun run build:cli",
+    "build:cli": "bun build src/cli.ts --compile --outfile dist/wakespace",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build:cli",
+    "prepack": "bun run build:cli",
+    "publish:dry": "npm publish --dry-run",
+    "smoke:deepseek-tools": "bun smokes/smoke-deepseek-project-tools.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bunx --bun vitest run",
+    "test:watch": "bunx --bun vitest"
+  },
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "cli",
+    "workflow",
+    "workspace",
+    "automation"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lidessen/wakespace.git",
+    "directory": "packages/wakespace"
+  },
+  "bugs": {
+    "url": "https://github.com/lidessen/wakespace/issues"
+  },
+  "homepage": "https://github.com/lidessen/wakespace/tree/main/packages/wakespace#readme",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
