@@ -33,6 +33,44 @@ export interface ToolExecutionContext {
 
 export type ToolSet = Record<string, ToolDefinition>;
 
+/**
+ * Infer a tool's argument type from a Standard Schema (e.g. any Zod schema,
+ * which implements the `~standard` contract). Falls back to a loose record when
+ * the schema can't be inferred.
+ */
+type InferToolArgs<Schema> = Schema extends {
+  "~standard": { types?: { output?: infer Output } };
+}
+  ? Output extends Record<string, unknown>
+    ? Output
+    : Record<string, unknown>
+  : Record<string, unknown>;
+
+/**
+ * Author a tool with a typed `execute`. The `args` passed to `execute` are
+ * inferred from `inputSchema` (a Zod / Standard Schema), so you get full
+ * autocomplete and type-safety without manual casts:
+ *
+ *   const search = defineTool({
+ *     description: "Search the web",
+ *     inputSchema: z.object({ query: z.string(), limit: z.number().optional() }),
+ *     execute: ({ query, limit }) => doSearch(query, limit), // typed
+ *   });
+ *   loop.run({ prompt, tools: { search } });
+ *
+ * Returns a plain `ToolDefinition` — runtime shape is unchanged.
+ */
+export function defineTool<Schema = unknown>(def: {
+  description?: string;
+  inputSchema?: Schema;
+  execute: (
+    args: InferToolArgs<Schema>,
+    ctx: ToolExecutionContext,
+  ) => unknown | Promise<unknown>;
+}): ToolDefinition {
+  return def as unknown as ToolDefinition;
+}
+
 /** MCP server configuration, normalized across backends. */
 export interface McpServerConfig {
   type?: "stdio" | "http" | "sse";
@@ -95,12 +133,26 @@ export type SteerOutcome = {
 };
 
 /**
- * A running loop: async-iterable of normalized events, plus a result promise and
- * controls. Iterate the events as they stream; `await handle.result` for the
- * aggregate.
+ * A running loop. Consume it whichever way fits:
+ *
+ *   for await (const ev of run) { ... }        // every normalized event
+ *   for await (const chunk of run.textStream)  // assistant text only
+ *   const text = await run.text                // full text when done
+ *   const { usage, status } = await run.result // the aggregate
+ *
+ * All views are independent and replayable — iterating one does not drain the
+ * others, and you can subscribe even after the run finishes. Iteration never
+ * throws: failures surface as an `error` event and `result.status === "error"`.
  */
 export interface RunHandle extends AsyncIterable<LoopEvent> {
+  /** Assistant text deltas only (the common case). */
+  readonly textStream: AsyncIterable<string>;
+  /** The full aggregate once the run completes. Never rejects. */
   readonly result: Promise<RunResult>;
+  /** Shortcut for `result.then(r => r.text)`. */
+  readonly text: Promise<string>;
+  /** Shortcut for `result.then(r => r.usage)`. */
+  readonly usage: Promise<TokenUsage>;
   /** Inject a steer message. Resolves with how it was applied. */
   steer(message: string): Promise<SteerOutcome>;
   /** Cancel the run. */

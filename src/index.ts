@@ -78,6 +78,7 @@ export type {
   ToolUseHookEvent,
   UsageHookEvent,
 } from "./core/hooks";
+export { defineTool } from "./core/types";
 export type {
   BackendId,
   McpServerConfig,

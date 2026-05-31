@@ -42,8 +42,32 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     throw new CapabilityNotSupportedError(backend.id, "mcp");
   }
 
-  const out = createEventChannel<LoopEvent>();
+  // ---- Replay broadcast --------------------------------------------------
+  // Every emitted event is recorded in `collected` and fanned out to all live
+  // subscribers. A new subscriber replays everything so far, then goes live —
+  // so the events / textStream can each be consumed independently, any number
+  // of times, even after the run has finished. Iteration never throws: errors
+  // surface as an `error` event plus `result.status === "error"`.
   const collected: LoopEvent[] = [];
+  const subscribers = new Set<ReturnType<typeof createEventChannel<LoopEvent>>>();
+  let streamDone = false;
+
+  function publish(ev: LoopEvent): void {
+    collected.push(ev);
+    for (const s of subscribers) s.push(ev);
+  }
+  function endStream(): void {
+    streamDone = true;
+    for (const s of subscribers) s.end();
+  }
+  function subscribe(): AsyncIterable<LoopEvent> {
+    const ch = createEventChannel<LoopEvent>();
+    for (const ev of collected) ch.push(ev);
+    if (streamDone) ch.end();
+    else subscribers.add(ch);
+    return ch.iterable;
+  }
+
   let usage: TokenUsage = emptyUsage();
   let text = "";
   let settled = false;
@@ -52,7 +76,6 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
   let backendRun: BackendRun | null = null;
   let cancelledBeforeStart = false;
   let wasCancelled = false;
-  let cancelReason: string | undefined;
   const pendingSteers: string[] = [];
 
   let resolveResult!: (r: RunResult) => void;
@@ -67,12 +90,6 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     },
   };
 
-  function emitSteer(message: string, mode: "live" | "deferred"): void {
-    const ev: LoopEvent = { type: "steer", message, mode };
-    collected.push(ev);
-    out.push(ev);
-  }
-
   async function doSteer(message: string): Promise<SteerOutcome> {
     if (!backendRun) {
       pendingSteers.push(message); // applied once the run begins
@@ -80,13 +97,12 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     }
     if (!backendRun.steer) return { mode: "rejected" };
     const mode = await backendRun.steer(message);
-    emitSteer(message, mode);
+    publish({ type: "steer", message, mode });
     return { mode };
   }
 
   function doCancel(reason?: string): void {
     wasCancelled = true;
-    cancelReason = reason;
     if (backendRun) backendRun.cancel(reason);
     else cancelledBeforeStart = true;
   }
@@ -114,7 +130,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     };
     Promise.resolve(hooks.onEnd?.(result))
       .catch(() => {})
-      .finally(() => out.end());
+      .finally(() => endStream());
     resolveResult(result);
   }
 
@@ -141,11 +157,10 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
 
       // Apply steers queued before the adapter was ready.
       for (const message of pendingSteers.splice(0)) {
-        if (backendRun.steer) emitSteer(message, await backendRun.steer(message));
+        if (backendRun.steer) publish({ type: "steer", message, mode: await backendRun.steer(message) });
       }
 
       for await (const ev of backendRun) {
-        collected.push(ev);
         switch (ev.type) {
           case "text":
             text += ev.text;
@@ -171,7 +186,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
             if (ev.phase === "end") await applyDecision(await hooks.onStep?.({ index: ev.index }));
             break;
         }
-        out.push(ev);
+        publish(ev);
       }
 
       if (wasCancelled) finalize("cancelled");
@@ -182,9 +197,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
         return;
       }
       const error = err instanceof Error ? err : new Error(String(err));
-      const ev: LoopEvent = { type: "error", error };
-      collected.push(ev);
-      out.push(ev);
+      publish({ type: "error", error });
       finalize("error", undefined, error);
     }
   }
@@ -192,8 +205,20 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
   void pump();
 
   return {
-    [Symbol.asyncIterator]: () => out.iterable[Symbol.asyncIterator](),
+    [Symbol.asyncIterator]: () => subscribe()[Symbol.asyncIterator](),
+    get textStream(): AsyncIterable<string> {
+      const events = subscribe();
+      return {
+        async *[Symbol.asyncIterator](): AsyncIterator<string> {
+          for await (const ev of events) {
+            if (ev.type === "text") yield ev.text;
+          }
+        },
+      };
+    },
     result: resultPromise,
+    text: resultPromise.then((r) => r.text),
+    usage: resultPromise.then((r) => r.usage),
     steer: (message) => doSteer(message),
     cancel: (reason) => doCancel(reason),
   };

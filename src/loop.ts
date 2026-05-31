@@ -13,6 +13,8 @@ import { startRun, type LazyBackend } from "./executor/run-handle";
 export interface AgentLoop {
   readonly id: BackendId;
   readonly capabilities: CapabilityList;
+  /** True if this loop's runtime supports `cap` (e.g. `loop.supports("tools")`). */
+  supports(cap: Capability): boolean;
   /** Start one loop. Returns immediately with a streaming handle. */
   run(input: RunInput | string): RunHandle;
   /** Check the backend's CLI / SDK / credentials availability. */
@@ -52,6 +54,9 @@ export function makeLoop(
   return {
     id,
     capabilities,
+    supports(cap) {
+      return hasCapability(capabilities, cap);
+    },
     run(input) {
       return startRun(backend, typeof input === "string" ? { prompt: input } : input);
     },

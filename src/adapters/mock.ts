@@ -17,6 +17,8 @@ export interface MockAdapterOptions {
   toolArgs?: Record<string, unknown>;
   /** Emit thinking text before the response. */
   thinking?: string;
+  /** If set, fail the run with this message (drives the error path in tests). */
+  failWith?: string;
 }
 
 /**
@@ -50,6 +52,11 @@ export class MockAdapter implements BackendAdapter {
 
     const run = async () => {
       ch.push({ type: "step", phase: "start", index: 0 });
+
+      if (this.opts.failWith) {
+        ch.fail(new Error(this.opts.failWith));
+        return;
+      }
 
       if (this.opts.thinking) {
         ch.push({ type: "thinking", text: this.opts.thinking });
