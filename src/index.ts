@@ -109,7 +109,7 @@ export type {
   BackendResult,
   BackendRun,
   ResolvedRequest,
-} from "./adapter/adapter";
+} from "./core/adapter";
 export type { LazyBackend } from "./executor/run-handle";
 
 // ---- Per-backend constructor option types ---------------------------------

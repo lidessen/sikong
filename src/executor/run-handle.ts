@@ -3,7 +3,7 @@ import type {
   BackendAdapter,
   BackendResult,
   BackendRun,
-} from "../adapter/adapter";
+} from "../core/adapter";
 import { hasCapability, type CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
 import { addUsage, emptyUsage, type LoopEvent, type TokenUsage } from "../core/events";
