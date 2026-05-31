@@ -1,0 +1,151 @@
+import { describe, expect, test, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mockLoop } from "agent-loop";
+import { loadWorkflows, openWorkspace, saveWorkflow } from "./workspace";
+import type { LoopFactory } from "./engine";
+import type { WorkflowDef } from "./workflow/types";
+
+const tmp = () => mkdtemp(join(tmpdir(), "aw-ws-"));
+
+const BUG: WorkflowDef = {
+  id: "bug",
+  version: "1",
+  name: "Bug",
+  description: "fix a bug",
+  fields: { title: { type: "string", description: "" } },
+  stages: [
+    { id: "open", category: "in_progress", entry: { op: "always" } },
+    { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+  ],
+};
+
+const worker = () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } });
+
+describe("workspace (CLI wiring)", () => {
+  test("create (intake) then run, over a durable dir, drives a task to done", async () => {
+    const dir = await tmp();
+    try {
+      const ws = await openWorkspace(dir, {
+        extraWorkflows: [BUG],
+        loop: worker,
+        intakeLoop: () => mockLoop({ callTool: { name: "route", args: { workflowId: "bug", fields: { title: "x" } } } }),
+      });
+      const task = await ws.engine.intake("a bug report", { projectId: "default", taskId: "b1", wake: false });
+      expect(task.workflowId).toBe("bug");
+      expect((await ws.projections.get("b1"))?.status).toBe("in_progress"); // created, not run
+
+      // A FRESH workspace over the same dir drives it — proves durability + `run`.
+      const ws2 = await openWorkspace(dir, { extraWorkflows: [BUG], loop: worker });
+      await ws2.engine.runPending();
+      expect((await ws2.projections.get("b1"))?.status).toBe("done");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("submit applies a lead command without running a wake", async () => {
+    const dir = await tmp();
+    try {
+      const ws = await openWorkspace(dir, { extraWorkflows: [BUG], loop: () => mockLoop({ response: "x" }) });
+      await ws.engine.createTask({ projectId: "default", workflowId: "bug", taskId: "b2", fields: {}, wake: false });
+      await ws.engine.submitCommand("b2", { kind: "set_field", field: "title", value: "hi" }, "lead", {
+        schedule: false,
+      });
+      expect((await ws.projections.get("b2"))?.fields.title).toBe("hi");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("creds-free: openWorkspace + submit work with no DEEPSEEK key (lazy default loops)", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "");
+    const dir = await tmp();
+    try {
+      // DEFAULT loops (not injected): must not resolve the key until a wake fires.
+      const ws = await openWorkspace(dir, { extraWorkflows: [BUG] });
+      await ws.engine.createTask({ projectId: "default", workflowId: "bug", taskId: "c1", fields: {}, wake: false });
+      await ws.engine.submitCommand("c1", { kind: "set_field", field: "title", value: "hi" }, "lead", {
+        schedule: false,
+      });
+      expect((await ws.projections.get("c1"))?.fields.title).toBe("hi");
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a persisted/extra 'general' cannot shadow the builtin fallback", async () => {
+    const dir = await tmp();
+    try {
+      const fakeGeneral: WorkflowDef = {
+        id: "general",
+        version: "1",
+        name: "Fake",
+        description: "",
+        fields: {},
+        stages: [
+          { id: "open", category: "in_progress", entry: { op: "always" } },
+          { id: "done", category: "done", entry: { op: "always" } },
+        ],
+      };
+      const ws = await openWorkspace(dir, {
+        extraWorkflows: [fakeGeneral],
+        loop: () => mockLoop({ response: "x" }),
+      });
+      // The builtin GENERAL declares a `request` field; the fake one doesn't.
+      expect(ws.registry.get("general")?.fields.request).toBeDefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("durable subtask spawning across fresh engines doesn't collide on ids", async () => {
+    const CHILD: WorkflowDef = {
+      id: "child", version: "1", name: "Child", description: "",
+      fields: {},
+      stages: [
+        { id: "open", category: "in_progress", entry: { op: "always" } },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    const PARENT: WorkflowDef = {
+      id: "parent", version: "1", name: "Parent", description: "",
+      fields: {},
+      stages: [
+        { id: "split", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask"] },
+        { id: "done", category: "done", entry: { op: "childrenDone" } },
+      ],
+    };
+    const loop: LoopFactory = (ctx) =>
+      ctx.stageId === "split"
+        ? mockLoop({ callTool: { name: "create_subtask", args: { workflowId: "child", input: "x" } } })
+        : mockLoop({ callTool: { name: "request_transition", args: { reason: "d" } } });
+    const dir = await tmp();
+    try {
+      const ws1 = await openWorkspace(dir, { extraWorkflows: [CHILD, PARENT], loop });
+      // Occupy an id an in-memory counter would re-mint (the old collision bug).
+      await ws1.engine.createTask({ projectId: "default", workflowId: "general", taskId: "task_1", wake: false });
+      await ws1.engine.createTask({ projectId: "default", workflowId: "parent", taskId: "P", wake: false });
+      // A FRESH engine drives P → spawns a child whose id must not collide with task_1.
+      const ws2 = await openWorkspace(dir, { extraWorkflows: [CHILD, PARENT], loop });
+      await ws2.engine.runPending();
+      expect((await ws2.projections.get("P"))?.status).toBe("done");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("saveWorkflow + loadWorkflows round-trip; openWorkspace registers persisted workflows", async () => {
+    const dir = await tmp();
+    try {
+      await saveWorkflow(dir, BUG);
+      expect((await loadWorkflows(dir)).map((w) => w.id)).toContain("bug");
+      const ws = await openWorkspace(dir, { loop: () => mockLoop({ response: "x" }) });
+      expect(ws.registry.get("bug")?.id).toBe("bug");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

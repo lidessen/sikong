@@ -42,6 +42,17 @@ bun scripts/smoke-run.ts [all|claude|codex|cursor|ai-sdk]
 bun scripts/repl.ts [runtime] [--provider deepseek|...] [--model ...]   # manual REPL
 ```
 
+## Design docs
+
+`design/` is the architectural source of truth for this repository. Read
+`design/README.md` for the system shape, then the relevant area document under
+`design/areas/` before changing behavior or package boundaries.
+
+Durable shape changes require a design decision in `docs/decisions/` before
+implementation: module boundaries, state model, protocol/schema semantics,
+persistence behavior, scheduling mechanics, runtime contracts, or user-visible
+workflow behavior. Keep design docs in English.
+
 There is no lint step and no bundler. `bun run typecheck` + `bun run test` are the
 full CI gate. **Verify before committing (hard rule):** a `git commit` must be its
 OWN tool batch, sent only after reading a green typecheck/test from a PRIOR batch —

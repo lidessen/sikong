@@ -5,6 +5,7 @@
     "": {
       "name": "agent-loop",
       "devDependencies": {
+        "@ai-sdk/deepseek": "^2.0.35",
         "@types/node": "^25.9.1",
         "typescript": "^6.0.3",
         "vitest": "^4.1.7",

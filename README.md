@@ -25,6 +25,13 @@ bun run --filter agent-loop test
 bun run --filter agent-loop typecheck
 ```
 
+## Design
+
+The design entrypoint is [`design/README.md`](design/README.md). Durable design
+decisions live in [`docs/decisions`](docs/decisions). Use a decision record for
+core behavior, public contracts, data model semantics, persistence, runtime
+boundaries, and long-term operational shape.
+
 ## License
 
 MIT
