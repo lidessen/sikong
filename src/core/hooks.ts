@@ -20,7 +20,7 @@ export type ToolHookDecision =
   | { action: "replaceArgs"; args: Record<string, unknown> };
 
 export interface RunStartContext {
-  backend: RuntimeId;
+  runtime: RuntimeId;
   system: string;
   prompt: string;
 }
