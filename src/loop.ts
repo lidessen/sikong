@@ -1,5 +1,5 @@
 import type { BackendAdapter } from "./adapter/adapter";
-import type { CapabilityList } from "./core/capabilities";
+import { hasCapability, type Capability, type CapabilityList } from "./core/capabilities";
 import type { BackendId, PreflightResult, RunHandle, RunInput } from "./core/types";
 import { startRun, type LazyBackend } from "./executor/run-handle";
 
