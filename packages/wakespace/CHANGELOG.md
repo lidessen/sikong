@@ -5,9 +5,12 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 ## 0.1.0 — 2026-06-01
 
-Initial dogfood release. Published as a CLI-only package: the npm artifact ships
-the compiled `wakespace` executable with the `agent-loop` execution layer bundled
-into the binary. Built for macOS arm64 (`darwin/arm64`).
+Initial dogfood release. Published as a CLI-only package: a tiny cross-platform
+launcher (`wakespace`) plus per-platform binary packages (`wakespace-<platform>`)
+installed automatically as optional dependencies, with the `agent-loop` execution
+layer compiled into each binary. Supported platforms: `darwin-arm64`,
+`darwin-x64`, `linux-x64`, `linux-arm64`, `linux-x64-musl`, `linux-arm64-musl`,
+`windows-x64`.
 
 ### Added
 

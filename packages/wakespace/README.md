@@ -3,11 +3,15 @@
 Durable workspace layer over [`agent-loop`](../agent-loop) for agent-driven
 project development.
 
-`wakespace` is published as a CLI-only package. The npm artifact contains the
-compiled `wakespace` executable, with the `agent-loop` execution layer bundled
-into that binary.
+`wakespace` is published as a CLI-only package. The `agent-loop` execution layer
+is compiled into a single self-contained binary per platform. The published
+`wakespace` package is a tiny cross-platform launcher; the actual binary ships in
+a per-platform package (`wakespace-<platform>`) installed automatically as an
+optional dependency gated by `os`/`cpu`/`libc`, so `npm install` pulls only the
+one that matches your machine.
 
-The initial dogfood package is built for macOS arm64 (`darwin/arm64`).
+Supported platforms: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`,
+`linux-x64-musl`, `linux-arm64-musl`, `windows-x64`.
 
 The CLI provides a headless workflow engine with:
 
@@ -55,16 +59,21 @@ and the filesystem side effect.
 
 ## Release
 
-From the repository root:
+Releasing builds every platform binary, publishes each `wakespace-<platform>`
+package, then publishes the `wakespace` launcher last (so its optional
+dependencies already resolve). From `packages/wakespace`:
 
 ```sh
-bun run release:check
-cd packages/wakespace
-npm publish
+bun run release:dry   # build all platforms + npm publish --dry-run everywhere
+bun run release       # build all platforms + publish for real (needs npm auth)
 ```
 
-`release:check` runs typecheck, tests, build, whitespace checks, and
-`npm publish --dry-run`.
+The platform matrix lives in `scripts/build-platforms.ts`; it stamps each
+platform package with the launcher's version and fails if
+`optionalDependencies` drift out of sync. Bump the version in both
+`package.json` (version + each `optionalDependencies` entry) when cutting a
+release. The root `bun run release:check` still runs the typecheck/test/build
+gate plus a launcher dry-run.
 
 ## License
 

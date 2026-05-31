@@ -38,8 +38,10 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      - name: Build wakespace CLI
-        run: bun run build
+      - name: Cross-compile all platform binaries
+        run: bun run --filter wakespace build:platforms
 
-      - name: Smoke the compiled binary
-        run: packages/wakespace/dist/wakespace help
+      - name: Build + smoke the host binary
+        run: |
+          bun run build
+          packages/wakespace/dist/wakespace help

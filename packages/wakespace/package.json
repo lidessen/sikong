@@ -3,23 +3,21 @@
   "version": "0.1.0",
   "description": "Durable wake-loop workspace for agent-driven project development.",
   "type": "module",
-  "os": ["darwin"],
-  "cpu": ["arm64"],
   "bin": {
     "wakespace": "bin/wakespace"
   },
   "files": [
     "bin/wakespace",
-    "dist/wakespace",
     "README.md",
     "CHANGELOG.md"
   ],
   "scripts": {
     "build": "bun run build:cli",
     "build:cli": "bun build src/cli.ts --compile --outfile dist/wakespace",
-    "prepublishOnly": "bun run typecheck && bun run test && bun run build:cli",
-    "prepack": "bun run build:cli",
-    "publish:dry": "npm publish --dry-run",
+    "build:platforms": "bun scripts/build-platforms.ts",
+    "release": "bun scripts/release.ts",
+    "release:dry": "bun scripts/release.ts --dry-run",
+    "prepublishOnly": "bun run typecheck && bun run test",
     "smoke:deepseek-tools": "bun smokes/smoke-deepseek-project-tools.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bunx --bun vitest run",
@@ -43,6 +41,15 @@
     "url": "https://github.com/lidessen/wakespace/issues"
   },
   "homepage": "https://github.com/lidessen/wakespace/tree/main/packages/wakespace#readme",
+  "optionalDependencies": {
+    "wakespace-darwin-arm64": "0.1.0",
+    "wakespace-darwin-x64": "0.1.0",
+    "wakespace-linux-x64": "0.1.0",
+    "wakespace-linux-arm64": "0.1.0",
+    "wakespace-linux-x64-musl": "0.1.0",
+    "wakespace-linux-arm64-musl": "0.1.0",
+    "wakespace-windows-x64": "0.1.0"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^25.9.1",
