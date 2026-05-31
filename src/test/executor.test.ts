@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { createExecutor, MockAdapter } from "../index";
-import type { LoopEvent } from "../index";
+import { makeLoop, mockLoop, type LoopEvent } from "../index";
+import { MockAdapter } from "../adapters/mock";
 
-describe("executor + mock adapter", () => {
+describe("loop factories + executor", () => {
   test("one run streams events and resolves a result", async () => {
-    const exec = createExecutor("mock", { response: "hello world" });
-    const run = exec.run("hi");
+    const loop = mockLoop({ response: "hello world" });
+    const run = loop.run("hi");
 
     const events: LoopEvent[] = [];
     for await (const ev of run) events.push(ev);
@@ -19,19 +19,26 @@ describe("executor + mock adapter", () => {
   });
 
   test("string and object input are equivalent", async () => {
-    const exec = createExecutor("mock");
-    const a = await exec.run("ping").result;
-    const b = await exec.run({ prompt: "ping" }).result;
+    const loop = mockLoop();
+    const a = await loop.run("ping").result;
+    const b = await loop.run({ prompt: "ping" }).result;
     expect(a.text).toBe(b.text);
   });
 
+  test("capabilities are known without running the loop", () => {
+    const loop = mockLoop();
+    expect(loop.id).toBe("mock");
+    expect(loop.capabilities).toContain("tools");
+    expect(loop.capabilities).toContain("hooks");
+  });
+
   test("onMessage / onUsage / onEnd hooks fire", async () => {
-    const exec = createExecutor("mock", { response: "abc" });
+    const loop = mockLoop({ response: "abc" });
     let messages = 0;
     let usageSeen = 0;
     let ended = false;
 
-    const run = exec.run({
+    const run = loop.run({
       prompt: "go",
       hooks: {
         onMessage: () => {
@@ -52,13 +59,10 @@ describe("executor + mock adapter", () => {
     expect(ended).toBe(true);
   });
 
-  test("onToolUse can deny a tool (hooks capability)", async () => {
-    const exec = createExecutor("mock", {
-      simulateTool: "rm",
-      toolArgs: { path: "/" },
-    });
+  test("onToolUse can deny a tool", async () => {
+    const loop = mockLoop({ simulateTool: "rm", toolArgs: { path: "/" } });
     const seen: LoopEvent[] = [];
-    const run = exec.run({
+    const run = loop.run({
       prompt: "delete everything",
       hooks: {
         onToolUse: (ev) =>
@@ -68,20 +72,16 @@ describe("executor + mock adapter", () => {
     for await (const ev of run) seen.push(ev);
 
     const end = seen.find(
-      (e): e is Extract<LoopEvent, { type: "tool_call_end" }> =>
-        e.type === "tool_call_end",
+      (e): e is Extract<LoopEvent, { type: "tool_call_end" }> => e.type === "tool_call_end",
     );
     expect(end?.error).toContain("denied");
     expect(seen.some((e) => e.type === "tool_call_start")).toBe(false);
   });
 
   test("onToolUse can replace args", async () => {
-    const exec = createExecutor("mock", {
-      simulateTool: "write",
-      toolArgs: { path: "/tmp/a" },
-    });
+    const loop = mockLoop({ simulateTool: "write", toolArgs: { path: "/tmp/a" } });
     const seen: LoopEvent[] = [];
-    const run = exec.run({
+    const run = loop.run({
       prompt: "write",
       hooks: {
         onToolUse: () => ({ action: "replaceArgs", args: { path: "/tmp/safe" } }),
@@ -90,28 +90,24 @@ describe("executor + mock adapter", () => {
     for await (const ev of run) seen.push(ev);
 
     const start = seen.find(
-      (e): e is Extract<LoopEvent, { type: "tool_call_start" }> =>
-        e.type === "tool_call_start",
+      (e): e is Extract<LoopEvent, { type: "tool_call_start" }> => e.type === "tool_call_start",
     );
     expect(start?.args).toEqual({ path: "/tmp/safe" });
   });
 
   test("steer is routed and reported (deferred on mock)", async () => {
-    const exec = createExecutor("mock");
-    const run = exec.run("work");
+    const loop = mockLoop();
+    const run = loop.run("work");
     const outcome = await run.steer("also run tests");
     expect(outcome.mode).toBe("deferred");
     const result = await run.result;
     expect(result.events.some((e) => e.type === "steer")).toBe(true);
   });
 
-  test("capability gating: tools on a no-tools backend would throw", async () => {
-    // Build an adapter that advertises no capabilities.
-    const bare = new MockAdapter();
-    (bare as { capabilities: readonly string[] }).capabilities = [];
-    const exec = createExecutor(bare);
-    expect(() =>
-      exec.run({ prompt: "x", tools: { foo: { description: "f" } } }),
-    ).toThrow(/does not support capability "tools"/);
+  test("capability gating: tools on a no-tools backend throws", () => {
+    const bare = makeLoop("bare", [], async () => new MockAdapter());
+    expect(() => bare.run({ prompt: "x", tools: { foo: { description: "f" } } })).toThrow(
+      /does not support capability "tools"/,
+    );
   });
 });

@@ -1,35 +1,24 @@
-import type { BackendAdapter } from "./adapter/adapter";
-import { Executor } from "./executor/executor";
-import { createAdapter } from "./adapters/registry";
-import type { BackendId } from "./core/types";
+// ---- Backend factories (primary API) --------------------------------------
+//
+//   import { aiSdkLoop, claudeCodeLoop, codexLoop, cursorLoop, mockLoop } from "agent-loop";
+//
+// Every factory returns the same `AgentLoop` interface; the backend is the only
+// thing that differs. Adapters (and their SDKs) load lazily on first use.
+export {
+  aiSdkLoop,
+  claudeCodeLoop,
+  codexLoop,
+  cursorLoop,
+  mockLoop,
+} from "./backends";
 
-export { Executor } from "./executor/executor";
-
-/**
- * Create an executor over a backend.
- *
- * Pass an adapter instance (recommended for real backends, which need options):
- *   createExecutor(new ClaudeAdapter({ model: "sonnet" }))
- *
- * Or a built-in id for zero-config backends:
- *   createExecutor("mock")
- */
-export function createExecutor(backend: BackendAdapter): Executor;
-export function createExecutor(id: BackendId, options?: unknown): Executor;
-export function createExecutor(
-  backend: BackendAdapter | BackendId,
-  options?: unknown,
-): Executor {
-  const adapter =
-    typeof backend === "string" ? createAdapter(backend, options) : backend;
-  return new Executor(adapter);
-}
+// ---- The unified loop interface -------------------------------------------
+export type { AgentLoop } from "./loop";
+/** Advanced: build a loop over a custom `BackendAdapter`. */
+export { makeLoop } from "./loop";
 
 // ---- Core types & helpers --------------------------------------------------
-export type {
-  LoopEvent,
-  TokenUsage,
-} from "./core/events";
+export type { LoopEvent, TokenUsage } from "./core/events";
 export { addUsage, emptyUsage, estimateTokens } from "./core/events";
 export type { EventChannel } from "./core/channel";
 export { createEventChannel } from "./core/channel";
@@ -68,7 +57,7 @@ export type {
   ToolSet,
 } from "./core/types";
 
-// ---- Adapter authoring surface --------------------------------------------
+// ---- Custom-backend authoring ---------------------------------------------
 export type {
   AdapterHookBridge,
   BackendAdapter,
@@ -76,8 +65,11 @@ export type {
   BackendRun,
   ResolvedRequest,
 } from "./adapter/adapter";
-export { createAdapter } from "./adapters/registry";
+export type { LazyBackend } from "./executor/run-handle";
 
-// ---- Built-in zero-dep adapter --------------------------------------------
-export { MockAdapter } from "./adapters/mock";
+// ---- Per-backend constructor option types ---------------------------------
+export type { AiSdkAdapterOptions } from "./adapters/ai-sdk";
+export type { ClaudeAdapterOptions } from "./adapters/claude";
+export type { CodexAdapterOptions } from "./adapters/codex";
+export type { CursorAdapterOptions } from "./adapters/cursor";
 export type { MockAdapterOptions } from "./adapters/mock";
