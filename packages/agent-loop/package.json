@@ -1,0 +1,88 @@
+{
+  "name": "agent-loop",
+  "version": "0.0.0",
+  "description": "Unified agent loop over Claude Agent SDK, Codex app-server, Cursor Agent SDK, and Vercel AI SDK — runtime ⊥ provider. One call = one full loop, with skills, MCP, tools, and cross-runtime lifecycle hooks + steering.",
+  "type": "module",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./adapters/mock": {
+      "types": "./src/adapters/mock.ts",
+      "default": "./src/adapters/mock.ts"
+    },
+    "./adapters/claude": {
+      "types": "./src/adapters/claude.ts",
+      "default": "./src/adapters/claude.ts"
+    },
+    "./adapters/codex": {
+      "types": "./src/adapters/codex.ts",
+      "default": "./src/adapters/codex.ts"
+    },
+    "./adapters/cursor": {
+      "types": "./src/adapters/cursor.ts",
+      "default": "./src/adapters/cursor.ts"
+    },
+    "./adapters/ai-sdk": {
+      "types": "./src/adapters/ai-sdk.ts",
+      "default": "./src/adapters/ai-sdk.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "agent",
+    "agent-loop",
+    "executor",
+    "claude",
+    "codex",
+    "cursor",
+    "ai-sdk",
+    "llm",
+    "mcp"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.158",
+    "@cursor/sdk": "^1.0.17",
+    "ai": "^6.0.193",
+    "execa": "^9.6.1",
+    "zod": "^4.4.3"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    },
+    "@cursor/sdk": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    },
+    "execa": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@ai-sdk/anthropic": "^3.0.81",
+    "@ai-sdk/deepseek": "^2.0.35",
+    "@ai-sdk/gateway": "^3.0.121",
+    "@ai-sdk/openai": "^3.0.67",
+    "@ai-sdk/openai-compatible": "^2.0.48",
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

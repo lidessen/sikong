@@ -4,6 +4,15 @@
   "workspaces": {
     "": {
       "name": "agent-loop",
+      "devDependencies": {
+        "@types/node": "^25.9.1",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.7",
+      },
+    },
+    "packages/agent-loop": {
+      "name": "agent-loop",
+      "version": "0.0.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.158",
         "@cursor/sdk": "^1.0.17",
@@ -14,8 +23,21 @@
       "devDependencies": {
         "@ai-sdk/anthropic": "^3.0.81",
         "@ai-sdk/deepseek": "^2.0.35",
+        "@ai-sdk/gateway": "^3.0.121",
         "@ai-sdk/openai": "^3.0.67",
         "@ai-sdk/openai-compatible": "^2.0.48",
+        "@types/node": "^25.9.1",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.7",
+      },
+    },
+    "packages/agent-workspace": {
+      "name": "agent-workspace",
+      "version": "0.0.0",
+      "dependencies": {
+        "agent-loop": "workspace:*",
+      },
+      "devDependencies": {
         "@types/node": "^25.9.1",
         "typescript": "^6.0.3",
         "vitest": "^4.1.7",
@@ -238,6 +260,10 @@
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
 
     "agent-base": ["agent-base@6.0.2", "", { "dependencies": { "debug": "4" } }, "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ=="],
+
+    "agent-loop": ["agent-loop@workspace:packages/agent-loop"],
+
+    "agent-workspace": ["agent-workspace@workspace:packages/agent-workspace"],
 
     "agentkeepalive": ["agentkeepalive@4.6.0", "", { "dependencies": { "humanize-ms": "^1.2.1" } }, "sha512-kja8j7PjmncONqaTsB8fQ+wE2mSU2DJ9D4XKoJ5PFWIdRMa6SLSN1ff4mOr4jCbfRSsxR4keIiySJU0N9T5hIQ=="],
 
