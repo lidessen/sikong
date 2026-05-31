@@ -44,8 +44,9 @@ events flow back up normalized.
   one shape every backend emits), `types.ts` (`RunInput`/`RunResult`/`RunHandle`,
   `ToolDefinition`, `defineTool`), `hooks.ts` (cross-runtime lifecycle hooks),
   `capabilities.ts` (`Capability` union), `provider.ts` (the `ModelProvider` ⊥
-  runtime abstraction), `channel.ts` (async event channel), `errors.ts`.
-- **adapter/adapter.ts** — the small `BackendAdapter` interface each backend
+  runtime abstraction), `credentials.ts` (`resolveApiKey` + `configureProviders`),
+  `channel.ts` (async event channel), `errors.ts`.
+- **core/adapter.ts** — the small `BackendAdapter` interface each backend
   implements: `start(req: ResolvedRequest): BackendRun`, plus optional
   `preflight`/`dispose`. `AdapterHookBridge` is how an adapter consults the
   caller's `onToolUse` at its *native* pre-tool interception point.
@@ -134,12 +135,17 @@ authenticates via `codex login` (`~/.codex/auth.json`), no API key needed. Claud
 needs `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY` exported for headless use (a
 macOS Keychain-only login is NOT readable by the spawned SDK).
 
+Provider `apiKey` is optional: explicit wins, else auto-discovered from the
+conventional `<PROVIDER>_API_KEY` env var. Stateless multi-tenant workers call
+`configureProviders({ autoDiscover: false })` once to forbid ambient-env reads
+and force explicit keys (also gates native-adapter fallbacks, e.g. cursor).
+
 ## TypeScript
 
 Strict, `verbatimModuleSyntax` (use `import type` for types),
 `noUncheckedIndexedAccess`, `moduleResolution: bundler`, ESM, `noEmit`. Relative
 imports are extensionless. Two adapter-authoring escape hatches stay typed-as-data:
-`runtimeOptions`/`backendOptions` and provider specs are cast at the boundary.
+`runtimeOptions` and provider specs are cast at the boundary.
 
 ## Reference
 
