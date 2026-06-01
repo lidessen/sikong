@@ -39,4 +39,4 @@ export * from "./workspace";
 export * from "./workspace-layout";
 
 /** Package version marker. */
-export const WAKESPACE_VERSION = "0.0.0";
+export const WAKESPACE_VERSION = "0.1.5";

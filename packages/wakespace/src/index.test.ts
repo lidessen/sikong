@@ -16,7 +16,7 @@ describe("wakespace ⇄ agent-loop wiring", () => {
   });
 
   test("exports the workflow kernel + a version marker", () => {
-    expect(WAKESPACE_VERSION).toBe("0.0.0");
+    expect(WAKESPACE_VERSION).toBe("0.1.5");
     expect(validateWorkflow(GENERAL_WORKFLOW)).toEqual([]);
     expect(validateWorkflow(DEVELOPMENT_WORKFLOW)).toEqual([]);
   });
