@@ -152,6 +152,8 @@ function chronicleDataSuffix(e: { type: string; data?: Record<string, unknown> }
       `event=${String(data.event ?? "")}`,
       `tool=${String(data.tool ?? "")}`,
     ];
+    if (data.argsPreview) parts.push(`args=${String(data.argsPreview).slice(0, 160)}`);
+    if (data.resultPreview) parts.push(`result=${String(data.resultPreview).slice(0, 160)}`);
     if (data.error) parts.push(`error=${String(data.error).slice(0, 120)}`);
     return ` [${parts.join(" ")}]`;
   }

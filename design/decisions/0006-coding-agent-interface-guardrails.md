@@ -82,6 +82,14 @@ hooks, and role separation.
   should come from the model/context window and wall-clock timeout handling.
 - Keep normalized project tool and write counts in `wake.diagnostics` and
   `wake.commit` as facts for PM review, not as policy gates.
+- Capture compact, sanitized tool argument/result previews in wake diagnostics
+  and pass them to commit fallback so durable verification summaries are based
+  on observed commands and outputs, not reconstructed from memory.
+- Enable `pipefail` for project shell commands so verification pipelines do not
+  turn an early command failure into a successful final pipeline status.
+- In verify stages, reject verification output fields and stage transition when
+  failed project shell commands were observed; the task must block with the
+  failed command evidence instead of recording a passing summary.
 - Stop the current agent run after terminal workflow intent is recorded through
   `request_transition`, `block`, `cancel`, or commit fallback's `commit_stage`;
   this is lifecycle control, not a budget.

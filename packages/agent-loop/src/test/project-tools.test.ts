@@ -80,6 +80,15 @@ describe("project tools", () => {
     });
   });
 
+  test("runs bash commands with pipefail enabled", async () => {
+    const root = await tempProject();
+    const tools = await createProjectTools({ cwd: root });
+
+    const result = (await execute(tools.bash, { command: "false | true" })) as { exitCode?: number };
+
+    expect(result.exitCode).not.toBe(0);
+  });
+
   test("replaces exact text inside an existing project file", async () => {
     const root = await tempProject();
     const tools = await createProjectTools({ cwd: root });

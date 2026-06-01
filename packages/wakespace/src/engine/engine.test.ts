@@ -542,6 +542,81 @@ describe("WorkflowEngine wake cycle", () => {
     expect(workerDiagnostics?.data).not.toHaveProperty("maxProjectToolCallsBeforeWrite");
   });
 
+  test("verify stages block when project shell verification commands fail", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-verify-failed-command-"));
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
+        if (ctx.stageId === "implement") {
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+            {},
+          );
+          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
+          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
+          return;
+        }
+        if (ctx.stageId === "verify") {
+          if (input.tools?.block && !input.tools?.set_field) {
+            await input.tools.block.execute?.({ reason: "verification command failed" }, {});
+            return;
+          }
+          await input.tools?.bash?.execute?.({ command: "false | true" }, {});
+          await input.tools?.set_field?.execute?.({ field: "verification", value: "Claimed green." }, {});
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "Done." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
+        }
+      }, "ai-sdk");
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry,
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development",
+      taskId: "verify-failed-command",
+      fields: { request: "edit marker" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("verify-failed-command");
+    expect(task?.status).toBe("blocked");
+    expect(task?.stageId).toBe("verify");
+    expect(task?.fields.verification).toBeUndefined();
+    expect(task?.fields.summary).toBeUndefined();
+    const workerDiagnostics = (
+      await chronicle.recent({ taskId: "verify-failed-command", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "verify");
+    expect(workerDiagnostics?.data).toMatchObject({
+      failedProjectCommandCalls: 1,
+      rejectedStateCommands: 3,
+    });
+    const wakeCommit = (await chronicle.recent({ taskId: "verify-failed-command", type: "wake.commit", limit: 20 }))[0];
+    expect(wakeCommit?.data).toMatchObject({
+      fallbackPolicy: "verification_command_failed",
+      allowedTools: ["block"],
+    });
+  });
+
   test("blocks an ungrounded forced commit pass when no project write ran", async () => {
     const root = await mkdtemp(join(tmpdir(), "wakespace-commit-ungrounded-"));
     const chronicle = new MemoryChronicleStore(() => 1);
@@ -1153,10 +1228,112 @@ describe("WorkflowEngine wake cycle", () => {
     expect(progressEnd?.summary).toBe("tool request_transition ended");
     expect(progressStart?.data).toMatchObject({ phase: "worker", tool: "request_transition" });
     expect(progressEnd?.data).toMatchObject({ phase: "worker", tool: "request_transition" });
+    expect(String(progressStart?.data?.argsPreview)).toContain("reason");
+    expect(String(progressEnd?.data?.resultPreview)).toContain("acknowledged");
     expect(entries.indexOf(progressStart!)).toBeLessThan(wakeEndIndex);
     expect(entries.indexOf(progressEnd!)).toBeLessThan(wakeEndIndex);
   });
+
+  test("commit fallback sees compact tool call facts from the worker pass", async () => {
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let runCount = 0;
+    let commitSystem = "";
+    const loop: LoopFactory = () => ({
+      id: "ai-sdk",
+      capabilities: ["tools"],
+      supports: (c: Capability) => c === "tools",
+      run(input: RunInput): RunHandle {
+        runCount++;
+        if (runCount === 1) {
+          return eventRunHandle([
+            {
+              type: "tool_call_start",
+              name: "bash",
+              callId: "verify-1",
+              args: { command: "bunx --bun vitest run packages/agent-loop/src/test/project-tools.test.ts" },
+            },
+            {
+              type: "tool_call_end",
+              name: "bash",
+              callId: "verify-1",
+              result: { exitCode: 0, stdout: "1 test file passed", secretToken: "hidden" },
+            },
+          ]);
+        }
+        commitSystem = input.system ?? "";
+        const result = input.tools?.commit_stage?.execute?.(
+          { fields: { summary: "verified from facts" }, reason: "commit facts" },
+          {},
+        );
+        return bodyRunHandle(async () => {
+          await result;
+        });
+      },
+      preflight: async () => ({ ok: true }),
+      dispose: async () => {},
+    });
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(SIMPLE_COMMIT),
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "simple-commit", taskId: "facts" });
+    await engine.idle();
+
+    expect(commitSystem).toContain("## Observed tool facts");
+    expect(commitSystem).toContain("bunx --bun vitest run packages/agent-loop/src/test/project-tools.test.ts");
+    expect(commitSystem).toContain("1 test file passed");
+    expect(commitSystem).not.toContain("hidden");
+    const wakeCommit = (await chronicle.recent({ taskId: "facts", type: "wake.commit", limit: 10 }))[0];
+    expect(String(JSON.stringify(wakeCommit?.data?.toolCallFacts))).toContain("vitest run");
+  });
 });
+
+function eventRunHandle(events: LoopEvent[]): RunHandle {
+  const result = Promise.resolve({
+    events,
+    usage: emptyUsage(),
+    durationMs: 0,
+    status: "completed" as const,
+    text: "",
+  });
+  const iter = async function* (): AsyncGenerator<LoopEvent> {
+    for (const event of events) yield event;
+  };
+  const none = async function* (): AsyncGenerator<never> {};
+  return {
+    [Symbol.asyncIterator]: () => iter(),
+    textStream: none(),
+    result,
+    text: result.then((r) => r.text),
+    usage: result.then((r) => r.usage),
+    steer: async () => ({ mode: "rejected" as const }),
+    cancel: () => {},
+  };
+}
+
+function bodyRunHandle(body: () => Promise<void>): RunHandle {
+  const result = body().then(() => ({
+    events: [] as LoopEvent[],
+    usage: emptyUsage(),
+    durationMs: 0,
+    status: "completed" as const,
+    text: "",
+  }));
+  const none = async function* (): AsyncGenerator<never> {};
+  return {
+    [Symbol.asyncIterator]: () => none(),
+    textStream: none(),
+    result,
+    text: result.then((r) => r.text),
+    usage: result.then((r) => r.usage),
+    steer: async () => ({ mode: "rejected" as const }),
+    cancel: () => {},
+  };
+}
 
 /** A loop whose run() executes `body` (which may await), resolving when it finishes. */
 function scriptLoop(body: (input: RunInput) => Promise<string | void>, id = "scripted"): AgentLoop {

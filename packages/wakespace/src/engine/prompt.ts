@@ -1,6 +1,22 @@
 import type { StageDef, WorkflowDef, Task } from "../workflow/types";
 import { COMMAND_TOOL_NAMES, type CommandToolName } from "./command-tools";
 
+export interface ToolCallFact {
+  tool: string;
+  callId?: string;
+  argsPreview?: string;
+  resultPreview?: string;
+  error?: string;
+}
+
+export interface CommitEvidence {
+  projectToolCalls: number;
+  projectWriteCalls: number;
+  projectWriteRequired: boolean;
+  failedProjectCommandCalls?: number;
+  toolCallFacts?: readonly ToolCallFact[];
+}
+
 function stageToolNames(stage: StageDef | undefined): readonly CommandToolName[] {
   if (!stage?.tools) return COMMAND_TOOL_NAMES;
   return COMMAND_TOOL_NAMES.filter((n) => stage.tools!.includes(n));
@@ -82,7 +98,7 @@ export function buildCommitSystem(
   wf: WorkflowDef,
   stage: StageDef | undefined,
   priorText: string,
-  evidence: { projectToolCalls: number; projectWriteCalls: number; projectWriteRequired: boolean },
+  evidence: CommitEvidence,
 ): string {
   const lines = [
     `# Workflow: ${wf.name}`,
@@ -99,13 +115,31 @@ export function buildCommitSystem(
     "The previous worker pass ended without calling any wakespace state tool.",
     `Project tool calls observed in that pass: ${evidence.projectToolCalls}.`,
     `Project write tool calls observed in that pass: ${evidence.projectWriteCalls}.`,
+    `Failed project shell commands observed in that pass: ${evidence.failedProjectCommandCalls ?? 0}.`,
     stage?.outputFields?.length ? `Stage output fields: ${stage.outputFields.join(", ")}.` : "Stage output fields: unrestricted by stage.",
     "You must now call at least one provided state tool. Do not answer in plain text.",
-    evidence.projectWriteRequired && evidence.projectWriteCalls === 0
-      ? "This stage requires project write evidence, but no project write tool call was observed. Do not mark the stage complete or request cancellation; call `block` with a concrete reason."
-      : "Use the provided workflow state tools to set the fields this stage requires, then call `request_transition` if this stage is complete.",
+    stage?.id === "verify" && (evidence.failedProjectCommandCalls ?? 0) > 0
+      ? "Verification observed failed project shell commands. Do not mark verification complete; call `block` with the concrete failed command evidence."
+      : evidence.projectWriteRequired && evidence.projectWriteCalls === 0
+        ? "This stage requires project write evidence, but no project write tool call was observed. Do not mark the stage complete or request cancellation; call `block` with a concrete reason."
+        : "Use the provided workflow state tools to set the fields this stage requires, then call `request_transition` if this stage is complete.",
     "If the task cannot be completed, call `block` with a concrete reason.",
   ];
+  if (evidence.toolCallFacts?.length) {
+    lines.push(
+      "",
+      "## Observed tool facts",
+      "These compact sanitized previews are the facts from the previous worker pass. Base durable verification or implementation claims on them; block if the facts are insufficient.",
+      ...evidence.toolCallFacts.map((fact) => {
+        const parts = [`- ${fact.tool}`];
+        if (fact.callId) parts.push(`[${fact.callId}]`);
+        if (fact.argsPreview) parts.push(`args=${fact.argsPreview}`);
+        if (fact.resultPreview) parts.push(`result=${fact.resultPreview}`);
+        if (fact.error) parts.push(`error=${fact.error}`);
+        return parts.join(" ");
+      }),
+    );
+  }
   if (priorText.trim()) lines.push("", "## Previous worker text", priorText.trim());
   return lines.join("\n");
 }

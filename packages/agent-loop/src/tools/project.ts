@@ -101,7 +101,7 @@ export async function createProjectTools(options: ProjectToolOptions): Promise<T
   });
 
   const out: ToolSet = {
-    bash: fromAiSdkTool(bashTools.bash),
+    bash: withPipefail(fromAiSdkTool(bashTools.bash)),
     readFile: fromAiSdkTool(bashTools.readFile),
     writeFile: fromAiSdkTool(bashTools.writeFile),
   };
@@ -120,6 +120,10 @@ export async function createProjectTools(options: ProjectToolOptions): Promise<T
   return out;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function fromAiSdkTool(tool: unknown): ToolDefinition {
   const t = tool as AiSdkToolLike;
   return defineTool({
@@ -130,6 +134,18 @@ function fromAiSdkTool(tool: unknown): ToolDefinition {
       return await t.execute(args, { toolCallId: ctx.callId, abortSignal: ctx.signal });
     },
   });
+}
+
+function withPipefail(tool: ToolDefinition): ToolDefinition {
+  return {
+    ...tool,
+    execute: async (rawArgs, ctx) => {
+      if (!tool.execute || !isRecord(rawArgs) || typeof rawArgs.command !== "string") {
+        return tool.execute?.(rawArgs, ctx);
+      }
+      return tool.execute({ ...rawArgs, command: `set -o pipefail\n${rawArgs.command}` }, ctx);
+    },
+  };
 }
 
 function createViewFileTool(opts: { cwd: string }): ToolDefinition {

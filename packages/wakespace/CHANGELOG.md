@@ -13,6 +13,14 @@ All notable changes to `wakespace` are documented here. This project adheres to
 - Project-write implementation stages no longer expose raw `bash` when
   structured project tools are available, so coding workers use the ACI before
   recording implementation progress.
+- Wake diagnostics now keep compact, sanitized tool argument/result previews and
+  pass them into commit fallback, giving PM review factual command/output
+  evidence for verification and blocked-task decisions.
+- Project `bash` commands now run with `pipefail` enabled so verification
+  pipelines do not hide failing commands behind a successful final pipe segment.
+- Verify stages now reject passing verification fields/transitions when project
+  shell commands fail, forcing the task to block with failed command evidence
+  instead of accepting a green summary.
 - Terminal workflow state tools now stop the current agent run after recording
   durable intent. This prevents commit fallback loops such as repeated
   `commit_stage` or `block` calls without reintroducing fixed tool-call or step

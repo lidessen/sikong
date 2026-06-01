@@ -37,7 +37,7 @@ import type {
 import type { Project } from "../project";
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
-import { buildCommitSystem, buildPrompt, buildSystem } from "./prompt";
+import { buildCommitSystem, buildPrompt, buildSystem, type ToolCallFact } from "./prompt";
 
 function isTerminal(status: TaskStatus): boolean {
   return status === "done" || status === "cancelled";
@@ -49,6 +49,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const PROJECT_WRITE_TOOL_NAMES = new Set(["writeFile", "replaceInFile"]);
 const DIAGNOSTIC_TEXT_LIMIT = 800;
+const TOOL_FACT_LIMIT = 40;
+const TOOL_PREVIEW_LIMIT = 600;
 
 interface RunDiagnostics {
   phase: "worker" | "commit";
@@ -58,6 +60,7 @@ interface RunDiagnostics {
   toolCallErrors: Record<string, number>;
   textChars: number;
   textPreview: string;
+  toolCallFacts: ToolCallFact[];
 }
 
 function createRunDiagnostics(phase: RunDiagnostics["phase"]): RunDiagnostics {
@@ -69,6 +72,7 @@ function createRunDiagnostics(phase: RunDiagnostics["phase"]): RunDiagnostics {
     toolCallErrors: {},
     textChars: 0,
     textPreview: "",
+    toolCallFacts: [],
   };
 }
 
@@ -92,6 +96,57 @@ function compactPreview(text: string, limit = DIAGNOSTIC_TEXT_LIMIT): { preview?
   };
 }
 
+function sensitiveFieldName(key: string): boolean {
+  const normalized = key.toLowerCase().replaceAll("_", "").replaceAll("-", "");
+  return (
+    normalized.includes("token") ||
+    normalized.includes("secret") ||
+    normalized.includes("password") ||
+    normalized.includes("authorization") ||
+    normalized.includes("apikey") ||
+    normalized.includes("credential")
+  );
+}
+
+function sanitizePreviewValue(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[max-depth]";
+  if (typeof value === "string") return value.length > 1_000 ? `${value.slice(0, 1_000)}...` : value;
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value)) {
+    const out = value.slice(0, 20).map((item) => sanitizePreviewValue(item, depth + 1));
+    if (value.length > 20) out.push(`[truncated ${value.length - 20} items]`);
+    return out;
+  }
+  if (isRecord(value)) {
+    const out: Record<string, unknown> = {};
+    const entries = Object.entries(value).slice(0, 30);
+    for (const [key, entryValue] of entries) {
+      out[key] = sensitiveFieldName(key) ? "[redacted]" : sanitizePreviewValue(entryValue, depth + 1);
+    }
+    if (Object.keys(value).length > entries.length) out["[truncated]"] = `${Object.keys(value).length - entries.length} fields`;
+    return out;
+  }
+  if (value === undefined) return undefined;
+  return String(value);
+}
+
+function compactValuePreview(value: unknown, limit = TOOL_PREVIEW_LIMIT): string | undefined {
+  if (value === undefined) return undefined;
+  let text: string;
+  try {
+    text = JSON.stringify(sanitizePreviewValue(value));
+  } catch {
+    text = String(value);
+  }
+  if (!text) return undefined;
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function rememberToolFact(diagnostics: RunDiagnostics, fact: ToolCallFact): void {
+  if (diagnostics.toolCallFacts.length >= TOOL_FACT_LIMIT) return;
+  diagnostics.toolCallFacts.push(fact);
+}
+
 function observeLoopEvent(diagnostics: RunDiagnostics, event: LoopEvent): void {
   diagnostics.eventCount++;
   switch (event.type) {
@@ -101,10 +156,21 @@ function observeLoopEvent(diagnostics: RunDiagnostics, event: LoopEvent): void {
       break;
     case "tool_call_start":
       incrementCount(diagnostics.toolCallStarts, event.name);
+      rememberToolFact(diagnostics, {
+        tool: event.name,
+        ...(event.callId ? { callId: event.callId } : {}),
+        ...(compactValuePreview(event.args) ? { argsPreview: compactValuePreview(event.args) } : {}),
+      });
       break;
     case "tool_call_end":
       incrementCount(diagnostics.toolCallEnds, event.name);
       if (event.error) incrementCount(diagnostics.toolCallErrors, event.name);
+      rememberToolFact(diagnostics, {
+        tool: event.name,
+        ...(event.callId ? { callId: event.callId } : {}),
+        ...(compactValuePreview(event.result) ? { resultPreview: compactValuePreview(event.result) } : {}),
+        ...(event.error ? { error: event.error } : {}),
+      });
       break;
   }
 }
@@ -121,6 +187,7 @@ function finalizeRunDiagnostics(diagnostics: RunDiagnostics, result: RunResult):
     toolCallErrors: diagnostics.toolCallErrors,
     textChars: result.text ? result.text.length : diagnostics.textChars,
     ...(preview.preview ? { textPreview: preview.preview, textTruncated: preview.truncated } : {}),
+    ...(diagnostics.toolCallFacts.length ? { toolCallFacts: diagnostics.toolCallFacts } : {}),
     ...(result.status === "error" ? { error: result.error?.message ?? "unknown error" } : {}),
   };
 }
@@ -151,6 +218,7 @@ function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<
         event: event.type,
         tool: event.name,
         ...(event.callId ? { callId: event.callId } : {}),
+        ...(compactValuePreview(event.args) ? { argsPreview: compactValuePreview(event.args) } : {}),
       };
     case "tool_call_end":
       return {
@@ -159,6 +227,7 @@ function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<
         tool: event.name,
         ...(event.callId ? { callId: event.callId } : {}),
         ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
+        ...(compactValuePreview(event.result) ? { resultPreview: compactValuePreview(event.result) } : {}),
         ...(event.error ? { error: event.error } : {}),
       };
     default:
@@ -168,6 +237,10 @@ function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<
 
 function toolResultSucceeded(result: unknown): boolean {
   return !(isRecord(result) && typeof result.error === "string" && result.error.length > 0);
+}
+
+function failedShellCommand(name: string, result: unknown): boolean {
+  return name === "bash" && isRecord(result) && typeof result.exitCode === "number" && result.exitCode !== 0;
 }
 
 function isProjectWriteTool(name: string): boolean {
@@ -579,6 +652,7 @@ export class WorkflowEngine {
         : {};
     let projectToolCalls = 0;
     let projectWriteCalls = 0;
+    let failedProjectCommandCalls = 0;
     const projectWriteRequired = stage?.requiresProjectWrite === true;
     const projectTools: ToolSet = {};
     for (const [name, tool] of Object.entries(rawProjectTools)) {
@@ -600,6 +674,7 @@ export class WorkflowEngine {
                 }
               }
               const out = await tool.execute!(args, ctx);
+              if (failedShellCommand(name, out)) failedProjectCommandCalls++;
               if (isProjectWriteTool(name) && toolResultSucceeded(out)) projectWriteCalls++;
               return out;
             },
@@ -651,6 +726,10 @@ export class WorkflowEngine {
       projectWriteGateActive && projectWriteCalls === 0
         ? commands.filter((command) => requiresProjectWriteEvidence(command, stage))
         : [];
+    const rejectedVerificationProgress =
+      stage?.id === "verify" && failedProjectCommandCalls > 0
+        ? commands.filter((command) => isStageCommitSignal(command, stage))
+        : [];
     if (rejectedProjectProgress.length) {
       const reason = "project write evidence is required before recording implementation progress";
       for (const command of rejectedProjectProgress) {
@@ -660,13 +739,25 @@ export class WorkflowEngine {
       const rejected = new Set(rejectedProjectProgress);
       commands = commands.filter((command) => !rejected.has(command));
     }
+    if (rejectedVerificationProgress.length) {
+      const reason = "verification command failed; block instead of recording passing verification";
+      for (const command of rejectedVerificationProgress) {
+        this.o.hooks?.onReject?.({ taskId, wakeId, command, reason });
+        await this.chron({ type: "command.rejected", taskId, wakeId, summary: `rejected ${command.kind}: ${reason}` });
+      }
+      const rejected = new Set(rejectedVerificationProgress);
+      commands = commands.filter((command) => !rejected.has(command));
+    }
     const workerDiagnosticData = {
       ...finalizeRunDiagnostics(workerDiagnostics, result),
       stageId: task.stageId,
       stateCommands: commands.length,
-      ...(rejectedProjectProgress.length ? { rejectedStateCommands: rejectedProjectProgress.length } : {}),
+      ...(rejectedProjectProgress.length || rejectedVerificationProgress.length
+        ? { rejectedStateCommands: rejectedProjectProgress.length + rejectedVerificationProgress.length }
+        : {}),
       projectToolCalls,
       projectWriteCalls,
+      failedProjectCommandCalls,
       projectWriteRequired: projectWriteGateActive,
     };
     await this.chron({
@@ -705,7 +796,8 @@ export class WorkflowEngine {
         if (closesCurrentRun(command)) stopCommitRun(`wakespace ${command.kind} recorded`);
         return { acknowledged: true };
       };
-      const canCommitStageProgress = !projectWriteGateActive || projectWriteCalls > 0;
+      const verificationCommandFailed = stage?.id === "verify" && failedProjectCommandCalls > 0;
+      const canCommitStageProgress = (!projectWriteGateActive || projectWriteCalls > 0) && !verificationCommandFailed;
       const commitTools: ToolSet = {};
       if (canCommitStageProgress) {
         const allowedFields = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
@@ -791,28 +883,37 @@ export class WorkflowEngine {
         summary: `worker produced no stage commit commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
         data: {
           reason: firstPassCommands.length === 0 ? "no_state_commands" : "no_stage_commit_commands",
-          fallbackPolicy: canCommitStageProgress ? "state_commit_allowed" : "project_write_required_without_write",
+          fallbackPolicy: canCommitStageProgress
+            ? "state_commit_allowed"
+            : verificationCommandFailed
+              ? "verification_command_failed"
+              : "project_write_required_without_write",
           stageId: task.stageId,
           firstPassCommands: firstPassCommands.map((command) => command.kind),
           allowedTools: Object.keys(commitTools),
           projectToolCalls,
           projectWriteCalls,
+          failedProjectCommandCalls,
           projectWriteRequired: projectWriteGateActive,
           ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
+          ...(workerDiagnostics.toolCallFacts.length ? { toolCallFacts: workerDiagnostics.toolCallFacts } : {}),
           firstPassTextChars: firstPassText.chars,
           ...(firstPassText.preview ? { firstPassTextPreview: firstPassText.preview } : {}),
           firstPassTextTruncated: firstPassText.truncated,
         },
       });
-      const commitPrompt =
-        canCommitStageProgress
-          ? "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete. Block only if progress is impossible. Do not answer in plain text."
+      const commitPrompt = canCommitStageProgress
+        ? "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete. Block only if progress is impossible. Do not answer in plain text."
+        : verificationCommandFailed
+          ? "Commit durable wakespace progress now. Verification observed failed project shell commands, so call `block` with the concrete failed command evidence. Do not answer in plain text."
           : "Commit durable wakespace progress now. This stage requires project write evidence, but no successful project write tool call was observed, so call `block` with a concrete reason. Do not answer in plain text.";
       commitRun = loop.run({
         system: buildCommitSystem(task, wf, stage, result.text, {
           projectToolCalls,
           projectWriteCalls,
           projectWriteRequired: projectWriteGateActive,
+          failedProjectCommandCalls,
+          toolCallFacts: workerDiagnostics.toolCallFacts,
         }),
         prompt: commitPrompt,
         tools: commitTools,
