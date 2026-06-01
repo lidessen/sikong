@@ -93,11 +93,11 @@ export function buildCommitSystem(
     "",
     "The previous worker pass ended without calling any wakespace state tool.",
     `Project tool calls observed in that pass: ${evidence.projectToolCalls}.`,
-    `Project writeFile calls observed in that pass: ${evidence.projectWriteCalls}.`,
+    `Project write tool calls observed in that pass: ${evidence.projectWriteCalls}.`,
     stage?.outputFields?.length ? `Stage output fields: ${stage.outputFields.join(", ")}.` : "Stage output fields: unrestricted by stage.",
     "You must now call at least one provided state tool. Do not answer in plain text.",
     evidence.projectWriteRequired && evidence.projectWriteCalls === 0
-      ? "This stage requires project write evidence, but no project writeFile call was observed. Do not mark the stage complete or request cancellation; call `block` with a concrete reason."
+      ? "This stage requires project write evidence, but no project write tool call was observed. Do not mark the stage complete or request cancellation; call `block` with a concrete reason."
       : "Use the provided workflow state tools to set the fields this stage requires, then call `request_transition` if this stage is complete.",
     "If the task cannot be completed, call `block` with a concrete reason.",
   ];

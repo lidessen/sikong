@@ -19,6 +19,8 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 - Forced commit fallback now coalesces duplicate block/cancel calls so a worker
   retry does not create misleading `command.rejected` chronicle noise.
+- Wake diagnostics now label project write evidence generically as
+  `projectWrites` because either `writeFile` or `replaceInFile` can satisfy it.
 
 ### Changed
 

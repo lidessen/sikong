@@ -498,7 +498,7 @@ export class WorkflowEngine {
       type: "wake.diagnostics",
       taskId,
       wakeId,
-      summary: `worker pass: status=${result.status} stateCommands=${commands.length} projectTools=${projectToolCalls} writeFile=${projectWriteCalls} toolStarts=${toolCountsSummary(workerDiagnostics.toolCallStarts)}`,
+      summary: `worker pass: status=${result.status} stateCommands=${commands.length} projectTools=${projectToolCalls} projectWrites=${projectWriteCalls} toolStarts=${toolCountsSummary(workerDiagnostics.toolCallStarts)}`,
       data: workerDiagnosticData,
     });
 
