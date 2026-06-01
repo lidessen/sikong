@@ -3,6 +3,18 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- Removed the fixed pre-write project tool-call cap from implementation stages.
+  Project write evidence is still required before normal implementation progress
+  can be committed, but worker exploration is governed by model/context limits
+  and better ACI context rather than a hard tool-count budget.
+- Removed the wakespace worker step-cap option from workspace and engine wiring;
+  worker runtime limits should come from the model/context window and timeout
+  handling, not a wakespace step budget.
+
 ## 0.1.5 — 2026-06-01
 
 ### Changed

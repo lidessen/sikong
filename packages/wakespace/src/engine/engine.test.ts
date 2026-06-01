@@ -317,33 +317,21 @@ describe("WorkflowEngine wake cycle", () => {
     });
   });
 
-  test("caps pre-write project exploration in stages that require project writes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-prewrite-budget-"));
+  test("does not cap project exploration before the first required write", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-no-prewrite-budget-"));
     await writeFile(join(root, "marker.txt"), "before\n", "utf8");
     const chronicle = new MemoryChronicleStore(() => 1);
-    let calls = 0;
-    let gatedError: unknown;
-    let postBudgetWriteError: unknown;
     let system = "";
     const loop: LoopFactory = () =>
       scriptLoop(async (input) => {
-        calls++;
-        if (calls === 1) {
-          system = input.system ?? "";
-          try {
-            for (let i = 0; i < 9; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
-          } catch (err) {
-            gatedError = err;
-          }
-          try {
-            await input.tools?.writeFile?.execute?.({ path: "created-after-budget.txt", content: "late\n" }, {});
-          } catch (err) {
-            postBudgetWriteError = err;
-          }
-          return;
-        }
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
-        await input.tools?.block?.execute?.({ reason: "pre-write budget exhausted before an edit" }, {});
+        system = input.system ?? "";
+        for (let i = 0; i < 9; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
+        await input.tools?.replaceInFile?.execute?.(
+          { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+          {},
+        );
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "edited after context gathering" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
       }, "ai-sdk");
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
@@ -354,33 +342,21 @@ describe("WorkflowEngine wake cycle", () => {
       loop,
     });
 
-    await engine.createTask({ projectId: "p", taskId: "prewrite-budget", fields: { request: "edit marker" } });
+    await engine.createTask({ projectId: "p", taskId: "no-prewrite-budget", fields: { request: "edit marker" } });
     await engine.idle();
 
-    expect(gatedError).toBeInstanceOf(Error);
-    expect((gatedError as Error).message).toContain("Pre-write project tool budget exhausted");
-    expect(postBudgetWriteError).toBeInstanceOf(Error);
-    expect((postBudgetWriteError as Error).message).toContain("Pre-write project tool budget exhausted");
-    expect(system).toContain("Pre-write exploration budget: 8 non-write project tool call(s).");
-    expect((await engine.getTask("prewrite-budget"))?.status).toBe("blocked");
+    expect(system).not.toContain("Pre-write exploration budget");
+    expect(await readFile(join(root, "marker.txt"), "utf8")).toBe("after\n");
+    expect((await engine.getTask("no-prewrite-budget"))?.status).toBe("done");
     const workerDiagnostics = (
-      await chronicle.recent({ taskId: "prewrite-budget", type: "wake.diagnostics", limit: 20 })
+      await chronicle.recent({ taskId: "no-prewrite-budget", type: "wake.diagnostics", limit: 20 })
     ).find((entry) => entry.data?.phase === "worker");
     expect(workerDiagnostics?.data).toMatchObject({
       status: "completed",
       projectToolCalls: 10,
-      projectWriteCalls: 0,
-      maxProjectToolCallsBeforeWrite: 8,
-      projectToolCallsBeforeWrite: 8,
-      projectToolCallsRejectedBeforeWrite: 2,
-      projectWriteBudgetExhausted: true,
+      projectWriteCalls: 1,
     });
-    const commit = (await chronicle.recent({ taskId: "prewrite-budget", type: "wake.commit", limit: 1 }))[0];
-    expect(commit?.data).toMatchObject({
-      reason: "project_write_budget_exhausted",
-      fallbackPolicy: "project_write_required_without_write",
-      allowedTools: ["block"],
-    });
+    expect(workerDiagnostics?.data).not.toHaveProperty("maxProjectToolCallsBeforeWrite");
   });
 
   test("refuses writeFile overwrites on existing files in project-write stages", async () => {
@@ -456,13 +432,11 @@ describe("WorkflowEngine wake cycle", () => {
     expect(entries.map((entry) => entry.type)).not.toContain("command.rejected");
   });
 
-  test("development implement stages use a tighter pre-write exploration budget", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-dev-budget-"));
+  test("development implement stages require write evidence without a tool-count cap", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-dev-no-budget-"));
     await writeFile(join(root, "marker.txt"), "before\n", "utf8");
     const chronicle = new MemoryChronicleStore(() => 1);
-    let gatedError: unknown;
     let system = "";
-    let implementCalls = 0;
     const loop: LoopFactory = (ctx) =>
       scriptLoop(async (input) => {
         if (ctx.stageId === "plan") {
@@ -476,18 +450,21 @@ describe("WorkflowEngine wake cycle", () => {
           return;
         }
         if (ctx.stageId === "implement") {
-          implementCalls++;
-          if (implementCalls === 1) {
-            system = input.system ?? "";
-            try {
-              for (let i = 0; i < 5; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
-            } catch (err) {
-              gatedError = err;
-            }
-            return;
-          }
-          expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
-          await input.tools?.block?.execute?.({ reason: "budget checked" }, {});
+          system = input.system ?? "";
+          for (let i = 0; i < 6; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+            {},
+          );
+          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
+          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
+          return;
+        }
+        if (ctx.stageId === "verify") {
+          await input.tools?.set_field?.execute?.({ field: "verification", value: "Checked marker." }, {});
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "Development completed." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
           return;
         }
       }, "ai-sdk");
@@ -505,25 +482,23 @@ describe("WorkflowEngine wake cycle", () => {
     await engine.createTask({
       projectId: "p",
       workflowId: "development",
-      taskId: "dev-budget",
+      taskId: "dev-no-budget",
       fields: { request: "edit marker" },
     });
     await engine.idle();
 
-    expect(gatedError).toBeInstanceOf(Error);
-    expect((gatedError as Error).message).toContain("Pre-write project tool budget exhausted");
-    expect(system).toContain("Pre-write exploration budget: 4 non-write project tool call(s).");
-    expect((await engine.getTask("dev-budget"))?.status).toBe("blocked");
+    expect(system).not.toContain("Pre-write exploration budget");
+    expect(await readFile(join(root, "marker.txt"), "utf8")).toBe("after\n");
+    expect((await engine.getTask("dev-no-budget"))?.status).toBe("done");
     const workerDiagnostics = (
-      await chronicle.recent({ taskId: "dev-budget", type: "wake.diagnostics", limit: 20 })
+      await chronicle.recent({ taskId: "dev-no-budget", type: "wake.diagnostics", limit: 20 })
     ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "implement");
     expect(workerDiagnostics?.data).toMatchObject({
       status: "completed",
-      maxProjectToolCallsBeforeWrite: 4,
-      projectToolCallsBeforeWrite: 4,
-      projectToolCallsRejectedBeforeWrite: 1,
-      projectWriteBudgetExhausted: true,
+      projectToolCalls: 7,
+      projectWriteCalls: 1,
     });
+    expect(workerDiagnostics?.data).not.toHaveProperty("maxProjectToolCallsBeforeWrite");
   });
 
   test("blocks an ungrounded forced commit pass when no project write ran", async () => {

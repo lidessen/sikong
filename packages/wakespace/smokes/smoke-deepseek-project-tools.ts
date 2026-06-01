@@ -100,7 +100,6 @@ const engine = new WorkflowEngine({
   projects: new MemoryProjectStore([{ id: "p", name: "DeepSeek Smoke Project", root: projectRoot }]),
   registry,
   loop: () => aiSdkLoop({ provider: deepseek({ model }) }),
-  maxStepsPerWake: 12,
   wakeTimeoutMs: 180_000,
   hooks: {
     onLoopEvent: ({ event }) => {

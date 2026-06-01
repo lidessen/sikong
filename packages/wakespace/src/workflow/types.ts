@@ -1,5 +1,3 @@
-export const DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE = 8;
-
 /**
  * M0 — the workflow kernel data model.
  *
@@ -78,12 +76,6 @@ export interface StageDef {
    * verification stages that may only update workflow fields.
    */
   requiresProjectWrite?: boolean;
-  /**
-   * For `requiresProjectWrite` stages, cap non-write project tool calls before
-   * the first successful write. This keeps implementation wakes from spending
-   * the whole turn on inspection. Defaults to the engine policy when unset.
-   */
-  maxProjectToolCallsBeforeWrite?: number;
   /** Cron escalation hint: fire a staleness tick after this long (used at M5). */
   escalateAfterMs?: number;
 }

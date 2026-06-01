@@ -18,7 +18,6 @@ import {
   stageById,
   tryAdvance,
 } from "../workflow/reducer";
-import { DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE } from "../workflow/types";
 import type {
   Command,
   EventSource,
@@ -225,13 +224,6 @@ function commitFieldValueValid(def: FieldDef | undefined, value: unknown): boole
   }
 }
 
-function projectWriteBudgetExhaustedError(maxProjectToolCallsBeforeWrite: number): Error {
-  return new Error(
-    `Pre-write project tool budget exhausted after ${maxProjectToolCallsBeforeWrite} non-write calls. ` +
-      "This worker pass is stopping; the next wake must use replaceInFile/writeFile earlier, or block with the concrete reason no edit should be made.",
-  );
-}
-
 function isStageCommitSignal(command: Command, stage: ReturnType<typeof stageById>): boolean {
   switch (command.kind) {
     case "request_transition":
@@ -296,8 +288,6 @@ export interface WorkflowEngineOptions {
   projects?: ProjectStore;
   /** Override id generation (default: a deterministic per-engine counter). */
   genId?: (kind: "task" | "wake") => string;
-  /** Soft per-wake step cap passed to the loop. */
-  maxStepsPerWake?: number;
   /**
    * Wall-clock cap per wake. A wake exceeding it is aborted/cancelled and
    * reported as an errored run — so a wedged backend that ignores cancellation
@@ -458,7 +448,6 @@ export class WorkflowEngine {
       prompt: "Route this request to a workflow using the `route` tool.",
       tools,
       signal: controller.signal,
-      ...(this.o.maxStepsPerWake ? { maxSteps: this.o.maxStepsPerWake } : {}),
     });
     const result = await this.boundedRun(run.result, () => {
       controller.abort();
@@ -554,12 +543,6 @@ export class WorkflowEngine {
     let projectToolCalls = 0;
     let projectWriteCalls = 0;
     const projectWriteRequired = stage?.requiresProjectWrite === true;
-    const maxProjectToolCallsBeforeWrite =
-      stage?.maxProjectToolCallsBeforeWrite ?? DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE;
-    let projectToolCallsBeforeWrite = 0;
-    let projectToolCallsRejectedBeforeWrite = 0;
-    let projectWriteBudgetExhausted = false;
-    let cancelWorkerPass: ((reason: string) => void) | undefined;
     const projectTools: ToolSet = {};
     for (const [name, tool] of Object.entries(rawProjectTools)) {
       projectTools[name] = tool.execute
@@ -567,11 +550,6 @@ export class WorkflowEngine {
             ...tool,
             execute: async (args, ctx) => {
               projectToolCalls++;
-              if (projectWriteRequired && projectWriteBudgetExhausted) {
-                projectToolCallsRejectedBeforeWrite++;
-                cancelWorkerPass?.("project write budget exhausted");
-                throw projectWriteBudgetExhaustedError(maxProjectToolCallsBeforeWrite);
-              }
               if (projectWriteRequired && name === "writeFile") {
                 const existing = project?.root ? await existingProjectPath(project.root, args) : null;
                 if (existing) {
@@ -583,20 +561,8 @@ export class WorkflowEngine {
                   };
                 }
               }
-              if (
-                projectWriteRequired &&
-                projectWriteCalls === 0 &&
-                !isProjectWriteTool(name) &&
-                projectToolCallsBeforeWrite >= maxProjectToolCallsBeforeWrite
-              ) {
-                projectToolCallsRejectedBeforeWrite++;
-                projectWriteBudgetExhausted = true;
-                cancelWorkerPass?.("project write budget exhausted");
-                throw projectWriteBudgetExhaustedError(maxProjectToolCallsBeforeWrite);
-              }
               const out = await tool.execute!(args, ctx);
               if (isProjectWriteTool(name) && toolResultSucceeded(out)) projectWriteCalls++;
-              else if (projectWriteRequired && projectWriteCalls === 0) projectToolCallsBeforeWrite++;
               return out;
             },
           }
@@ -620,13 +586,8 @@ export class WorkflowEngine {
       prompt: buildPrompt(task, wf, stage),
       tools,
       signal: controller.signal,
-      ...(this.o.maxStepsPerWake ? { maxSteps: this.o.maxStepsPerWake } : {}),
       ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),
     });
-    cancelWorkerPass = (reason: string) => {
-      controller.abort();
-      run.cancel(reason);
-    };
     const consumeRun = async (
       runHandle: ReturnType<AgentLoop["run"]>,
       diagnostics: RunDiagnostics,
@@ -653,14 +614,6 @@ export class WorkflowEngine {
       projectToolCalls,
       projectWriteCalls,
       projectWriteRequired,
-      ...(projectWriteRequired
-        ? {
-            maxProjectToolCallsBeforeWrite,
-            projectToolCallsBeforeWrite,
-            projectToolCallsRejectedBeforeWrite,
-            projectWriteBudgetExhausted,
-          }
-        : {}),
     };
     await this.chron({
       type: "wake.diagnostics",
@@ -671,7 +624,7 @@ export class WorkflowEngine {
     });
 
     const hasStageCommitSignal = commands.some((command) => isStageCommitSignal(command, stage));
-    if (!hasStageCommitSignal && (result.status !== "error" || projectWriteBudgetExhausted)) {
+    if (!hasStageCommitSignal && result.status !== "error") {
       const firstPassText = compactPreview(result.text || workerDiagnostics.textPreview);
       const firstPassCommands = commands;
       const commitCommands: Command[] = [];
@@ -771,11 +724,7 @@ export class WorkflowEngine {
         wakeId,
         summary: `worker produced no stage commit commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
         data: {
-          reason: projectWriteBudgetExhausted
-            ? "project_write_budget_exhausted"
-            : firstPassCommands.length === 0
-              ? "no_state_commands"
-              : "no_stage_commit_commands",
+          reason: firstPassCommands.length === 0 ? "no_state_commands" : "no_stage_commit_commands",
           fallbackPolicy: canCommitStageProgress ? "state_commit_allowed" : "project_write_required_without_write",
           stageId: task.stageId,
           firstPassCommands: firstPassCommands.map((command) => command.kind),
@@ -783,14 +732,6 @@ export class WorkflowEngine {
           projectToolCalls,
           projectWriteCalls,
           projectWriteRequired,
-          ...(projectWriteRequired
-            ? {
-                maxProjectToolCallsBeforeWrite,
-                projectToolCallsBeforeWrite,
-                projectToolCallsRejectedBeforeWrite,
-                projectWriteBudgetExhausted,
-              }
-            : {}),
           ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
           firstPassTextChars: firstPassText.chars,
           ...(firstPassText.preview ? { firstPassTextPreview: firstPassText.preview } : {}),
@@ -811,7 +752,6 @@ export class WorkflowEngine {
         prompt: commitPrompt,
         tools: commitTools,
         signal: commitController.signal,
-        maxSteps: 2,
         runtimeOptions:
           loop.id === "ai-sdk"
             ? {

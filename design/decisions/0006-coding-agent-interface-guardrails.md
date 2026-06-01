@@ -39,11 +39,11 @@ Agent-Computer Interface.
 
 Near-term guardrails:
 
-1. A development implementation wake may inspect briefly, but stages requiring
-   project writes get a deterministic pre-write exploration budget. Once that
-   budget is exhausted, further project tools hard-stop the worker pass and
-   route to commit fallback; a late write after extra reads is not accepted as
-   valid implementation evidence.
+1. Stages requiring project writes must produce successful structured write
+   evidence before normal stage progress can be committed. Wakespace must not
+   enforce that with fixed tool-call or step-count budgets; the worker's real
+   budget is its model/context window and the quality of the ACI context it is
+   given.
 2. Existing files should be edited through structured edit tools such as
    `replaceInFile`; `writeFile` is for new files or explicit large rewrites, not
    blind overwrites.
@@ -77,11 +77,11 @@ hooks, and role separation.
 
 ## Implementation Notes
 
-- Add `maxProjectToolCallsBeforeWrite` to stage definitions, defaulting in the
-  engine but tightened for the builtin development implement stage.
-- Include the active pre-write budget in the worker system prompt.
-- Record pre-write budget counters and exhaustion facts in `wake.diagnostics`
-  and `wake.commit`.
+- Do not add count-based pre-write caps to stage definitions or prompts.
+- Do not pass wakespace worker step caps as a budget policy; worker limits
+  should come from the model/context window and wall-clock timeout handling.
+- Keep normalized project tool and write counts in `wake.diagnostics` and
+  `wake.commit` as facts for PM review, not as policy gates.
 - Refuse `writeFile` overwrites of existing files in project-write stages.
 - Generate JSON schema for `commit_stage.fields` from workflow field types and
   validate field values in the tool executor.

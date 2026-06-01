@@ -71,7 +71,6 @@ const engine = new WorkflowEngine({
   chronicle: new JsonlChronicleStore(dir),
   loop,
   intakeLoop: buildIntake,
-  maxStepsPerWake: 6,
   wakeTimeoutMs: 90_000,
   hooks: {
     onWakeStart: ({ wakeId, stageId }) => console.log(`▶ ${wakeId} @ "${stageId}"`),

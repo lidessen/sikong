@@ -83,7 +83,6 @@ export interface OpenWorkspaceOptions {
   /** Engine hooks (e.g. the CLI collects wake errors here to set its exit code). */
   hooks?: EngineHooks;
   wakeTimeoutMs?: number;
-  maxStepsPerWake?: number;
 }
 
 export interface Workspace {
@@ -151,7 +150,6 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     intakeLoop,
     ...(opts.hooks ? { hooks: opts.hooks } : {}),
     wakeTimeoutMs: opts.wakeTimeoutMs ?? 90_000,
-    maxStepsPerWake: opts.maxStepsPerWake ?? 12,
   });
   return { engine, events, projections, chronicle, registry, projects, workers };
 }

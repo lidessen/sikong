@@ -129,7 +129,7 @@ describe("workspace (CLI wiring)", () => {
     }
   });
 
-  test("default wakes have enough step budget for small development edits", async () => {
+  test("default wakes do not impose a max step cap", async () => {
     const dir = await tmp();
     let observedMaxSteps: number | undefined;
     try {
@@ -145,7 +145,7 @@ describe("workspace (CLI wiring)", () => {
       await ws.engine.createTask({ projectId: "default", workflowId: "bug", taskId: "steps", fields: {} });
       await ws.engine.idle();
 
-      expect(observedMaxSteps).toBe(12);
+      expect(observedMaxSteps).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
