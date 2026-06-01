@@ -36,7 +36,7 @@
     },
     "packages/wakespace": {
       "name": "wakespace",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "bin": {
         "wakespace": "bin/wakespace",
       },
@@ -46,6 +46,15 @@
         "agent-loop": "workspace:*",
         "typescript": "^6.0.3",
         "vitest": "^4.1.7",
+      },
+      "optionalDependencies": {
+        "wakespace-darwin-arm64": "0.1.2",
+        "wakespace-darwin-x64": "0.1.2",
+        "wakespace-linux-arm64": "0.1.2",
+        "wakespace-linux-arm64-musl": "0.1.2",
+        "wakespace-linux-x64": "0.1.2",
+        "wakespace-linux-x64-musl": "0.1.2",
+        "wakespace-windows-x64": "0.1.2",
       },
     },
   },

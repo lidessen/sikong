@@ -53,16 +53,16 @@ describe("workers", () => {
   test("discoverWorkers returns the environment shape", async () => {
     const d = await discoverWorkers();
     expect(Array.isArray(d.providers)).toBe(true);
+    expect(Array.isArray(d.providerDetails)).toBe(true);
     expect(Array.isArray(d.runtimes)).toBe(true);
-    expect(Array.isArray(d.suggestions)).toBe(true);
-    // every suggestion pairs an available runtime with an available provider
-    for (const s of d.suggestions) {
-      expect(d.runtimes).toContain(s.runtime);
-      expect(d.providers).toContain(s.provider);
-    }
+    expect(Array.isArray(d.runtimeDetails)).toBe(true);
+    expect(Array.isArray(d.compatibility)).toBe(true);
+    expect(d).not.toHaveProperty("suggestions");
+    expect(d.providerDetails.map((p) => p.id).sort()).toEqual(["anthropic", "deepseek", "openai"]);
+    for (const c of d.compatibility) expect(d.runtimeDetails.find((r) => r.id === c.runtime)?.usableAsWorker).toBe(true);
   });
 
-  test("discoverWorkers reports codex and cursor without suggesting them as command-tool workers", async () => {
+  test("discoverWorkers reports codex and cursor as facts without making suggestions", async () => {
     const dir = await tmp();
     const oldPath = process.env.PATH;
     const oldCursorKey = process.env.CURSOR_API_KEY;
@@ -78,8 +78,9 @@ describe("workers", () => {
       expect(d.runtimes).toContain("cursor");
       expect(d.runtimeDetails.find((r) => r.id === "codex")?.usableAsWorker).toBe(false);
       expect(d.runtimeDetails.find((r) => r.id === "cursor")?.usableAsWorker).toBe(false);
-      expect(d.suggestions.map((s) => s.runtime as string)).not.toContain("codex");
-      expect(d.suggestions.map((s) => s.runtime as string)).not.toContain("cursor");
+      expect(d).not.toHaveProperty("suggestions");
+      expect(d.compatibility.map((c) => c.runtime as string)).not.toContain("codex");
+      expect(d.compatibility.map((c) => c.runtime as string)).not.toContain("cursor");
     } finally {
       process.env.PATH = oldPath;
       if (oldCursorKey === undefined) delete process.env.CURSOR_API_KEY;

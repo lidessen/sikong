@@ -89,7 +89,7 @@ export function buildCommitSystem(
     "You must now call at least one provided state tool. Do not answer in plain text.",
     evidence.projectWriteCalls > 0
       ? "If the task work is complete, call `commit_done` with a concise summary grounded in the project edits already performed."
-      : "Because no project writeFile call was observed, there is no edit evidence for fallback completion. Do not mark the task done; call `block` with a concrete reason.",
+      : "Because no project writeFile call was observed, there is no edit evidence for fallback completion. Do not mark the task done or request cancellation; call `block` with a concrete reason.",
     "If the task cannot be completed, call `block` with a concrete reason.",
   ];
   if (priorText.trim()) lines.push("", "## Previous worker text", priorText.trim());

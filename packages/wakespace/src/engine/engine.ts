@@ -438,20 +438,23 @@ export class WorkflowEngine {
         },
         execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
       });
-      commitTools.cancel = defineTool({
-        description: "Cancel the task when it should not be completed at all.",
-        inputSchema: {
-          type: "object",
-          properties: { reason: { type: "string" } },
-          additionalProperties: false,
-        },
-        execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
-      });
+      if (projectWriteCalls > 0) {
+        commitTools.cancel = defineTool({
+          description:
+            "Request cancellation when this task should not be completed at all. Worker requests are audit-only until a lead approves cancellation.",
+          inputSchema: {
+            type: "object",
+            properties: { reason: { type: "string" } },
+            additionalProperties: false,
+          },
+          execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
+        });
+      }
       const commitController = new AbortController();
       const commitPrompt =
         projectWriteCalls > 0
-          ? "Commit durable wakespace progress now. Call `commit_done` if complete, otherwise call `block` or `cancel`. Do not answer in plain text."
-          : "Commit durable wakespace progress now. No project writeFile evidence was observed, so call `block` with a concrete reason or `cancel`. Do not answer in plain text.";
+          ? "Commit durable wakespace progress now. Call `commit_done` if complete, otherwise call `block` or request cancellation. Do not answer in plain text."
+          : "Commit durable wakespace progress now. No project writeFile evidence was observed, so call `block` with a concrete reason. Do not answer in plain text.";
       const commitRun = loop.run({
         system: buildCommitSystem(task, wf, result.text, { projectToolCalls, projectWriteCalls }),
         prompt: commitPrompt,

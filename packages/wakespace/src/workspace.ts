@@ -10,7 +10,7 @@ import {
   type ModelProvider,
 } from "agent-loop";
 import { WorkflowEngine, type EngineHooks, type LoopFactory, type WakeContext } from "./engine";
-import { GENERAL_WORKFLOW } from "./workflow/builtin";
+import { DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./workflow/builtin";
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
 import type { Worker } from "./worker";
@@ -112,8 +112,10 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   const workers = new JsonWorkerStore(dir);
 
   const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+  registry.register(DEVELOPMENT_WORKFLOW);
   for (const wf of await loadWorkflows(dir)) registry.register(wf);
   for (const wf of opts.extraWorkflows ?? []) registry.register(wf);
+  registry.register(DEVELOPMENT_WORKFLOW); // builtin development workflow wins over persisted definitions
   registry.register(GENERAL_WORKFLOW); // builtin fallback always wins over a persisted "general"
 
   // Resolve the hired worker per wake: task override → project default → workspace

@@ -101,6 +101,33 @@ describe("workspace (CLI wiring)", () => {
     }
   });
 
+  test("openWorkspace registers builtin development workflow and keeps it builtin-owned", async () => {
+    const dir = await tmp();
+    try {
+      const fakeDevelopment: WorkflowDef = {
+        id: "development",
+        version: "1",
+        name: "Fake Development",
+        description: "",
+        fields: {},
+        stages: [
+          { id: "open", category: "in_progress", entry: { op: "always" } },
+          { id: "done", category: "done", entry: { op: "always" } },
+        ],
+      };
+      const ws = await openWorkspace(dir, {
+        extraWorkflows: [fakeDevelopment],
+        loop: () => mockLoop({ response: "x" }),
+      });
+
+      const development = ws.registry.get("development");
+      expect(development?.fields.plan).toBeDefined();
+      expect(development?.stages.map((s) => s.id)).toEqual(["plan", "design", "implement", "verify", "done"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("durable subtask spawning across fresh engines doesn't collide on ids", async () => {
     const CHILD: WorkflowDef = {
       id: "child", version: "1", name: "Child", description: "",

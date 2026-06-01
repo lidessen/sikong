@@ -118,6 +118,7 @@ export type TaskEventType =
   | "subtask.created"
   | "task.blocked"
   | "task.unblocked"
+  | "cancellation.requested"
   | "task.cancelled";
 
 export interface TaskEvent {

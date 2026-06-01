@@ -39,4 +39,4 @@ export {
   type ValidationIssue,
 } from "./validate";
 export { CommandRejectedError, WorkflowValidationError } from "./errors";
-export { GENERAL_WORKFLOW } from "./builtin";
+export { DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./builtin";

@@ -38,6 +38,7 @@ Important event types:
 - `subtask.created`
 - `task.blocked`
 - `task.unblocked`
+- `cancellation.requested`
 - `task.cancelled`
 
 ### Commands
@@ -55,6 +56,10 @@ Agents and leads propose state changes as commands:
 Commands are not events. The reducer validates commands against the current
 task and workflow, then emits events. Illegal commands are rejected or skipped
 by the wake engine with an `onReject` hook.
+
+Worker `cancel` commands request cancellation; they do not make the task
+terminal. Lead `cancel` commands approve cancellation and emit the terminal
+`task.cancelled` event.
 
 ### Guards
 

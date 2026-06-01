@@ -38,36 +38,36 @@ export function isValidWorkerId(id: string): boolean {
 
 // ---- discovery: inspect the environment + suggest workers -----------------
 
-export interface WorkerSuggestion {
-  id: string;
-  runtime: WorkerRuntime;
-  provider: WorkerProvider;
-  model: string;
-  description: string;
-}
-
 export interface RuntimeDiscovery {
   id: DiscoveredRuntime;
   usableAsWorker: boolean;
   reason?: string;
 }
 
+export interface ProviderDiscovery {
+  id: WorkerProvider;
+  configured: boolean;
+  env: readonly string[];
+  aiSdkAvailable: boolean;
+}
+
+export interface RuntimeCompatibility {
+  runtime: WorkerRuntime;
+  providers: readonly WorkerProvider[];
+}
+
 export interface Discovery {
   providers: WorkerProvider[];
+  providerDetails: ProviderDiscovery[];
   runtimes: DiscoveredRuntime[];
   runtimeDetails: RuntimeDiscovery[];
-  suggestions: WorkerSuggestion[];
+  compatibility: RuntimeCompatibility[];
 }
 
 const PROVIDER_ENV: Record<WorkerProvider, readonly string[]> = {
   deepseek: ["DEEPSEEK_API_KEY"],
   anthropic: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
   openai: ["OPENAI_API_KEY"],
-};
-const MODEL_HINT: Record<WorkerProvider, string> = {
-  deepseek: "deepseek-v4-flash",
-  anthropic: "claude-opus-4-8",
-  openai: "gpt-5.1",
 };
 // runtime ⊥ provider compatibility (claude-code is Anthropic-wire; not OpenAI).
 const COMPATIBLE: Record<WorkerRuntime, readonly WorkerProvider[]> = {
@@ -139,9 +139,15 @@ export async function discoverWorkers(): Promise<Discovery> {
   );
 
   const aiSdkProviderAvailable = new Map<WorkerProvider, boolean>();
-  for (const provider of providers) {
+  for (const provider of Object.keys(PROVIDER_ENV) as WorkerProvider[]) {
     aiSdkProviderAvailable.set(provider, await hasAiSdkProvider(provider));
   }
+  const providerDetails: ProviderDiscovery[] = (Object.keys(PROVIDER_ENV) as WorkerProvider[]).map((provider) => ({
+    id: provider,
+    configured: providers.includes(provider),
+    env: PROVIDER_ENV[provider],
+    aiSdkAvailable: aiSdkProviderAvailable.get(provider) ?? false,
+  }));
 
   const runtimeDetails: RuntimeDiscovery[] = [];
   const runnableWorkers: WorkerRuntime[] = [];
@@ -170,17 +176,10 @@ export async function discoverWorkers(): Promise<Discovery> {
     });
   }
 
-  const suggestions: WorkerSuggestion[] = [];
-  for (const runtime of runnableWorkers)
-    for (const provider of COMPATIBLE[runtime])
-      if (providers.includes(provider) && (runtime !== "ai-sdk" || aiSdkProviderAvailable.get(provider)))
-        suggestions.push({
-          id: `${provider}-${runtime === "ai-sdk" ? "sdk" : "cc"}`,
-          runtime,
-          provider,
-          model: MODEL_HINT[provider],
-          description: `${provider} via ${runtime} (confirm the model)`,
-        });
+  const compatibility: RuntimeCompatibility[] = runnableWorkers.map((runtime) => ({
+    runtime,
+    providers: COMPATIBLE[runtime],
+  }));
 
-  return { providers, runtimes: runtimeDetails.map((r) => r.id), runtimeDetails, suggestions };
+  return { providers, providerDetails, runtimes: runtimeDetails.map((r) => r.id), runtimeDetails, compatibility };
 }

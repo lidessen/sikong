@@ -31,3 +31,80 @@ export const GENERAL_WORKFLOW: WorkflowDef = {
     },
   ],
 };
+
+export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
+  id: "development",
+  version: "1",
+  name: "Development",
+  description: "Plan, design, implement, and verify a project code or documentation change.",
+  fields: {
+    request: { type: "string", description: "The original development request." },
+    plan: { type: "string", description: "Bounded implementation plan and acceptance criteria." },
+    design: { type: "string", description: "Design notes, tradeoffs, and selected approach." },
+    implementation: { type: "string", description: "What was changed during implementation." },
+    changedFiles: { type: "json", description: "Array of project file paths changed by the implementation." },
+    verification: { type: "string", description: "Verification commands, results, and any residual risk." },
+    summary: { type: "string", description: "One-line final outcome." },
+  },
+  stages: [
+    {
+      id: "plan",
+      category: "in_progress",
+      entry: { op: "always" },
+      instructions:
+        "Inspect the request and relevant project context. Set `plan` with the bounded approach and acceptance criteria, then request transition. Block if the request needs lead clarification.",
+    },
+    {
+      id: "design",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "plan", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      instructions:
+        "Turn the plan into a concrete design. Set `design` with the chosen approach and important tradeoffs, then request transition.",
+    },
+    {
+      id: "implement",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "design", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      instructions:
+        "Implement the designed change with project tools. Use writeFile for edits, set `implementation`, set `changedFiles` to a JSON array of changed project paths, then request transition. Block instead of requesting transition if no edit should be made.",
+    },
+    {
+      id: "verify",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "implementation", cmp: "exists" },
+          { op: "field", field: "changedFiles", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      instructions:
+        "Verify the implementation with focused checks. Set `verification` with commands and results, set `summary`, then request transition. Block if verification fails or cannot run.",
+    },
+    {
+      id: "done",
+      category: "done",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "verification", cmp: "exists" },
+          { op: "field", field: "summary", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+    },
+  ],
+};

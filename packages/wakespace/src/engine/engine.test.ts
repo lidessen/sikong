@@ -13,7 +13,7 @@ import {
   type RunInput,
 } from "agent-loop";
 import { WorkflowEngine, type LoopFactory } from "./engine";
-import { GENERAL_WORKFLOW } from "../workflow/builtin";
+import { DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "../workflow/builtin";
 import type { WorkflowDef } from "../workflow/types";
 import {
   MemoryChronicleStore,
@@ -79,6 +79,78 @@ describe("WorkflowEngine wake cycle", () => {
     expect((await engine.getTask("g1"))?.status).toBe("done");
   });
 
+  test("worker cancel records an approval request instead of terminating the task", async () => {
+    const events = new MemoryEventStore(() => 1);
+    const engine = new WorkflowEngine({
+      events,
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop: () => mockLoop({ callTool: { name: "cancel", args: { reason: "not worth doing" } } }),
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "worker-cancel", fields: { request: "do X" } });
+    await engine.idle();
+
+    expect((await engine.getTask("worker-cancel"))?.status).toBe("in_progress");
+    expect((await events.load("worker-cancel")).map((e) => e.type)).toContain("cancellation.requested");
+    expect((await events.load("worker-cancel")).map((e) => e.type)).not.toContain("task.cancelled");
+  });
+
+  test("drives DEVELOPMENT through plan, design, implement, verify, and done", async () => {
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "Plan the bounded change." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "Use the established pattern." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
+
+        if (ctx.stageId === "implement") {
+          await input.tools?.set_field?.execute?.(
+            { field: "implementation", value: "Changed worker discovery output." },
+            {},
+          );
+          await input.tools?.set_field?.execute?.(
+            { field: "changedFiles", value: ["packages/wakespace/src/worker.ts"] },
+            {},
+          );
+          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
+          return;
+        }
+
+        await input.tools?.set_field?.execute?.({ field: "verification", value: "Focused tests passed." }, {});
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "Development workflow completed." }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
+      });
+    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW]);
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development",
+      taskId: "dev1",
+      fields: { request: "change worker discover" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("dev1");
+    expect(task?.status).toBe("done");
+    expect(task?.stageId).toBe("done");
+    expect(task?.fields).toMatchObject({
+      plan: "Plan the bounded change.",
+      design: "Use the established pattern.",
+      implementation: "Changed worker discovery output.",
+      verification: "Focused tests passed.",
+      summary: "Development workflow completed.",
+    });
+    expect(task?.fields.changedFiles).toEqual(["packages/wakespace/src/worker.ts"]);
+  });
+
   test("runs a forced commit pass when a worker returns text without state commands", async () => {
     const root = await mkdtemp(join(tmpdir(), "wakespace-commit-tools-"));
     await writeFile(join(root, "marker.txt"), "done\n", "utf8");
@@ -126,7 +198,7 @@ describe("WorkflowEngine wake cycle", () => {
       scriptLoop(async (input) => {
         calls++;
         if (calls === 1) return;
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel"]);
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
         await input.tools?.block?.execute?.({ reason: "no project writeFile evidence" }, {});
       }, "ai-sdk");
     const engine = newEngine(loop);

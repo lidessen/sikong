@@ -102,7 +102,11 @@ export function apply(
       if (task.status !== "blocked") reject(`task ${task.id} is not blocked`);
       return [mk("task.unblocked", {})];
     case "cancel":
-      return [mk("task.cancelled", command.reason ? { reason: command.reason } : {})];
+      return [
+        source === "lead"
+          ? mk("task.cancelled", command.reason ? { reason: command.reason } : {})
+          : mk("cancellation.requested", command.reason ? { reason: command.reason } : {}),
+      ];
   }
 }
 
@@ -236,6 +240,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
       break;
     case "transition.requested":
     case "note.appended":
+    case "cancellation.requested":
       break; // signal / audit only — no projection change
   }
 

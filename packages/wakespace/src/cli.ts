@@ -385,16 +385,18 @@ switch (cmd) {
         printJson(d);
         break;
       }
-      console.log(`providers: ${d.providers.join(", ") || "(none — set a provider API key)"}`);
-      console.log(`runtimes:  ${d.runtimes.join(", ") || "(none — install @ai-sdk/<provider> or the claude CLI)"}`);
-      for (const r of d.runtimeDetails.filter((rt) => !rt.usableAsWorker))
-        console.log(`  ${r.id}: visible, not createable as a wakespace worker — ${r.reason}`);
-      console.log("\nsuggested workers (create the ones you want, confirm the model):");
-      if (d.suggestions.length === 0) console.log("  (none available in this environment)");
-      for (const s of d.suggestions)
+      console.log("providers:");
+      for (const p of d.providerDetails)
         console.log(
-          `  ${cli} worker create ${s.id} --runtime ${s.runtime} --provider ${s.provider} --model ${s.model} --desc "${s.description}" --dir ${dir}`,
+          `  ${p.id}: configured=${p.configured ? "yes" : "no"} ai-sdk=${p.aiSdkAvailable ? "yes" : "no"} env=${p.env.join("|")}`,
         );
+      console.log("\nruntimes:");
+      if (d.runtimeDetails.length === 0) console.log("  (none detected)");
+      for (const r of d.runtimeDetails)
+        console.log(`  ${r.id}: usableAsWorker=${r.usableAsWorker ? "yes" : "no"}${r.reason ? ` reason=${r.reason}` : ""}`);
+      console.log("\ncompatibility:");
+      if (d.compatibility.length === 0) console.log("  (no usable worker runtimes detected)");
+      for (const c of d.compatibility) console.log(`  ${c.runtime}: providers=${c.providers.join(", ")}`);
       break;
     }
     if (sub === "list") {

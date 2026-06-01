@@ -91,7 +91,8 @@ export function buildCommandTools(
 
   if (on("cancel"))
     tools.cancel = defineTool({
-      description: "Cancel the task (terminal) when it should not be done at all.",
+      description:
+        "Request cancellation when this task should not be done at all. Worker requests are audit-only until a lead approves cancellation.",
       inputSchema: {
         type: "object",
         properties: { reason: { type: "string" } },

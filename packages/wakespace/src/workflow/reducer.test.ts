@@ -86,13 +86,23 @@ describe("apply (the aggregate)", () => {
     expect(ev?.payload).toMatchObject({ fromStage: "todo", reason: "ready" });
   });
 
-  test("a cancelled task is terminal — accepts no further commands", () => {
+  test("lead cancel is terminal — accepts no further commands", () => {
     let t = initial();
-    t = applyEventsToTask(t, stamp(apply(t, WF, { kind: "cancel", reason: "drop" })), WF);
+    t = applyEventsToTask(t, stamp(apply(t, WF, { kind: "cancel", reason: "drop" }, { source: "lead" })), WF);
     expect(t.status).toBe("cancelled");
     expect(() => apply(t, WF, { kind: "set_field", field: "score", value: 1 })).toThrow(
       CommandRejectedError,
     );
+  });
+
+  test("worker cancel requests approval without terminating the task", () => {
+    let t = initial();
+    const events = apply(t, WF, { kind: "cancel", reason: "not worth doing" }, { source: "worker" });
+    expect(events[0]?.type).toBe("cancellation.requested");
+    expect(events[0]?.payload).toMatchObject({ reason: "not worth doing" });
+    t = applyEventsToTask(t, stamp(events), WF);
+    expect(t.status).toBe("todo");
+    expect(apply(t, WF, { kind: "set_field", field: "score", value: 1 })[0]?.type).toBe("field.set");
   });
 
   test("block / unblock toggles status; double-block is rejected", () => {

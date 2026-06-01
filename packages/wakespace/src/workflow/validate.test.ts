@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { assertValidWorkflow, validateWorkflow, type ValidateOptions } from "./validate";
-import { GENERAL_WORKFLOW } from "./builtin";
+import { DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./builtin";
 import { WorkflowValidationError } from "./errors";
 import type { WorkflowDef } from "./types";
 
@@ -10,6 +10,10 @@ const codes = (wf: WorkflowDef, opts?: ValidateOptions) =>
 describe("validateWorkflow", () => {
   test("the builtin GENERAL workflow is valid", () => {
     expect(validateWorkflow(GENERAL_WORKFLOW)).toEqual([]);
+  });
+
+  test("the builtin DEVELOPMENT workflow is valid", () => {
+    expect(validateWorkflow(DEVELOPMENT_WORKFLOW)).toEqual([]);
   });
 
   test("flags a workflow with no terminal (done) stage", () => {

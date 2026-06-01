@@ -3,6 +3,22 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 0.1.2 — 2026-06-01
+
+### Added
+
+- Added the builtin `development` workflow with explicit plan, design,
+  implement, and verify stages for general project work.
+
+### Changed
+
+- Worker discovery now reports provider, runtime, and compatibility facts
+  without generating worker-creation suggestions.
+- Worker-issued cancellation now records an approval request instead of
+  immediately terminating the task.
+- Workers that performed no project writes are prompted to block rather than
+  claim completion during the commit fallback pass.
+
 ## 0.1.1 — 2026-06-01
 
 ### Added
