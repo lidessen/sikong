@@ -90,6 +90,10 @@ hooks, and role separation.
 - In verify stages, reject verification output fields and stage transition when
   failed project shell commands were observed; the task must block with the
   failed command evidence instead of recording a passing summary.
+- Expose an allowlisted host-side verification tool in verify stages so workers
+  can run real project checks such as typecheck, tests, build, focused tests,
+  and `git diff --check` without relying on the sandboxed project shell. Redact
+  the project root from captured command output before storing chronicle facts.
 - Stop the current agent run after terminal workflow intent is recorded through
   `request_transition`, `block`, `cancel`, or commit fallback's `commit_stage`;
   this is lifecycle control, not a budget.
@@ -101,6 +105,9 @@ hooks, and role separation.
 - Do not expose raw `bash` in project-write implementation stages when
   structured project tools are available; keep shell access for non-write stages
   such as verification.
+- Implementation-stage instructions should force a clear branch after
+  inspection: make the smallest valid structured edit, or call `block` with the
+  factual no-edit reason.
 - Refuse `writeFile` overwrites of existing files in project-write stages.
 - Generate JSON schema for `commit_stage.fields` from workflow field types and
   validate field values in the tool executor.

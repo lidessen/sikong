@@ -78,9 +78,14 @@ export function buildSystem(
       `Project tools available to this worker: ${projectToolNames.map((n) => `\`${n}\``).join(", ")}.`,
       "Use them to inspect and edit the project, search code, and fetch web context when the stage requires it. Prefer `rg` for finding symbols and `viewFile` for line-numbered file windows; use raw `readFile` only when the whole file is needed. Local project tools are scoped to the project root. They do not replace the workflow state tools; record durable progress with the stage tools above.",
     );
+    if (stage?.id === "verify" && projectToolNames.includes("runHostCheck")) {
+      lines.push(
+        "For deterministic verification, prefer `runHostCheck` over sandboxed `bash`; it runs approved checks against the real host project checkout and returns exit code plus bounded stdout/stderr.",
+      );
+    }
     if (stage?.requiresProjectWrite) {
       lines.push(
-        "This stage requires a successful structured project write through `replaceInFile` or `writeFile` before normal stage progress can be committed. Raw shell access may be reserved for non-write stages such as verification. Gather the context you need, then edit; if no edit should be made, call `block` with the concrete reason.",
+        "This stage requires a successful structured project write through `replaceInFile` or `writeFile` before normal stage progress can be committed. Raw shell access may be reserved for non-write stages such as verification. Gather the context you need, then edit; do not end the wake after inspection only. If no edit should be made, call `block` with the concrete reason before returning.",
       );
     }
   }
@@ -115,11 +120,11 @@ export function buildCommitSystem(
     "The previous worker pass ended without calling any wakespace state tool.",
     `Project tool calls observed in that pass: ${evidence.projectToolCalls}.`,
     `Project write tool calls observed in that pass: ${evidence.projectWriteCalls}.`,
-    `Failed project shell commands observed in that pass: ${evidence.failedProjectCommandCalls ?? 0}.`,
+    `Failed project verification commands observed in that pass: ${evidence.failedProjectCommandCalls ?? 0}.`,
     stage?.outputFields?.length ? `Stage output fields: ${stage.outputFields.join(", ")}.` : "Stage output fields: unrestricted by stage.",
     "You must now call at least one provided state tool. Do not answer in plain text.",
     stage?.id === "verify" && (evidence.failedProjectCommandCalls ?? 0) > 0
-      ? "Verification observed failed project shell commands. Do not mark verification complete; call `block` with the concrete failed command evidence."
+      ? "Verification observed failed project commands. Do not mark verification complete; call `block` with the concrete failed command evidence."
       : evidence.projectWriteRequired && evidence.projectWriteCalls === 0
         ? "This stage requires project write evidence, but no project write tool call was observed. Do not mark the stage complete or request cancellation; call `block` with a concrete reason."
         : "Use the provided workflow state tools to set the fields this stage requires, then call `request_transition` if this stage is complete.",

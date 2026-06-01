@@ -387,6 +387,7 @@ describe("WorkflowEngine wake cycle", () => {
     await engine.idle();
 
     expect(system).not.toContain("Pre-write exploration budget");
+    expect(system).toContain("do not end the wake after inspection only");
     expect(await readFile(join(root, "marker.txt"), "utf8")).toBe("after\n");
     expect((await engine.getTask("no-prewrite-budget"))?.status).toBe("done");
     const workerDiagnostics = (
@@ -611,6 +612,164 @@ describe("WorkflowEngine wake cycle", () => {
       rejectedStateCommands: 3,
     });
     const wakeCommit = (await chronicle.recent({ taskId: "verify-failed-command", type: "wake.commit", limit: 20 }))[0];
+    expect(wakeCommit?.data).toMatchObject({
+      fallbackPolicy: "verification_command_failed",
+      allowedTools: ["block"],
+    });
+  });
+
+  test("verify stages expose a host check tool for real project commands", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-host-check-success-"));
+    await writeFile(join(root, "package.json"), JSON.stringify({ scripts: { typecheck: "pwd" } }), "utf8");
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let sawHostCheckInImplement = false;
+    let sawHostCheckInVerify = false;
+    let verifySystem = "";
+    let hostCheckResult: unknown;
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
+        if (ctx.stageId === "implement") {
+          sawHostCheckInImplement = Boolean(input.tools?.runHostCheck);
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+            {},
+          );
+          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
+          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
+          return;
+        }
+        if (ctx.stageId === "verify") {
+          sawHostCheckInVerify = Boolean(input.tools?.runHostCheck);
+          verifySystem = input.system ?? "";
+          hostCheckResult = await input.tools?.runHostCheck?.execute?.({ check: "typecheck" }, {});
+          await input.tools?.set_field?.execute?.({ field: "verification", value: "runHostCheck typecheck passed." }, {});
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "Development completed." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
+        }
+      }, "ai-sdk");
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry,
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development",
+      taskId: "verify-host-check",
+      fields: { request: "edit marker" },
+    });
+    await engine.idle();
+
+    expect(sawHostCheckInImplement).toBe(false);
+    expect(sawHostCheckInVerify).toBe(true);
+    expect(verifySystem).toContain("prefer `runHostCheck`");
+    expect(hostCheckResult).toMatchObject({
+      check: "typecheck",
+      command: "bun run typecheck",
+      cwd: "project root",
+      exitCode: 0,
+      timedOut: false,
+    });
+    expect(JSON.stringify(hostCheckResult)).not.toContain(root);
+    expect(hostCheckResult).toMatchObject({ stdout: expect.stringContaining("[project-root]") });
+    expect((await engine.getTask("verify-host-check"))?.status).toBe("done");
+    const workerDiagnostics = (
+      await chronicle.recent({ taskId: "verify-host-check", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "verify");
+    expect(workerDiagnostics?.data).toMatchObject({
+      projectToolCalls: 1,
+      failedProjectCommandCalls: 0,
+    });
+  });
+
+  test("verify stages block when host project checks fail", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-host-check-failure-"));
+    await writeFile(join(root, "package.json"), JSON.stringify({ scripts: { typecheck: "exit 7" } }), "utf8");
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
+        if (ctx.stageId === "implement") {
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+            {},
+          );
+          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
+          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
+          return;
+        }
+        if (ctx.stageId === "verify") {
+          if (input.tools?.block && !input.tools?.set_field) {
+            await input.tools.block.execute?.({ reason: "host typecheck failed" }, {});
+            return;
+          }
+          await input.tools?.runHostCheck?.execute?.({ check: "typecheck" }, {});
+          await input.tools?.set_field?.execute?.({ field: "verification", value: "Claimed green." }, {});
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "Done." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
+        }
+      }, "ai-sdk");
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry,
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development",
+      taskId: "verify-host-check-failed",
+      fields: { request: "edit marker" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("verify-host-check-failed");
+    expect(task?.status).toBe("blocked");
+    expect(task?.stageId).toBe("verify");
+    expect(task?.fields.verification).toBeUndefined();
+    expect(task?.fields.summary).toBeUndefined();
+    const workerDiagnostics = (
+      await chronicle.recent({ taskId: "verify-host-check-failed", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "verify");
+    expect(workerDiagnostics?.data).toMatchObject({
+      failedProjectCommandCalls: 1,
+      rejectedStateCommands: 3,
+    });
+    const wakeCommit = (await chronicle.recent({ taskId: "verify-host-check-failed", type: "wake.commit", limit: 20 }))[0];
     expect(wakeCommit?.data).toMatchObject({
       fallbackPolicy: "verification_command_failed",
       allowedTools: ["block"],

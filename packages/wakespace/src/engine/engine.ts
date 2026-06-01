@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
@@ -239,8 +240,169 @@ function toolResultSucceeded(result: unknown): boolean {
   return !(isRecord(result) && typeof result.error === "string" && result.error.length > 0);
 }
 
-function failedShellCommand(name: string, result: unknown): boolean {
-  return name === "bash" && isRecord(result) && typeof result.exitCode === "number" && result.exitCode !== 0;
+type HostCheckName = keyof typeof HOST_CHECKS;
+
+const HOST_CHECKS = {
+  typecheck: { command: "bun", args: ["run", "typecheck"] },
+  test: { command: "bun", args: ["run", "test"] },
+  build: { command: "bun", args: ["run", "build"] },
+  diff_check: { command: "git", args: ["diff", "--check"] },
+  wakespace_engine_test: {
+    command: "bunx",
+    args: ["--bun", "vitest", "run", "packages/wakespace/src/engine/engine.test.ts"],
+  },
+  project_tools_test: {
+    command: "bunx",
+    args: ["--bun", "vitest", "run", "packages/agent-loop/src/test/project-tools.test.ts"],
+  },
+} as const;
+
+const HOST_CHECK_NAMES = Object.keys(HOST_CHECKS) as HostCheckName[];
+const DEFAULT_HOST_CHECK_TIMEOUT_MS = 120_000;
+const MAX_HOST_CHECK_TIMEOUT_MS = 300_000;
+const DEFAULT_HOST_CHECK_OUTPUT_CHARS = 12_000;
+const MAX_HOST_CHECK_OUTPUT_CHARS = 50_000;
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(Math.trunc(value), min), max) : fallback;
+}
+
+function truncateText(text: string, limit: number): { text: string; truncated: boolean } {
+  return text.length > limit ? { text: text.slice(0, limit), truncated: true } : { text, truncated: false };
+}
+
+function sanitizeHostOutput(text: string, cwd: string): string {
+  return text.split(cwd).join("[project-root]");
+}
+
+function parseHostCheckArgs(rawArgs: unknown):
+  | { ok: true; check: HostCheckName; timeoutMs: number; maxOutputChars: number }
+  | { ok: false; error: string } {
+  if (!isRecord(rawArgs)) return { ok: false, error: "runHostCheck expects an object input." };
+  if (typeof rawArgs.check !== "string" || !(rawArgs.check in HOST_CHECKS)) {
+    return {
+      ok: false,
+      error: `check must be one of: ${HOST_CHECK_NAMES.join(", ")}`,
+    };
+  }
+  return {
+    ok: true,
+    check: rawArgs.check as HostCheckName,
+    timeoutMs: clampNumber(rawArgs.timeout_ms, DEFAULT_HOST_CHECK_TIMEOUT_MS, 1_000, MAX_HOST_CHECK_TIMEOUT_MS),
+    maxOutputChars: clampNumber(
+      rawArgs.max_output_chars,
+      DEFAULT_HOST_CHECK_OUTPUT_CHARS,
+      1_000,
+      MAX_HOST_CHECK_OUTPUT_CHARS,
+    ),
+  };
+}
+
+function createHostCheckTool(opts: { cwd: string; env?: Record<string, string> }): ToolSet[string] {
+  return defineTool({
+    description:
+      "Run an approved deterministic verification command on the real host project checkout. Use this in verify stages instead of the sandboxed bash tool when checking typecheck, tests, build, or git diff cleanliness.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        check: {
+          type: "string",
+          enum: HOST_CHECK_NAMES,
+          description: "Approved host-side check to run from the project root.",
+        },
+        timeout_ms: {
+          type: "number",
+          description: `Optional timeout in milliseconds. Defaults to ${DEFAULT_HOST_CHECK_TIMEOUT_MS}; max ${MAX_HOST_CHECK_TIMEOUT_MS}.`,
+        },
+        max_output_chars: {
+          type: "number",
+          description: `Maximum stdout/stderr characters to return per stream. Defaults to ${DEFAULT_HOST_CHECK_OUTPUT_CHARS}.`,
+        },
+      },
+      required: ["check"],
+      additionalProperties: false,
+    },
+    execute: async (rawArgs, ctx) => {
+      const parsed = parseHostCheckArgs(rawArgs);
+      if (!parsed.ok) return { error: parsed.error };
+      const spec = HOST_CHECKS[parsed.check];
+      const startedAt = Date.now();
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      let signalAborted = false;
+      const child = spawn(spec.command, spec.args, {
+        cwd: opts.cwd,
+        env: { ...process.env, ...(opts.env ?? {}) },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stop = () => {
+        signalAborted = true;
+        child.kill("SIGTERM");
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+      }, parsed.timeoutMs);
+      ctx.signal?.addEventListener("abort", stop, { once: true });
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk) => {
+        stdout += String(chunk);
+      });
+      child.stderr?.on("data", (chunk) => {
+        stderr += String(chunk);
+      });
+
+      const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolveRun, rejectRun) => {
+        child.once("error", rejectRun);
+        child.once("close", (exitCode, signal) => resolveRun({ exitCode, signal }));
+      }).catch((err) => ({ error: `failed to start host check: ${(err as Error).message}` }));
+
+      clearTimeout(timer);
+      ctx.signal?.removeEventListener("abort", stop);
+      const durationMs = Date.now() - startedAt;
+      const stdoutPreview = truncateText(sanitizeHostOutput(stdout, opts.cwd), parsed.maxOutputChars);
+      const stderrPreview = truncateText(sanitizeHostOutput(stderr, opts.cwd), parsed.maxOutputChars);
+      if ("error" in result) {
+        return {
+          check: parsed.check,
+          command: [spec.command, ...spec.args].join(" "),
+          cwd: "project root",
+          exitCode: 127,
+          timedOut,
+          aborted: signalAborted,
+          durationMs,
+          error: result.error,
+        };
+      }
+      return {
+        check: parsed.check,
+        command: [spec.command, ...spec.args].join(" "),
+        cwd: "project root",
+        exitCode: timedOut ? 124 : result.exitCode,
+        ...(result.signal ? { signal: result.signal } : {}),
+        timedOut,
+        aborted: signalAborted,
+        durationMs,
+        stdout: stdoutPreview.text,
+        stderr: stderrPreview.text,
+        stdoutTruncated: stdoutPreview.truncated,
+        stderrTruncated: stderrPreview.truncated,
+      };
+    },
+  });
+}
+
+function failedProjectCommand(name: string, result: unknown): boolean {
+  if (!isRecord(result)) return false;
+  if (name === "bash" && typeof result.exitCode === "number" && result.exitCode !== 0) return true;
+  if (
+    name === "runHostCheck" &&
+    ((typeof result.exitCode === "number" && result.exitCode !== 0) || result.timedOut === true)
+  )
+    return true;
+  return false;
 }
 
 function isProjectWriteTool(name: string): boolean {
@@ -646,10 +808,17 @@ export class WorkflowEngine {
         if (closesCurrentRun(command)) stopWorkerRun(`wakespace ${command.kind} recorded`);
       },
     });
-    const rawProjectTools =
+    const baseProjectTools =
       loop.id === "ai-sdk" && project?.root
         ? await createProjectTools({ cwd: project.root, ...(project.env ? { env: project.env } : {}) })
         : {};
+    const rawProjectTools =
+      loop.id === "ai-sdk" && project?.root && stage?.id === "verify"
+        ? {
+            ...baseProjectTools,
+            runHostCheck: createHostCheckTool({ cwd: project.root, ...(project.env ? { env: project.env } : {}) }),
+          }
+        : baseProjectTools;
     let projectToolCalls = 0;
     let projectWriteCalls = 0;
     let failedProjectCommandCalls = 0;
@@ -674,7 +843,7 @@ export class WorkflowEngine {
                 }
               }
               const out = await tool.execute!(args, ctx);
-              if (failedShellCommand(name, out)) failedProjectCommandCalls++;
+              if (failedProjectCommand(name, out)) failedProjectCommandCalls++;
               if (isProjectWriteTool(name) && toolResultSucceeded(out)) projectWriteCalls++;
               return out;
             },
@@ -905,7 +1074,7 @@ export class WorkflowEngine {
       const commitPrompt = canCommitStageProgress
         ? "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete. Block only if progress is impossible. Do not answer in plain text."
         : verificationCommandFailed
-          ? "Commit durable wakespace progress now. Verification observed failed project shell commands, so call `block` with the concrete failed command evidence. Do not answer in plain text."
+          ? "Commit durable wakespace progress now. Verification observed failed project commands, so call `block` with the concrete failed command evidence. Do not answer in plain text."
           : "Commit durable wakespace progress now. This stage requires project write evidence, but no successful project write tool call was observed, so call `block` with a concrete reason. Do not answer in plain text.";
       commitRun = loop.run({
         system: buildCommitSystem(task, wf, stage, result.text, {

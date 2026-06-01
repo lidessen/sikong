@@ -21,6 +21,10 @@ All notable changes to `wakespace` are documented here. This project adheres to
 - Verify stages now reject passing verification fields/transitions when project
   shell commands fail, forcing the task to block with failed command evidence
   instead of accepting a green summary.
+- Verify stages now expose `runHostCheck`, an allowlisted host-side check tool
+  for real project `typecheck`, `test`, `build`, focused tests, and
+  `git diff --check` execution outside the sandboxed project shell. The tool
+  redacts the project root from captured stdout/stderr previews.
 - Terminal workflow state tools now stop the current agent run after recording
   durable intent. This prevents commit fallback loops such as repeated
   `commit_stage` or `block` calls without reintroducing fixed tool-call or step
@@ -28,6 +32,9 @@ All notable changes to `wakespace` are documented here. This project adheres to
 - Implementation-stage progress fields and transitions are rejected until a
   successful structured project write is observed, preventing no-edit worker
   turns from recording fake implementation progress.
+- Development implementation prompts now explicitly require either a smallest
+  valid structured edit or an immediate `block`, reducing read-only dogfood
+  implementation wakes.
 
 ## 0.1.6 — 2026-06-01
 

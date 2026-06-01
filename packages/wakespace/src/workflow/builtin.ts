@@ -84,7 +84,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Implement the designed change with project tools. Prefer replaceInFile for localized source edits (safer than writeFile); fall back to writeFile only for new files or large rewrites. Do not use writeFile to overwrite existing source files; use replaceInFile instead. Gather the context needed for a correct edit, then make a structured project write. Set `implementation`, set `changedFiles` to a JSON array of changed project paths, then request transition. Block instead of requesting transition if no edit should be made.",
+        "Implement the designed change with project tools. Prefer replaceInFile for localized source edits (safer than writeFile); fall back to writeFile only for new files or large rewrites. Do not use writeFile to overwrite existing source files; use replaceInFile instead. Gather the context needed for a correct edit, then make a structured project write. Do not end the implementation wake after inspection only: either make the smallest valid structured edit, or call `block` with the concrete reason no edit should be made. Set `implementation`, set `changedFiles` to a JSON array of changed project paths, then request transition.",
     },
     {
       id: "verify",
