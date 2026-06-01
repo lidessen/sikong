@@ -222,7 +222,11 @@ describe("workspace (CLI wiring)", () => {
       const stateDir = projectStateDir(dir, "web");
       expect(await readFile(join(stateDir, "events", "web-task.jsonl"), "utf8")).toContain('"projectId":"web"');
       expect(await readFile(join(stateDir, "projections", "web-task.json"), "utf8")).toContain('"projectId": "web"');
-      expect((await openWorkspace(dir, { extraWorkflows: [BUG], loop: () => mockLoop({ response: "x" }) })).projections.get("web-task")).resolves.toMatchObject({
+      await expect(
+        (await openWorkspace(dir, { extraWorkflows: [BUG], loop: () => mockLoop({ response: "x" }) })).projections.get(
+          "web-task",
+        ),
+      ).resolves.toMatchObject({
         id: "web-task",
         projectId: "web",
       });

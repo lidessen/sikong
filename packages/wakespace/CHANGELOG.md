@@ -3,6 +3,14 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Wake chronicles now record bounded worker diagnostics for each worker and
+  forced commit pass, including state-command counts, project tool/write
+  evidence, tool-call summaries, and first-pass text previews.
+
 ## 0.1.3 — 2026-06-01
 
 ### Changed

@@ -154,6 +154,7 @@ describe("WorkflowEngine wake cycle", () => {
   test("runs a forced commit pass when a worker returns text without state commands", async () => {
     const root = await mkdtemp(join(tmpdir(), "wakespace-commit-tools-"));
     await writeFile(join(root, "marker.txt"), "done\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
     let calls = 0;
     let commitRuntimeOptions: unknown;
     const loop: LoopFactory = () =>
@@ -161,7 +162,7 @@ describe("WorkflowEngine wake cycle", () => {
         calls++;
         if (calls === 1) {
           await input.tools?.writeFile?.execute?.({ path: "marker.txt", content: "done\n" }, {});
-          return;
+          return "Updated marker but forgot to commit wakespace state.";
         }
         commitRuntimeOptions = input.runtimeOptions;
         expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
@@ -175,6 +176,7 @@ describe("WorkflowEngine wake cycle", () => {
       projections: new MemoryProjectionStore(),
       projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
       registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
       loop,
     });
 
@@ -189,6 +191,34 @@ describe("WorkflowEngine wake cycle", () => {
     expect(commitRuntimeOptions).toMatchObject({ activeTools: ["commit_stage", "block", "cancel"] });
     expect(commitRuntimeOptions).toMatchObject({
       providerOptions: { deepseek: { thinking: { type: "disabled" } } },
+    });
+    const entries = await chronicle.recent({ taskId: "commit1", limit: 20 });
+    const workerDiagnostics = entries.find(
+      (entry) => entry.type === "wake.diagnostics" && entry.data?.phase === "worker",
+    );
+    expect(workerDiagnostics?.data).toMatchObject({
+      status: "completed",
+      stateCommands: 0,
+      projectToolCalls: 1,
+      projectWriteCalls: 1,
+      textPreview: "Updated marker but forgot to commit wakespace state.",
+    });
+    const fallback = entries.find((entry) => entry.type === "wake.commit");
+    expect(fallback?.data).toMatchObject({
+      reason: "no_state_commands",
+      fallbackPolicy: "state_commit_allowed",
+      allowedTools: ["commit_stage", "block", "cancel"],
+      projectToolCalls: 1,
+      projectWriteCalls: 1,
+      firstPassTextPreview: "Updated marker but forgot to commit wakespace state.",
+    });
+    const commitDiagnostics = entries.find(
+      (entry) => entry.type === "wake.diagnostics" && entry.data?.phase === "commit",
+    );
+    expect(commitDiagnostics?.data).toMatchObject({
+      status: "completed",
+      stateCommands: 2,
+      allowedTools: ["commit_stage", "block", "cancel"],
     });
   });
 
@@ -658,7 +688,7 @@ describe("WorkflowEngine wake cycle", () => {
 });
 
 /** A loop whose run() executes `body` (which may await), resolving when it finishes. */
-function scriptLoop(body: (input: RunInput) => Promise<void>, id = "scripted"): AgentLoop {
+function scriptLoop(body: (input: RunInput) => Promise<string | void>, id = "scripted"): AgentLoop {
   const capabilities: CapabilityList = ["tools"];
   return {
     id,
@@ -666,12 +696,12 @@ function scriptLoop(body: (input: RunInput) => Promise<void>, id = "scripted"): 
     supports: (c: Capability) => capabilities.includes(c),
     run(input: RunInput): RunHandle {
       const work = body(input);
-      const result = work.then(() => ({
+      const result = work.then((text) => ({
         events: [] as LoopEvent[],
         usage: emptyUsage(),
         durationMs: 0,
         status: "completed" as const,
-        text: "",
+        text: text ?? "",
       }));
       const none = async function* (): AsyncGenerator<never> {};
       return {

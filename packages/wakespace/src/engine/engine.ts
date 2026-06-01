@@ -44,6 +44,90 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+const DIAGNOSTIC_TEXT_LIMIT = 800;
+
+interface RunDiagnostics {
+  phase: "worker" | "commit";
+  eventCount: number;
+  toolCallStarts: Record<string, number>;
+  toolCallEnds: Record<string, number>;
+  toolCallErrors: Record<string, number>;
+  textChars: number;
+  textPreview: string;
+}
+
+function createRunDiagnostics(phase: RunDiagnostics["phase"]): RunDiagnostics {
+  return {
+    phase,
+    eventCount: 0,
+    toolCallStarts: {},
+    toolCallEnds: {},
+    toolCallErrors: {},
+    textChars: 0,
+    textPreview: "",
+  };
+}
+
+function incrementCount(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function appendPreview(existing: string, text: string, limit = DIAGNOSTIC_TEXT_LIMIT): string {
+  if (existing.length >= limit) return existing;
+  const remaining = limit - existing.length;
+  return existing + text.slice(0, remaining);
+}
+
+function compactPreview(text: string, limit = DIAGNOSTIC_TEXT_LIMIT): { preview?: string; chars: number; truncated: boolean } {
+  const compact = text.trim();
+  if (!compact) return { chars: text.length, truncated: false };
+  return {
+    preview: compact.slice(0, limit),
+    chars: text.length,
+    truncated: compact.length > limit,
+  };
+}
+
+function observeLoopEvent(diagnostics: RunDiagnostics, event: LoopEvent): void {
+  diagnostics.eventCount++;
+  switch (event.type) {
+    case "text":
+      diagnostics.textChars += event.text.length;
+      diagnostics.textPreview = appendPreview(diagnostics.textPreview, event.text);
+      break;
+    case "tool_call_start":
+      incrementCount(diagnostics.toolCallStarts, event.name);
+      break;
+    case "tool_call_end":
+      incrementCount(diagnostics.toolCallEnds, event.name);
+      if (event.error) incrementCount(diagnostics.toolCallErrors, event.name);
+      break;
+  }
+}
+
+function finalizeRunDiagnostics(diagnostics: RunDiagnostics, result: RunResult): Record<string, unknown> {
+  const text = result.text || diagnostics.textPreview;
+  const preview = compactPreview(text);
+  return {
+    phase: diagnostics.phase,
+    status: result.status,
+    eventCount: diagnostics.eventCount,
+    toolCallStarts: diagnostics.toolCallStarts,
+    toolCallEnds: diagnostics.toolCallEnds,
+    toolCallErrors: diagnostics.toolCallErrors,
+    textChars: result.text ? result.text.length : diagnostics.textChars,
+    ...(preview.preview ? { textPreview: preview.preview, textTruncated: preview.truncated } : {}),
+    ...(result.status === "error" ? { error: result.error?.message ?? "unknown error" } : {}),
+  };
+}
+
+function toolCountsSummary(counts: Record<string, number>): string {
+  const parts = Object.entries(counts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, count]) => `${name}:${count}`);
+  return parts.length ? parts.join(", ") : "none";
+}
+
 /** Task ids become filenames in the durable stores — keep them collision- and traversal-safe. */
 function assertValidTaskId(id: string): void {
   if (!id || id === "." || id === ".." || !/^[A-Za-z0-9._-]+$/.test(id))
@@ -385,25 +469,40 @@ export class WorkflowEngine {
       ...(this.o.maxStepsPerWake ? { maxSteps: this.o.maxStepsPerWake } : {}),
       ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),
     });
-    const consumeRun = async (runHandle: ReturnType<AgentLoop["run"]>): Promise<RunResult> => {
-      if (this.o.hooks?.onLoopEvent) {
-        for await (const event of runHandle) this.o.hooks.onLoopEvent({ taskId, wakeId, event });
+    const consumeRun = async (
+      runHandle: ReturnType<AgentLoop["run"]>,
+      diagnostics: RunDiagnostics,
+    ): Promise<RunResult> => {
+      for await (const event of runHandle) {
+        observeLoopEvent(diagnostics, event);
+        this.o.hooks?.onLoopEvent?.({ taskId, wakeId, event });
       }
       return runHandle.result;
     };
-    let result = await this.boundedRun(consumeRun(run), () => {
+    const workerDiagnostics = createRunDiagnostics("worker");
+    let result = await this.boundedRun(consumeRun(run, workerDiagnostics), () => {
       controller.abort();
       run.cancel("wake timeout");
     });
     let commands = drain();
+    const workerDiagnosticData = {
+      ...finalizeRunDiagnostics(workerDiagnostics, result),
+      stageId: task.stageId,
+      stateCommands: commands.length,
+      projectToolCalls,
+      projectWriteCalls,
+      projectWriteRequired,
+    };
+    await this.chron({
+      type: "wake.diagnostics",
+      taskId,
+      wakeId,
+      summary: `worker pass: status=${result.status} stateCommands=${commands.length} projectTools=${projectToolCalls} writeFile=${projectWriteCalls} toolStarts=${toolCountsSummary(workerDiagnostics.toolCallStarts)}`,
+      data: workerDiagnosticData,
+    });
 
     if (commands.length === 0 && result.status !== "error") {
-      await this.chron({
-        type: "wake.commit",
-        taskId,
-        wakeId,
-        summary: "worker produced no state commands; forcing a state-tool commit pass",
-      });
+      const firstPassText = compactPreview(result.text || workerDiagnostics.textPreview);
       const commitCommands: Command[] = [];
       let stageCommitted = false;
       const pushCommit = (command: Command): { acknowledged: true } => {
@@ -480,6 +579,25 @@ export class WorkflowEngine {
           execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
         });
       }
+      await this.chron({
+        type: "wake.commit",
+        taskId,
+        wakeId,
+        summary: `worker produced no state commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
+        data: {
+          reason: "no_state_commands",
+          fallbackPolicy: canCommitStageProgress ? "state_commit_allowed" : "project_write_required_without_write",
+          stageId: task.stageId,
+          allowedTools: Object.keys(commitTools),
+          projectToolCalls,
+          projectWriteCalls,
+          projectWriteRequired,
+          ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
+          firstPassTextChars: firstPassText.chars,
+          ...(firstPassText.preview ? { firstPassTextPreview: firstPassText.preview } : {}),
+          firstPassTextTruncated: firstPassText.truncated,
+        },
+      });
       const commitController = new AbortController();
       const commitPrompt =
         canCommitStageProgress
@@ -504,11 +622,24 @@ export class WorkflowEngine {
               }
             : undefined,
       });
-      result = await this.boundedRun(consumeRun(commitRun), () => {
+      const commitDiagnostics = createRunDiagnostics("commit");
+      result = await this.boundedRun(consumeRun(commitRun, commitDiagnostics), () => {
         commitController.abort();
         commitRun.cancel("wake commit timeout");
       });
       commands = [...drain(), ...commitCommands];
+      await this.chron({
+        type: "wake.diagnostics",
+        taskId,
+        wakeId,
+        summary: `commit pass: status=${result.status} stateCommands=${commands.length} toolStarts=${toolCountsSummary(commitDiagnostics.toolCallStarts)}`,
+        data: {
+          ...finalizeRunDiagnostics(commitDiagnostics, result),
+          stageId: task.stageId,
+          stateCommands: commands.length,
+          allowedTools: Object.keys(commitTools),
+        },
+      });
     }
 
     // (3) Apply the agent's commands against the LIVE task (re-loaded so a command
