@@ -129,6 +129,28 @@ describe("workspace (CLI wiring)", () => {
     }
   });
 
+  test("default wakes have enough step budget for small development edits", async () => {
+    const dir = await tmp();
+    let observedMaxSteps: number | undefined;
+    try {
+      const base = worker();
+      const loop: LoopFactory = () => ({
+        ...base,
+        run(input) {
+          if (typeof input !== "string") observedMaxSteps = input.maxSteps;
+          return base.run(input);
+        },
+      });
+      const ws = await openWorkspace(dir, { extraWorkflows: [BUG], loop });
+      await ws.engine.createTask({ projectId: "default", workflowId: "bug", taskId: "steps", fields: {} });
+      await ws.engine.idle();
+
+      expect(observedMaxSteps).toBe(12);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("durable subtask spawning across fresh engines doesn't collide on ids", async () => {
     const CHILD: WorkflowDef = {
       id: "child", version: "1", name: "Child", description: "",

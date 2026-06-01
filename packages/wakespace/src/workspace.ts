@@ -151,7 +151,7 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     intakeLoop,
     ...(opts.hooks ? { hooks: opts.hooks } : {}),
     wakeTimeoutMs: opts.wakeTimeoutMs ?? 90_000,
-    maxStepsPerWake: opts.maxStepsPerWake ?? 6,
+    maxStepsPerWake: opts.maxStepsPerWake ?? 12,
   });
   return { engine, events, projections, chronicle, registry, projects, workers };
 }

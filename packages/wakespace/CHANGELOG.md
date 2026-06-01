@@ -16,6 +16,12 @@ All notable changes to `wakespace` are documented here. This project adheres to
 - Forced commit fallback now coalesces duplicate block/cancel calls so a worker
   retry does not create misleading `command.rejected` chronicle noise.
 
+### Changed
+
+- Default wake step budget increased from 6 to 12 so development workers have
+  enough room to inspect, edit, and commit state in one small implementation
+  wake.
+
 ## 0.1.3 — 2026-06-01
 
 ### Changed
