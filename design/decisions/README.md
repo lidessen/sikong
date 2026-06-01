@@ -31,3 +31,7 @@ Files use a monotonic four-digit prefix:
 | ID | Status | Title |
 | --- | --- | --- |
 | [0001](0001-stage-scoped-subtasks-block-advancement.md) | Proposed | Stage-scoped subtasks block stage advancement |
+| [0002](0002-project-markdown-memory.md) | Proposed | Project markdown memory |
+| [0003](0003-global-wakespace-home.md) | Accepted | Global wakespace home |
+| [0004](0004-worker-cancel-requires-lead-approval.md) | Accepted | Worker cancel requires lead approval |
+| [0005](0005-builtin-development-workflow.md) | Accepted | Builtin development workflow |

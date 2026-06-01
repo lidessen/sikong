@@ -1,6 +1,6 @@
 # ADR 0003: Global wakespace home
 
-Status: Proposed
+Status: Accepted
 
 Date: 2026-06-01
 
@@ -35,6 +35,8 @@ The target layout is:
   config.yaml
   workers/
     <workerId>.yaml
+  state/
+    chronicle.jsonl
   projects/
     <projectId>/
       project.yaml
@@ -46,7 +48,6 @@ The target layout is:
           <taskId>.jsonl
         projections/
           <taskId>.json
-        chronicle.jsonl
         config.yaml
         .lock
       worktrees/
@@ -64,8 +65,12 @@ Definitions:
   worker should operate on.
 - `memory.md` is free-form project context loaded into worker prompts with a
   bounded size. It is advisory context, not task state.
-- `state/` is the per-project task store. Task ids only need to be unique within
-  a project store. Workspace-wide views can aggregate across project stores.
+- `state/` under a project is the per-project task store. Task ids currently
+  remain workspace-unique for CLI simplicity, while task files are grouped by
+  project. Workspace-wide views aggregate across project stores.
+- root `state/chronicle.jsonl` is the workspace activity log for aggregate
+  inspection. A project-local chronicle can be added later if aggregate log
+  volume becomes a problem.
 - `worktrees/` is reserved for wakespace-managed git worktrees. Worktrees are
   created from `project.root`, but their filesystem location is outside the
   source checkout.
@@ -106,11 +111,12 @@ resolveProjectPaths(home, projectId) -> {
 Expected implementation slices:
 
 1. Add path-resolution utilities and tests. Keep `--dir` as a legacy direct
-   state root.
+   store root.
 2. Move project definitions and markdown memory to
    `~/.wakespace/projects/<id>/`.
-3. Open engines against the selected project's `state/` directory while keeping
-   global worker config under `~/.wakespace/workers/`.
+3. Open task event/projection stores through project-aware wrappers so new task
+   state is written under `projects/<id>/state`, while legacy flat task state
+   remains readable during dogfood migration.
 4. Add a migration/import command for existing `.wakespace` directories.
 5. Add worktree allocation and cleanup commands under project `worktrees/`.
 
@@ -122,4 +128,3 @@ Expected implementation slices:
   workflow library under `~/.wakespace/workflows/`?
 - Should `memory.md` be a single file long-term, or should it grow into a small
   directory such as `memory/index.md` plus topic files once retrieval exists?
-

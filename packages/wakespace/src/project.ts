@@ -21,7 +21,7 @@ export interface Project {
   /** Runtime permission posture for this project's wakes, overriding the worker default when set. */
   permissionMode?: WorkerPermissionMode;
   /**
-   * Free-form project context loaded from `projects/<id>.md`. This is advisory
+   * Free-form project context loaded from `projects/<id>/memory.md`. This is advisory
    * memory for workers, not workflow state, and is not serialized into the
    * structured project YAML.
    */

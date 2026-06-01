@@ -75,6 +75,15 @@ describe("validateWorkflow", () => {
     expect(codes(wf, { knownTools: new Set(["ghost_tool"]) })).not.toContain("unknown-tool");
   });
 
+  test("flags stage output fields that are not declared", () => {
+    const wf: WorkflowDef = {
+      id: "x", version: "1", name: "X", description: "",
+      fields: { summary: { type: "string", description: "" } },
+      stages: [{ id: "a", category: "done", entry: { op: "always" }, outputFields: ["ghost"] }],
+    };
+    expect(codes(wf)).toContain("unknown-output-field");
+  });
+
   test("flags missing fields/stages instead of throwing a TypeError on a malformed def", () => {
     const bare = { id: "x", version: "1", name: "X" } as unknown as WorkflowDef;
     expect(codes(bare)).toEqual(expect.arrayContaining(["missing-fields", "missing-stages"]));

@@ -3,6 +3,20 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- Default CLI state now resolves to `~/.wakespace` through `WAKESPACE_HOME`.
+  Legacy `WAKESPACE_DIR` and `--dir` remain explicit store overrides.
+- Project definitions and memory now write to `projects/<id>/project.yaml` and
+  `projects/<id>/memory.md`.
+- New task timelines and projections now write under
+  `projects/<id>/state/`, while legacy flat state remains readable.
+- No-state-command fallback passes now use stage policy: planning/design-style
+  stages may commit workflow fields without project writes, while stages marked
+  `requiresProjectWrite` still block without `writeFile` evidence.
+
 ## 0.1.2 — 2026-06-01
 
 ### Added

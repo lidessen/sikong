@@ -36,8 +36,9 @@ wakespace overview          # human-readable snapshot of projects, workers, task
 wakespace create "fix auth" # agent-facing commands default to JSON; use --text for plain text
 ```
 
-Workspace data lives under `.wakespace` by default. Override with `WAKESPACE_DIR`
-or `--dir`.
+Workspace data lives under `~/.wakespace` by default. Override the home with
+`WAKESPACE_HOME`; use legacy `WAKESPACE_DIR` or `--dir` for explicit isolated
+stores in tests, smokes, and migration.
 
 See [`packages/wakespace/README.md`](packages/wakespace/README.md) for CLI
 commands, live smokes, and release notes.

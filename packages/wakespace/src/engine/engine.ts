@@ -40,6 +40,10 @@ function isTerminal(status: TaskStatus): boolean {
   return status === "done" || status === "cancelled";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 /** Task ids become filenames in the durable stores — keep them collision- and traversal-safe. */
 function assertValidTaskId(id: string): void {
   if (!id || id === "." || id === ".." || !/^[A-Za-z0-9._-]+$/.test(id))
@@ -346,6 +350,7 @@ export class WorkflowEngine {
         : {};
     let projectToolCalls = 0;
     let projectWriteCalls = 0;
+    const projectWriteRequired = stage?.requiresProjectWrite === true;
     const projectTools: ToolSet = {};
     for (const [name, tool] of Object.entries(rawProjectTools)) {
       projectTools[name] = tool.execute
@@ -400,45 +405,59 @@ export class WorkflowEngine {
         summary: "worker produced no state commands; forcing a state-tool commit pass",
       });
       const commitCommands: Command[] = [];
+      let stageCommitted = false;
       const pushCommit = (command: Command): { acknowledged: true } => {
+        if (stageCommitted && (command.kind === "block" || command.kind === "cancel")) return { acknowledged: true };
         commitCommands.push(command);
         return { acknowledged: true };
       };
+      const canCommitStageProgress = !projectWriteRequired || projectWriteCalls > 0;
       const commitTools: ToolSet = {};
-      if (projectWriteCalls > 0) {
-        commitTools.commit_done = defineTool({
+      if (canCommitStageProgress) {
+        const allowedFields = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
+          (name) => wf.fields[name],
+        );
+        commitTools.commit_stage = defineTool({
           description:
-            "Commit successful completion to wakespace. Provide a concise summary; the engine records it and requests the workflow transition.",
+            "Atomically commit this stage's durable workflow fields and request transition if the stage is complete.",
           inputSchema: {
             type: "object",
             properties: {
-              summary: { type: "string" },
+              fields: {
+                type: "object",
+                properties: Object.fromEntries(allowedFields.map((field) => [field, {}])),
+                ...(allowedFields.length ? { required: allowedFields } : {}),
+                additionalProperties: !stage?.outputFields?.length,
+              },
               reason: { type: "string" },
             },
-            required: ["summary"],
+            required: ["fields"],
             additionalProperties: false,
           },
           execute: (args) => {
-            const summary = String(args.summary);
-            pushCommit({ kind: "set_field", field: "summary", value: summary });
+            const fields = isRecord(args.fields) ? args.fields : {};
+            commitCommands.length = 0;
+            stageCommitted = true;
+            for (const field of allowedFields) {
+              if (Object.prototype.hasOwnProperty.call(fields, field))
+                pushCommit({ kind: "set_field", field, value: fields[field] });
+            }
             return pushCommit({
               kind: "request_transition",
-              reason: args.reason ? String(args.reason) : summary,
+              reason: args.reason ? String(args.reason) : "stage committed",
             });
           },
         });
-      }
-      commitTools.block = defineTool({
-        description: "Block the task when it cannot be completed. State the concrete reason.",
-        inputSchema: {
-          type: "object",
-          properties: { reason: { type: "string" } },
-          required: ["reason"],
-          additionalProperties: false,
-        },
-        execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
-      });
-      if (projectWriteCalls > 0) {
+        commitTools.block = defineTool({
+          description: "Block the task when it cannot be completed. State the concrete reason.",
+          inputSchema: {
+            type: "object",
+            properties: { reason: { type: "string" } },
+            required: ["reason"],
+            additionalProperties: false,
+          },
+          execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
+        });
         commitTools.cancel = defineTool({
           description:
             "Request cancellation when this task should not be completed at all. Worker requests are audit-only until a lead approves cancellation.",
@@ -449,14 +468,29 @@ export class WorkflowEngine {
           },
           execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
         });
+      } else {
+        commitTools.block = defineTool({
+          description: "Block the task when it cannot be completed. State the concrete reason.",
+          inputSchema: {
+            type: "object",
+            properties: { reason: { type: "string" } },
+            required: ["reason"],
+            additionalProperties: false,
+          },
+          execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
+        });
       }
       const commitController = new AbortController();
       const commitPrompt =
-        projectWriteCalls > 0
-          ? "Commit durable wakespace progress now. Call `commit_done` if complete, otherwise call `block` or request cancellation. Do not answer in plain text."
-          : "Commit durable wakespace progress now. No project writeFile evidence was observed, so call `block` with a concrete reason. Do not answer in plain text.";
+        canCommitStageProgress
+          ? "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete. Block only if progress is impossible. Do not answer in plain text."
+          : "Commit durable wakespace progress now. This stage requires project writeFile evidence, but none was observed, so call `block` with a concrete reason. Do not answer in plain text.";
       const commitRun = loop.run({
-        system: buildCommitSystem(task, wf, result.text, { projectToolCalls, projectWriteCalls }),
+        system: buildCommitSystem(task, wf, stage, result.text, {
+          projectToolCalls,
+          projectWriteCalls,
+          projectWriteRequired,
+        }),
         prompt: commitPrompt,
         tools: commitTools,
         signal: commitController.signal,

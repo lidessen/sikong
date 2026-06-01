@@ -34,8 +34,20 @@ After install:
 wakespace help
 ```
 
-The default workspace directory is `.wakespace`. Override it with
-`WAKESPACE_DIR` or the CLI `--dir` flag.
+The default workspace home is `~/.wakespace`. Override it with `WAKESPACE_HOME`.
+The legacy `WAKESPACE_DIR` environment variable and CLI `--dir` flag still act
+as explicit store overrides for tests, isolated smokes, and migration.
+
+The normal home layout keeps user coordination state out of source checkouts:
+
+```text
+~/.wakespace/
+  workers/<id>.yaml
+  projects/<projectId>/project.yaml
+  projects/<projectId>/memory.md
+  projects/<projectId>/state/events/<taskId>.jsonl
+  projects/<projectId>/state/projections/<taskId>.json
+```
 
 Agent-facing commands default to JSON. Use `--text` for ad-hoc human text on
 commands such as `status`, `task`, `project list`, and `worker list`.
@@ -72,8 +84,7 @@ The platform matrix lives in `scripts/build-platforms.ts`; it stamps each
 platform package with the launcher's version and fails if
 `optionalDependencies` drift out of sync. Bump the version in both
 `package.json` (version + each `optionalDependencies` entry) when cutting a
-release. The root `bun run release:check` still runs the typecheck/test/build
-gate plus a launcher dry-run.
+release. Run `bun run release:dry` before publishing.
 
 ## License
 

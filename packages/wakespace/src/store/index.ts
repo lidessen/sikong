@@ -22,6 +22,9 @@ export {
 export {
   JsonlChronicleStore,
   JsonlEventStore,
+  JsonWorkspaceChronicleStore,
+  JsonWorkspaceEventStore,
+  JsonWorkspaceProjectionStore,
   JsonProjectionStore,
   JsonProjectStore,
   JsonWorkerStore,

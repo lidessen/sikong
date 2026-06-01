@@ -5,8 +5,8 @@ turn work into deterministic workflow state changes while still letting agents
 perform the flexible parts of a stage.
 
 The current implementation is an M0/M1 kernel: workflow data model, reducer,
-guard evaluator, in-memory stores, and a minimal wake engine. It is not yet the
-full durable multi-agent workspace.
+guard evaluator, JSONL-backed stores, project-scoped task state, and a minimal
+wake engine. It is not yet the full durable multi-agent workspace.
 
 ## Core Model
 
@@ -115,11 +115,17 @@ must be based on durable evidence, not only an in-memory child projection.
 
 ## Store Boundaries
 
-Current stores are in-memory:
+Current stores have in-memory and JSONL-backed implementations:
 
 - `EventStore` assigns per-task `seq` and `ts`;
 - `ProjectionStore` stores current task projections;
 - `WorkflowRegistry` validates and stores workflow definitions.
+- `JsonProjectStore` writes project definitions to
+  `projects/<id>/project.yaml` and bounded project memory to
+  `projects/<id>/memory.md`.
+- workspace task stores route new task timelines and projections to
+  `projects/<id>/state/`, while still reading legacy flat task state during
+  dogfood migration.
 
 Production stores should preserve these boundaries but add:
 

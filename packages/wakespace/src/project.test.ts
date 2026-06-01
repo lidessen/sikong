@@ -49,8 +49,8 @@ describe("projects", () => {
         defaultWorker: "flash",
         permissionMode: "dontAsk",
       });
-      expect(await readdir(join(dir, "projects"))).toEqual(["web.yaml"]);
-      expect(await readFile(join(dir, "projects", "web.yaml"), "utf8")).toContain("flash");
+      expect(await readdir(join(dir, "projects"))).toEqual(["web"]);
+      expect(await readFile(join(dir, "projects", "web", "project.yaml"), "utf8")).toContain("flash");
       expect((await ps.get("web"))?.root).toBe("/repo/web");
       expect((await ps.get("web"))?.permissionMode).toBe("dontAsk");
       const ids = (await ps.list()).map((p) => p.id).sort();
@@ -75,9 +75,9 @@ describe("projects", () => {
       });
       await ps.putMemory("web", "# Project Memory\n\nPrefer DeepSeek for dogfood wakes.\n");
 
-      const yaml = await readFile(join(dir, "projects", "web.yaml"), "utf8");
+      const yaml = await readFile(join(dir, "projects", "web", "project.yaml"), "utf8");
       expect(yaml).not.toContain("do not serialize me");
-      expect(await readFile(join(dir, "projects", "web.md"), "utf8")).toContain("Prefer DeepSeek");
+      expect(await readFile(join(dir, "projects", "web", "memory.md"), "utf8")).toContain("Prefer DeepSeek");
       expect((await ps.get("web"))?.memory).toContain("Prefer DeepSeek");
       expect((await ps.list()).find((p) => p.id === "web")?.memory).toContain("Prefer DeepSeek");
       expect(await ps.getMemory("web")).toContain("Prefer DeepSeek");

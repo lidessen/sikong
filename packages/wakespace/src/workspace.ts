@@ -15,10 +15,10 @@ import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
 import type { Worker } from "./worker";
 import {
-  JsonlChronicleStore,
-  JsonlEventStore,
-  JsonProjectionStore,
   JsonProjectStore,
+  JsonWorkspaceChronicleStore,
+  JsonWorkspaceEventStore,
+  JsonWorkspaceProjectionStore,
   JsonWorkerStore,
   MemoryWorkflowRegistry,
 } from "./store";
@@ -88,9 +88,9 @@ export interface OpenWorkspaceOptions {
 
 export interface Workspace {
   engine: WorkflowEngine;
-  events: JsonlEventStore;
-  projections: JsonProjectionStore;
-  chronicle: JsonlChronicleStore;
+  events: JsonWorkspaceEventStore;
+  projections: JsonWorkspaceProjectionStore;
+  chronicle: JsonWorkspaceChronicleStore;
   registry: MemoryWorkflowRegistry;
   projects: JsonProjectStore;
   workers: JsonWorkerStore;
@@ -105,9 +105,9 @@ export interface Workspace {
  * read/`submit`/`register` paths need no credentials.
  */
 export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}): Promise<Workspace> {
-  const events = new JsonlEventStore(dir);
-  const projections = new JsonProjectionStore(dir);
-  const chronicle = new JsonlChronicleStore(dir);
+  const events = new JsonWorkspaceEventStore(dir);
+  const projections = new JsonWorkspaceProjectionStore(dir);
+  const chronicle = new JsonWorkspaceChronicleStore(dir);
   const projects = new JsonProjectStore(dir);
   const workers = new JsonWorkerStore(dir);
 

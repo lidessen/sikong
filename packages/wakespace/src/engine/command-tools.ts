@@ -33,7 +33,9 @@ export function buildCommandTools(
   const on = (name: CommandToolName): boolean =>
     name === "create_subtask" ? (allow?.has(name) ?? false) : allow === null || allow.has(name);
 
-  const fieldNames = Object.keys(wf.fields);
+  const fieldNames = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
+    (name) => wf.fields[name],
+  );
   const tools: ToolSet = {};
 
   if (on("set_field"))

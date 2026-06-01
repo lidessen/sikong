@@ -164,9 +164,9 @@ describe("WorkflowEngine wake cycle", () => {
           return;
         }
         commitRuntimeOptions = input.runtimeOptions;
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_done"]);
-        await input.tools?.commit_done?.execute?.(
-          { summary: "validated by worker commit pass", reason: "committed" },
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
+        await input.tools?.commit_stage?.execute?.(
+          { fields: { summary: "validated by worker commit pass" }, reason: "committed" },
           {},
         );
       }, "ai-sdk");
@@ -186,7 +186,7 @@ describe("WorkflowEngine wake cycle", () => {
     expect(task?.status).toBe("done");
     expect(task?.fields.summary).toBe("validated by worker commit pass");
     expect(commitRuntimeOptions).toMatchObject({ toolChoice: "required" });
-    expect(commitRuntimeOptions).toMatchObject({ activeTools: ["commit_done", "block", "cancel"] });
+    expect(commitRuntimeOptions).toMatchObject({ activeTools: ["commit_stage", "block", "cancel"] });
     expect(commitRuntimeOptions).toMatchObject({
       providerOptions: { deepseek: { thinking: { type: "disabled" } } },
     });
@@ -209,6 +209,99 @@ describe("WorkflowEngine wake cycle", () => {
     const task = await engine.getTask("commit-ungrounded");
     expect(calls).toBe(2);
     expect(task?.status).toBe("blocked");
+  });
+
+  test("allows a no-write forced commit pass on development planning stages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-dev-plan-commit-"));
+    let calls = 0;
+    let planPasses = 0;
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (ctx.stageId === "plan") {
+          planPasses++;
+          if (planPasses === 1) return;
+          expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
+          await input.tools?.commit_stage?.execute?.(
+            { fields: { plan: "Plan first, then implement." }, reason: "planned" },
+            {},
+          );
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "Small typed policy." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
+        if (ctx.stageId === "implement") {
+          await input.tools?.writeFile?.execute?.({ path: "marker.txt", content: "done\n" }, {});
+          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Changed marker." }, {});
+          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
+          return;
+        }
+        await input.tools?.set_field?.execute?.({ field: "verification", value: "Checked marker." }, {});
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "Development completed." }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
+      }, "ai-sdk");
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry,
+      loop,
+    });
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development",
+      taskId: "dev-plan-commit",
+      fields: { request: "plan the change" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("dev-plan-commit");
+    expect(calls).toBe(5);
+    expect(planPasses).toBe(2);
+    expect(task?.stageId).toBe("done");
+    expect(task?.status).toBe("done");
+    expect(task?.fields.plan).toBe("Plan first, then implement.");
+  });
+
+  test("forced commit stage wins over block in the same commit pass", async () => {
+    let calls = 0;
+    let commitSystem = "";
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (calls === 1) return;
+        if (!input.tools?.commit_stage) return;
+        commitSystem = input.system ?? "";
+        await input.tools?.block?.execute?.({ reason: "confused" }, {});
+        await input.tools?.commit_stage?.execute?.(
+          { fields: { plan: "Bounded plan from request." }, reason: "planned" },
+          {},
+        );
+        await input.tools?.block?.execute?.({ reason: "late confusion" }, {});
+      }, "ai-sdk");
+    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW]);
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development",
+      taskId: "commit-stage-wins",
+      fields: { request: "plan the change" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("commit-stage-wins");
+    expect(commitSystem).toContain("Current task fields");
+    expect(commitSystem).toContain("plan the change");
+    expect(task?.stageId).toBe("design");
+    expect(task?.status).toBe("in_progress");
+    expect(task?.fields.plan).toBe("Bounded plan from request.");
   });
 
   test("reports a wake error when even the forced commit pass emits no state commands", async () => {

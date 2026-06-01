@@ -119,6 +119,12 @@ export function validateWorkflow(def: WorkflowDef, opts: ValidateOptions = {}): 
           push("unknown-skill", `stage "${stage.id}" references unregistered skill "${sk}"`, {
             stageId: stage.id,
           });
+    for (const field of stage.outputFields ?? [])
+      if (!def.fields[field])
+        push("unknown-output-field", `stage "${stage.id}" references unknown output field "${field}"`, {
+          stageId: stage.id,
+          field,
+        });
   });
 
   return issues;

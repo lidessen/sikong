@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockLoop } from "agent-loop";
 import { getDefaultWorker, loadWorkflows, openWorkspace, saveWorkflow, setDefaultWorker } from "./workspace";
+import { projectStateDir, resolveWorkspaceDir } from "./workspace-layout";
 import type { LoopFactory } from "./engine";
 import type { WorkflowDef } from "./workflow/types";
 
@@ -195,6 +196,36 @@ describe("workspace (CLI wiring)", () => {
       await setDefaultWorker(dir, "flash");
       expect(await readFile(join(dir, "config.yaml"), "utf8")).toContain("flash");
       expect(await getDefaultWorker(dir)).toBe("flash");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace dir resolution defaults to WAKESPACE_HOME and preserves explicit legacy overrides", () => {
+    expect(resolveWorkspaceDir({ dirFlag: "/tmp/explicit", env: { WAKESPACE_DIR: "/tmp/legacy", WAKESPACE_HOME: "/tmp/home" } }).dir).toBe(
+      "/tmp/explicit",
+    );
+    expect(resolveWorkspaceDir({ env: { WAKESPACE_DIR: "/tmp/legacy", WAKESPACE_HOME: "/tmp/home" } }).dir).toBe(
+      "/tmp/legacy",
+    );
+    expect(resolveWorkspaceDir({ env: { WAKESPACE_HOME: "/tmp/home" } }).dir).toBe("/tmp/home");
+    expect(resolveWorkspaceDir({ env: {} }).dir).toMatch(/\.wakespace$/);
+  });
+
+  test("openWorkspace writes project task state under projects/<id>/state", async () => {
+    const dir = await tmp();
+    try {
+      const ws = await openWorkspace(dir, { extraWorkflows: [BUG], loop: () => mockLoop({ response: "x" }) });
+      await ws.projects.put({ id: "web", name: "Web", root: "/repo/web", defaultWorkflowId: "bug" });
+      await ws.engine.createTask({ projectId: "web", workflowId: "bug", taskId: "web-task", fields: {}, wake: false });
+
+      const stateDir = projectStateDir(dir, "web");
+      expect(await readFile(join(stateDir, "events", "web-task.jsonl"), "utf8")).toContain('"projectId":"web"');
+      expect(await readFile(join(stateDir, "projections", "web-task.json"), "utf8")).toContain('"projectId": "web"');
+      expect((await openWorkspace(dir, { extraWorkflows: [BUG], loop: () => mockLoop({ response: "x" }) })).projections.get("web-task")).resolves.toMatchObject({
+        id: "web-task",
+        projectId: "web",
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

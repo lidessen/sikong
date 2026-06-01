@@ -11,7 +11,7 @@
  *   register <workflow.yaml>                                          register a workflow definition
  *   overview [--project <id>] [--json]                                  human workspace dashboard
  *   status [--project <id>] [--text] | task <id> [--text] | chronicle [--task <id>] [-n N] [--text]
- *   --dir <path>   workspace dir (default $WAKESPACE_DIR or ./.wakespace)
+ *   --dir <path>   workspace dir override (default $WAKESPACE_HOME or ~/.wakespace; legacy $WAKESPACE_DIR still works)
  *
  *   Agent-facing commands default to JSON. Use --text for ad-hoc human output.
  *
@@ -20,7 +20,13 @@
  */
 import { unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { JsonlChronicleStore, JsonlEventStore, JsonProjectionStore, JsonProjectStore, JsonWorkerStore } from "./store";
+import {
+  JsonProjectStore,
+  JsonWorkerStore,
+  JsonWorkspaceChronicleStore,
+  JsonWorkspaceEventStore,
+  JsonWorkspaceProjectionStore,
+} from "./store";
 import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
 import { acquireLock, getDefaultWorker, openWorkspace, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
 import { parseDataFile } from "./config-file";
@@ -28,6 +34,7 @@ import { isValidProjectId, type Project } from "./project";
 import { discoverWorkers, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
 import type { WorkerPermissionMode } from "./worker";
 import type { Command } from "./workflow";
+import { resolveWorkspaceDir } from "./workspace-layout";
 
 const VALUE_FLAGS = new Set([
   "--dir", "--project", "--workflow", "--id", "--task", "-n",
@@ -69,7 +76,8 @@ const flag = (name: string): string | undefined => {
 };
 const hasFlag = (name: string): boolean => flags.has(name);
 
-const dir = flag("--dir") || process.env.WAKESPACE_DIR || ".wakespace";
+const workspaceDir = resolveWorkspaceDir({ dirFlag: flag("--dir") });
+const dir = workspaceDir.dir;
 const text = (hasFlag("--text") || hasFlag("--human")) && !hasFlag("--json");
 const cmd = positional[0];
 const argv1 = process.argv[1] ?? "wakespace";
@@ -165,8 +173,8 @@ switch (cmd) {
       {
         projects: new JsonProjectStore(dir),
         workers: new JsonWorkerStore(dir),
-        projections: new JsonProjectionStore(dir),
-        chronicle: new JsonlChronicleStore(dir),
+        projections: new JsonWorkspaceProjectionStore(dir),
+        chronicle: new JsonWorkspaceChronicleStore(dir),
       },
       {
         ...(flag("--project") ? { projectId: flag("--project")! } : {}),
@@ -178,8 +186,8 @@ switch (cmd) {
   }
   case "status": {
     const view = await workspaceStatus(
-      new JsonProjectionStore(dir),
-      new JsonlChronicleStore(dir),
+      new JsonWorkspaceProjectionStore(dir),
+      new JsonWorkspaceChronicleStore(dir),
       flag("--project") ? { projectId: flag("--project")! } : {},
     );
     printView(view, renderStatus);
@@ -190,9 +198,9 @@ switch (cmd) {
     if (!id) fail("usage: cli task <id>");
     const view = await taskDetail(
       id!,
-      new JsonlEventStore(dir),
-      new JsonProjectionStore(dir),
-      new JsonlChronicleStore(dir),
+      new JsonWorkspaceEventStore(dir),
+      new JsonWorkspaceProjectionStore(dir),
+      new JsonWorkspaceChronicleStore(dir),
     );
     if (!view) {
       if (text) console.log(`no such task: ${id}`);
@@ -207,7 +215,7 @@ switch (cmd) {
     const nRaw = flag("-n");
     const limit = nRaw === undefined ? 30 : Number(nRaw);
     if (!Number.isFinite(limit)) fail(`-n must be a number (got "${nRaw}")`);
-    const entries = await new JsonlChronicleStore(dir).recent({ ...(taskId ? { taskId } : {}), limit });
+    const entries = await new JsonWorkspaceChronicleStore(dir).recent({ ...(taskId ? { taskId } : {}), limit });
     if (!text) {
       printJson(entries);
       break;
@@ -471,7 +479,7 @@ switch (cmd) {
         "  task <id> [--text]\n" +
         "  chronicle [--task <id>] [-n <N>] [--text]\n" +
         "  --json is accepted for compatibility; agent-facing commands already default to JSON\n" +
-        "  --dir <path>   workspace dir ($WAKESPACE_DIR or ./.wakespace)",
+        "  --dir <path>   workspace dir override ($WAKESPACE_HOME or ~/.wakespace by default; legacy $WAKESPACE_DIR still works)",
     );
     if (cmd && cmd !== "help") process.exit(2);
 }

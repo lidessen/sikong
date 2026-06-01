@@ -29,6 +29,11 @@ The workflow uses durable fields for `plan`, `design`, `implementation`,
 `changedFiles`, `verification`, and `summary`. Each stage requires the relevant
 field plus a current-stage `transition.requested` event before advancing.
 
+The `implement` stage explicitly requires project write evidence before a
+no-state-command fallback pass may record normal progress. `plan`, `design`, and
+`verify` do not require project writes, because their durable output is workflow
+state rather than source edits.
+
 Keep `general` as the fallback workflow. `development` is opt-in through
 `--workflow development`, project defaults, intake routing, or future PM
 delegation logic.
@@ -48,6 +53,9 @@ diffs and test results.
 - Export `DEVELOPMENT_WORKFLOW` from `workflow/builtin.ts`.
 - Register it as a builtin alongside `GENERAL_WORKFLOW` in workspace startup.
 - Add tests for workflow validity, registration, and stage progression.
+- Use stage-level `requiresProjectWrite` data rather than workflow-id or
+  prompt-text heuristics when deciding whether a fallback commit pass may record
+  progress without project write evidence.
 - Keep CLI semantics unchanged: users can select it with `--workflow
   development` or project defaults.
 

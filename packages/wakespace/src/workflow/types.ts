@@ -61,8 +61,21 @@ export interface StageDef {
   skills?: readonly string[];
   /** Registered tool names exposed while in this stage (resolved at M3). */
   tools?: readonly string[];
+  /**
+   * Fields this stage is expected to write. When present, the set_field tool is
+   * constrained to this list so a worker cannot overwrite stable input fields
+   * while trying to commit stage progress.
+   */
+  outputFields?: readonly string[];
   /** Stage guidance appended to the wake's system prompt. */
   instructions?: string;
+  /**
+   * Require at least one project `writeFile` call before a no-state-command
+   * fallback pass may record normal stage progress. Use this for stages whose
+   * acceptance depends on project edits; leave unset for planning, design, and
+   * verification stages that may only update workflow fields.
+   */
+  requiresProjectWrite?: boolean;
   /** Cron escalation hint: fire a staleness tick after this long (used at M5). */
   escalateAfterMs?: number;
 }

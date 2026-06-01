@@ -20,6 +20,8 @@ export const GENERAL_WORKFLOW: WorkflowDef = {
       id: "open",
       category: "in_progress",
       entry: { op: "always" },
+      requiresProjectWrite: true,
+      outputFields: ["summary"],
       instructions:
         "Do whatever the task needs. Record a one-line `summary` of the outcome, then request a transition to close it.",
     },
@@ -51,6 +53,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
       id: "plan",
       category: "in_progress",
       entry: { op: "always" },
+      outputFields: ["plan"],
       instructions:
         "Inspect the request and relevant project context. Set `plan` with the bounded approach and acceptance criteria, then request transition. Block if the request needs lead clarification.",
     },
@@ -64,12 +67,15 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
+      outputFields: ["design"],
       instructions:
         "Turn the plan into a concrete design. Set `design` with the chosen approach and important tradeoffs, then request transition.",
     },
     {
       id: "implement",
       category: "in_progress",
+      requiresProjectWrite: true,
+      outputFields: ["implementation", "changedFiles"],
       entry: {
         op: "and",
         all: [
@@ -91,6 +97,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
+      outputFields: ["verification", "summary"],
       instructions:
         "Verify the implementation with focused checks. Set `verification` with commands and results, set `summary`, then request transition. Block if verification fails or cannot run.",
     },

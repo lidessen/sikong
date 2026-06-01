@@ -75,21 +75,30 @@ export function buildPrompt(task: Task, wf: WorkflowDef, stage: StageDef | undef
 export function buildCommitSystem(
   task: Task,
   wf: WorkflowDef,
+  stage: StageDef | undefined,
   priorText: string,
-  evidence: { projectToolCalls: number; projectWriteCalls: number },
+  evidence: { projectToolCalls: number; projectWriteCalls: number; projectWriteRequired: boolean },
 ): string {
   const lines = [
     `# Workflow: ${wf.name}`,
     "",
     `You are committing durable progress for task ${task.id}.`,
+    `Current stage: ${task.stageId}${stage?.instructions ? ` — ${stage.instructions}` : ""}`,
+    "",
+    "## Current task fields",
+    ...Object.keys(wf.fields).map((name) => {
+      const def = wf.fields[name];
+      return `- ${name} (${def?.type})${def?.description ? ` — ${def.description}` : ""}: ${renderValue(task.fields[name])}`;
+    }),
     "",
     "The previous worker pass ended without calling any wakespace state tool.",
     `Project tool calls observed in that pass: ${evidence.projectToolCalls}.`,
     `Project writeFile calls observed in that pass: ${evidence.projectWriteCalls}.`,
+    stage?.outputFields?.length ? `Stage output fields: ${stage.outputFields.join(", ")}.` : "Stage output fields: unrestricted by stage.",
     "You must now call at least one provided state tool. Do not answer in plain text.",
-    evidence.projectWriteCalls > 0
-      ? "If the task work is complete, call `commit_done` with a concise summary grounded in the project edits already performed."
-      : "Because no project writeFile call was observed, there is no edit evidence for fallback completion. Do not mark the task done or request cancellation; call `block` with a concrete reason.",
+    evidence.projectWriteRequired && evidence.projectWriteCalls === 0
+      ? "This stage requires project write evidence, but no project writeFile call was observed. Do not mark the stage complete or request cancellation; call `block` with a concrete reason."
+      : "Use the provided workflow state tools to set the fields this stage requires, then call `request_transition` if this stage is complete.",
     "If the task cannot be completed, call `block` with a concrete reason.",
   ];
   if (priorText.trim()) lines.push("", "## Previous worker text", priorText.trim());
