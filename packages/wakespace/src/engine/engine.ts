@@ -129,6 +129,24 @@ function toolCountsSummary(counts: Record<string, number>): string {
   return parts.length ? parts.join(", ") : "none";
 }
 
+function toolResultSucceeded(result: unknown): boolean {
+  return !(isRecord(result) && typeof result.error === "string" && result.error.length > 0);
+}
+
+function isStageCommitSignal(command: Command, stage: ReturnType<typeof stageById>): boolean {
+  switch (command.kind) {
+    case "request_transition":
+    case "block":
+    case "cancel":
+    case "create_subtask":
+      return true;
+    case "set_field":
+      return !stage?.outputFields?.length || stage.outputFields.includes(command.field);
+    default:
+      return false;
+  }
+}
+
 /** Task ids become filenames in the durable stores — keep them collision- and traversal-safe. */
 function assertValidTaskId(id: string): void {
   if (!id || id === "." || id === ".." || !/^[A-Za-z0-9._-]+$/.test(id))
@@ -443,8 +461,9 @@ export class WorkflowEngine {
             ...tool,
             execute: async (args, ctx) => {
               projectToolCalls++;
-              if (PROJECT_WRITE_TOOL_NAMES.has(name)) projectWriteCalls++;
-              return tool.execute!(args, ctx);
+              const out = await tool.execute!(args, ctx);
+              if (PROJECT_WRITE_TOOL_NAMES.has(name) && toolResultSucceeded(out)) projectWriteCalls++;
+              return out;
             },
           }
         : tool;
@@ -502,8 +521,10 @@ export class WorkflowEngine {
       data: workerDiagnosticData,
     });
 
-    if (commands.length === 0 && result.status !== "error") {
+    const hasStageCommitSignal = commands.some((command) => isStageCommitSignal(command, stage));
+    if (!hasStageCommitSignal && result.status !== "error") {
       const firstPassText = compactPreview(result.text || workerDiagnostics.textPreview);
+      const firstPassCommands = commands;
       const commitCommands: Command[] = [];
       let stageCommitted = false;
       const pushCommit = (command: Command): { acknowledged: true } => {
@@ -589,11 +610,12 @@ export class WorkflowEngine {
         type: "wake.commit",
         taskId,
         wakeId,
-        summary: `worker produced no state commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
+        summary: `worker produced no stage commit commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
         data: {
-          reason: "no_state_commands",
+          reason: firstPassCommands.length === 0 ? "no_state_commands" : "no_stage_commit_commands",
           fallbackPolicy: canCommitStageProgress ? "state_commit_allowed" : "project_write_required_without_write",
           stageId: task.stageId,
+          firstPassCommands: firstPassCommands.map((command) => command.kind),
           allowedTools: Object.keys(commitTools),
           projectToolCalls,
           projectWriteCalls,
@@ -608,7 +630,7 @@ export class WorkflowEngine {
       const commitPrompt =
         canCommitStageProgress
           ? "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete. Block only if progress is impossible. Do not answer in plain text."
-          : "Commit durable wakespace progress now. This stage requires project writeFile evidence, but none was observed, so call `block` with a concrete reason. Do not answer in plain text.";
+          : "Commit durable wakespace progress now. This stage requires project write evidence, but no successful project write tool call was observed, so call `block` with a concrete reason. Do not answer in plain text.";
       const commitRun = loop.run({
         system: buildCommitSystem(task, wf, stage, result.text, {
           projectToolCalls,
@@ -633,7 +655,7 @@ export class WorkflowEngine {
         commitController.abort();
         commitRun.cancel("wake commit timeout");
       });
-      commands = [...drain(), ...commitCommands];
+      commands = [...firstPassCommands, ...drain(), ...commitCommands];
       await this.chron({
         type: "wake.diagnostics",
         taskId,

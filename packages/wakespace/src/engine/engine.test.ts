@@ -222,6 +222,96 @@ describe("WorkflowEngine wake cycle", () => {
     });
   });
 
+  test("forces commit when a worker writes project files but only appends a note", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-note-only-"));
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let calls = 0;
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (calls === 1) {
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+            {},
+          );
+          await input.tools?.append_note?.execute?.({ text: "edited marker" }, {});
+          return;
+        }
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
+        await input.tools?.commit_stage?.execute?.(
+          { fields: { summary: "marker edited with replaceInFile" }, reason: "committed" },
+          {},
+        );
+      }, "ai-sdk");
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "note-only-commit", fields: { request: "edit marker" } });
+    await engine.idle();
+
+    const task = await engine.getTask("note-only-commit");
+    expect(calls).toBe(2);
+    expect(task?.status).toBe("done");
+    expect(task?.fields.summary).toBe("marker edited with replaceInFile");
+    const commit = (await chronicle.recent({ taskId: "note-only-commit", type: "wake.commit", limit: 1 }))[0];
+    expect(commit?.data).toMatchObject({
+      reason: "no_stage_commit_commands",
+      firstPassCommands: ["append_note"],
+      projectWriteCalls: 1,
+    });
+  });
+
+  test("does not count a failed project edit as write evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-failed-edit-"));
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let calls = 0;
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (calls === 1) {
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "marker.txt", search: "missing", replace: "after" },
+            {},
+          );
+          await input.tools?.append_note?.execute?.({ text: "attempted edit" }, {});
+          return;
+        }
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
+        await input.tools?.block?.execute?.({ reason: "edit did not apply" }, {});
+      }, "ai-sdk");
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "failed-edit", fields: { request: "edit marker" } });
+    await engine.idle();
+
+    expect(calls).toBe(2);
+    expect((await engine.getTask("failed-edit"))?.status).toBe("blocked");
+    const workerDiagnostics = (
+      await chronicle.recent({ taskId: "failed-edit", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "worker");
+    expect(workerDiagnostics?.data).toMatchObject({ projectToolCalls: 1, projectWriteCalls: 0 });
+    const commit = (await chronicle.recent({ taskId: "failed-edit", type: "wake.commit", limit: 1 }))[0];
+    expect(commit?.data).toMatchObject({
+      fallbackPolicy: "project_write_required_without_write",
+      projectWriteCalls: 0,
+    });
+  });
+
   test("blocks an ungrounded forced commit pass when no project write ran", async () => {
     const chronicle = new MemoryChronicleStore(() => 1);
     let calls = 0;
