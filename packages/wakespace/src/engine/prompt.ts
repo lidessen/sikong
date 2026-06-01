@@ -60,11 +60,11 @@ export function buildSystem(
       "",
       "## Project tools",
       `Project tools available to this worker: ${projectToolNames.map((n) => `\`${n}\``).join(", ")}.`,
-      "Use them to inspect and edit the project, search code, and fetch web context when the stage requires it. Local project tools are scoped to the project root. They do not replace the workflow state tools; record durable progress with the stage tools above.",
+      "Use them to inspect and edit the project, search code, and fetch web context when the stage requires it. Prefer `rg` for finding symbols and `viewFile` for line-numbered file windows; use raw `readFile` only when the whole file is needed. Local project tools are scoped to the project root. They do not replace the workflow state tools; record durable progress with the stage tools above.",
     );
     if (stage?.requiresProjectWrite) {
       lines.push(
-        "This stage requires a successful structured project write through `replaceInFile` or `writeFile` before normal stage progress can be committed. Gather the context you need, then edit; if no edit should be made, call `block` with the concrete reason.",
+        "This stage requires a successful structured project write through `replaceInFile` or `writeFile` before normal stage progress can be committed. Raw shell access may be reserved for non-write stages such as verification. Gather the context you need, then edit; if no edit should be made, call `block` with the concrete reason.",
       );
     }
   }

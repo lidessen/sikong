@@ -582,6 +582,7 @@ export class WorkflowEngine {
     const projectWriteRequired = stage?.requiresProjectWrite === true;
     const projectTools: ToolSet = {};
     for (const [name, tool] of Object.entries(rawProjectTools)) {
+      if (projectWriteRequired && name === "bash") continue;
       projectTools[name] = tool.execute
         ? {
             ...tool,

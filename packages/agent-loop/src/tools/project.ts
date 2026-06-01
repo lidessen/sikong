@@ -72,6 +72,12 @@ const replaceInFileSchema = z.object({
     .describe("Require exactly this many replacements; if it differs, no file is written."),
 });
 
+const viewFileSchema = z.object({
+  path: z.string().min(1).describe("File to inspect, relative to the project root."),
+  start_line: z.number().int().min(1).optional().describe("1-based first line to show. Defaults to 1."),
+  max_lines: z.number().int().min(1).max(500).optional().describe("Maximum lines to return. Defaults to 120."),
+});
+
 export async function createProjectTools(options: ProjectToolOptions): Promise<ToolSet> {
   const cwd = resolve(options.cwd);
   const [{ createBashTool }, { Bash, ReadWriteFs }] = await Promise.all([
@@ -99,6 +105,7 @@ export async function createProjectTools(options: ProjectToolOptions): Promise<T
     readFile: fromAiSdkTool(bashTools.readFile),
     writeFile: fromAiSdkTool(bashTools.writeFile),
   };
+  out.viewFile = createViewFileTool({ cwd });
   out.replaceInFile = createReplaceInFileTool({ cwd });
 
   const rg = createRipgrepTool({ cwd });
@@ -123,6 +130,52 @@ function fromAiSdkTool(tool: unknown): ToolDefinition {
       return await t.execute(args, { toolCallId: ctx.callId, abortSignal: ctx.signal });
     },
   });
+}
+
+function createViewFileTool(opts: { cwd: string }): ToolDefinition {
+  return defineTool({
+    description:
+      "Inspect a window of an existing project file with 1-based line numbers. Prefer this over readFile when you only need part of a file or need exact lines for an edit.",
+    inputSchema: viewFileSchema,
+    execute: async (rawArgs) => {
+      const args = viewFileSchema.parse(rawArgs);
+      const pathResult = await resolveProjectPath(opts.cwd, args.path);
+      if (!pathResult.ok) return { error: pathResult.error };
+
+      const filePath = resolve(opts.cwd, pathResult.rgPath);
+      let text: string;
+      try {
+        text = await readFile(filePath, "utf8");
+      } catch (err) {
+        return { error: `Could not read "${pathResult.rgPath}": ${(err as Error).message}` };
+      }
+
+      const lines = splitLines(text);
+      const totalLines = lines.length;
+      const startLine = Math.min(args.start_line ?? 1, Math.max(totalLines, 1));
+      const maxLines = args.max_lines ?? 120;
+      const startIndex = startLine - 1;
+      const selected = lines.slice(startIndex, startIndex + maxLines);
+      const endLine = selected.length ? startLine + selected.length - 1 : startLine;
+      const width = String(endLine).length;
+      return {
+        path: pathResult.rgPath,
+        startLine,
+        endLine,
+        totalLines,
+        truncatedBefore: startLine > 1,
+        truncatedAfter: endLine < totalLines,
+        content: selected.map((line, index) => `${String(startLine + index).padStart(width, " ")} | ${line}`).join("\n"),
+      };
+    },
+  });
+}
+
+function splitLines(text: string): string[] {
+  if (text.length === 0) return [];
+  const lines = text.split(/\r\n|\n|\r/);
+  if (text.endsWith("\n") || text.endsWith("\r")) lines.pop();
+  return lines;
 }
 
 function createRipgrepTool(opts: { cwd: string }): ToolDefinition {

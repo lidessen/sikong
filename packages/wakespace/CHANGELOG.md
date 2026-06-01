@@ -7,6 +7,12 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 ### Changed
 
+- Project tools now expose `viewFile`, a line-numbered file-window reader for
+  targeted code inspection. Wakespace prompts steer coding workers toward
+  `rg` plus `viewFile` before structured edits.
+- Project-write implementation stages no longer expose raw `bash` when
+  structured project tools are available, so coding workers use the ACI before
+  recording implementation progress.
 - Terminal workflow state tools now stop the current agent run after recording
   durable intent. This prevents commit fallback loops such as repeated
   `commit_stage` or `block` calls without reintroducing fixed tool-call or step

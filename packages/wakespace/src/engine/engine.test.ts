@@ -979,6 +979,8 @@ describe("WorkflowEngine wake cycle", () => {
     await mkdir(join(root, "src"), { recursive: true });
     await writeFile(join(root, "src", "a.txt"), "needle\n", "utf8");
     let sawRg = false;
+    let sawBash = true;
+    let sawViewFile = false;
     let sawProjectPrompt = false;
     let runtimeOptions: unknown;
     const engine = new WorkflowEngine({
@@ -989,6 +991,8 @@ describe("WorkflowEngine wake cycle", () => {
       loop: () =>
         scriptLoop(async (input) => {
           sawRg = Boolean(input.tools?.rg);
+          sawBash = Boolean(input.tools?.bash);
+          sawViewFile = Boolean(input.tools?.viewFile);
           sawProjectPrompt = Boolean(input.system?.includes("Project tools"));
           runtimeOptions = input.runtimeOptions;
           const result = (await input.tools?.rg?.execute?.(
@@ -996,6 +1000,11 @@ describe("WorkflowEngine wake cycle", () => {
             {},
           )) as { matches?: string[] } | undefined;
           expect(result?.matches).toEqual(["src/a.txt:1:needle"]);
+          const viewed = (await input.tools?.viewFile?.execute?.(
+            { path: "src/a.txt", start_line: 1, max_lines: 1 },
+            {},
+          )) as { content?: string } | undefined;
+          expect(viewed?.content).toBe("1 | needle");
           await input.tools?.replaceInFile?.execute?.(
             { path: "src/a.txt", search: "needle", replace: "found", expected_replacements: 1 },
             {},
@@ -1008,6 +1017,8 @@ describe("WorkflowEngine wake cycle", () => {
     await engine.idle();
 
     expect(sawRg).toBe(true);
+    expect(sawBash).toBe(false);
+    expect(sawViewFile).toBe(true);
     expect(sawProjectPrompt).toBe(true);
     expect(runtimeOptions).toMatchObject({ toolChoice: "required" });
     expect((await engine.getTask("ai-tools"))?.status).toBe("done");

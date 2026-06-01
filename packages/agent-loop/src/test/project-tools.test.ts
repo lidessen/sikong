@@ -30,6 +30,7 @@ describe("project tools", () => {
       expect.arrayContaining([
         "bash",
         "readFile",
+        "viewFile",
         "writeFile",
         "replaceInFile",
         "rg",
@@ -48,6 +49,35 @@ describe("project tools", () => {
     const bash = (await execute(tools.bash, { command: "rg needle ." })) as { stdout?: string; exitCode?: number };
     expect(bash.exitCode).toBe(0);
     expect(bash.stdout).toContain("src/a.txt:1:needle");
+  });
+
+  test("views a line-numbered file window", async () => {
+    const root = await tempProject();
+    const tools = await createProjectTools({ cwd: root });
+
+    const viewed = (await execute(tools.viewFile, {
+      path: "src/a.txt",
+      start_line: 2,
+      max_lines: 1,
+    })) as {
+      path?: string;
+      startLine?: number;
+      endLine?: number;
+      totalLines?: number;
+      truncatedBefore?: boolean;
+      truncatedAfter?: boolean;
+      content?: string;
+    };
+
+    expect(viewed).toMatchObject({
+      path: "src/a.txt",
+      startLine: 2,
+      endLine: 2,
+      totalLines: 2,
+      truncatedBefore: true,
+      truncatedAfter: false,
+      content: "2 | other",
+    });
   });
 
   test("replaces exact text inside an existing project file", async () => {

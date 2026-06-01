@@ -88,6 +88,11 @@ hooks, and role separation.
 - In stages that require project writes and have project tools available,
   reject output-field `set_field` commands and `request_transition` until a
   successful structured project write has been observed.
+- Provide a line-window file viewer so workers can inspect targeted code with
+  line numbers instead of repeatedly dumping whole files.
+- Do not expose raw `bash` in project-write implementation stages when
+  structured project tools are available; keep shell access for non-write stages
+  such as verification.
 - Refuse `writeFile` overwrites of existing files in project-write stages.
 - Generate JSON schema for `commit_stage.fields` from workflow field types and
   validate field values in the tool executor.
