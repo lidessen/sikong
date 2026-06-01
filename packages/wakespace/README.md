@@ -92,7 +92,15 @@ dependencies already resolve). From `packages/wakespace`:
 
 ```sh
 bun run release:dry   # build all platforms + npm publish --dry-run everywhere
-bun run release       # build all platforms + publish for real (needs npm auth)
+NPM_TOKEN=... bun run release
+```
+
+The script performs `npm whoami` with the same auth config before any real
+publish. If `NPM_TOKEN` is loaded only when your shell starts at the repository
+root, run the release from the root with an explicit environment override:
+
+```sh
+NPM_TOKEN="$NPM_TOKEN" bun --cwd packages/wakespace scripts/release.ts
 ```
 
 The platform matrix lives in `scripts/build-platforms.ts`; it stamps each
@@ -100,6 +108,13 @@ platform package with the launcher's version and fails if
 `optionalDependencies` drift out of sync. Bump the version in both
 `package.json` (version + each `optionalDependencies` entry) when cutting a
 release. Run `bun run release:dry` before publishing.
+
+When publishing from this monorepo, do not rely on npm discovering a local
+`.npmrc` from generated package directories. The release script maps `NPM_TOKEN`
+to a temporary `NPM_CONFIG_USERCONFIG` file and passes that config explicitly to
+each `npm publish` child process, then removes it. This avoids the recurring
+case where `npm whoami` succeeds in one directory but platform-package publish
+fails with auth/404 errors.
 
 ## License
 
