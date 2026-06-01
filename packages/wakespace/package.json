@@ -1,6 +1,6 @@
 {
   "name": "wakespace",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Durable wake-loop workspace for agent-driven project development.",
   "type": "module",
   "bin": {
@@ -42,13 +42,13 @@
   },
   "homepage": "https://github.com/lidessen/wakespace/tree/main/packages/wakespace#readme",
   "optionalDependencies": {
-    "wakespace-darwin-arm64": "0.1.3",
-    "wakespace-darwin-x64": "0.1.3",
-    "wakespace-linux-x64": "0.1.3",
-    "wakespace-linux-arm64": "0.1.3",
-    "wakespace-linux-x64-musl": "0.1.3",
-    "wakespace-linux-arm64-musl": "0.1.3",
-    "wakespace-windows-x64": "0.1.3"
+    "wakespace-darwin-arm64": "0.1.4",
+    "wakespace-darwin-x64": "0.1.4",
+    "wakespace-linux-x64": "0.1.4",
+    "wakespace-linux-arm64": "0.1.4",
+    "wakespace-linux-x64-musl": "0.1.4",
+    "wakespace-linux-arm64-musl": "0.1.4",
+    "wakespace-windows-x64": "0.1.4"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -3,10 +3,12 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.1.4 — 2026-06-01
 
 ### Added
 
+- Wake chronicles now record `wake.progress` events for worker and commit tool
+  calls, so `inspect wait` can observe long wakes before they finish.
 - Wake chronicles now record bounded worker diagnostics for each worker and
   forced commit pass, including state-command counts, project tool/write
   evidence, tool-call summaries, and first-pass text previews.
@@ -29,6 +31,8 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 ### Changed
 
+- `chronicle --text` now renders structured facts for diagnostics, forced
+  commits, and progress rows instead of relying only on prose summaries.
 - Default wake step budget increased from 6 to 12 so development workers have
   enough room to inspect, edit, and commit state in one small implementation
   wake.
