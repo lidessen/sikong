@@ -319,7 +319,7 @@ export class WorkflowEngine {
    */
   async intake(
     request: string,
-    opts: { projectId: string; taskId?: string; workerId?: string; wake?: boolean },
+    opts: { projectId: string; taskId?: string; workerId?: string; parentId?: string; wake?: boolean },
   ): Promise<Task> {
     const workflows = this.o.registry.list();
     const decision = await this.routeRequest(request, workflows);
@@ -342,6 +342,7 @@ export class WorkflowEngine {
       fields,
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
       ...(opts.workerId ? { workerId: opts.workerId } : {}),
+      ...(opts.parentId ? { parentId: opts.parentId } : {}),
       ...(opts.wake !== undefined ? { wake: opts.wake } : {}),
     });
   }

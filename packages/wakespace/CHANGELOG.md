@@ -14,6 +14,8 @@ All notable changes to `wakespace` are documented here. This project adheres to
   event (optionally scoped by task) or exits on timeout.
 - AI SDK project workers now get `replaceInFile` for exact small source edits;
   wakespace counts it as project write evidence alongside `writeFile`.
+- CLI task creation now accepts `--parent`, and `submit` accepts `transition`
+  so a lead can split broad work into child tasks and explicitly accept results.
 
 ### Fixed
 

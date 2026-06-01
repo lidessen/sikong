@@ -13,6 +13,79 @@ async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<st
 }
 
 describe("wakespace CLI", () => {
+  test("create --parent links a child task and submit transition records lead acceptance", async () => {
+    const dir = await tmp();
+    try {
+      const parent = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "create",
+        "parent work",
+        "--dir",
+        dir,
+        "--workflow",
+        "general",
+        "--id",
+        "parent",
+      ]);
+      expect(parent.exitCode).toBe(0);
+
+      const child = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "create",
+        "child work",
+        "--dir",
+        dir,
+        "--workflow",
+        "general",
+        "--parent",
+        "parent",
+        "--id",
+        "child",
+      ]);
+      expect(child.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(child.stdout))).toMatchObject({
+        task: { id: "child", parentId: "parent" },
+      });
+
+      const setSummary = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "submit",
+        "child",
+        "set-field",
+        "summary",
+        "child done",
+        "--dir",
+        dir,
+      ]);
+      expect(setSummary.exitCode).toBe(0);
+      const transition = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "submit",
+        "child",
+        "transition",
+        "lead accepted child result",
+        "--dir",
+        dir,
+      ]);
+      expect(transition.exitCode).toBe(0);
+
+      const task = Bun.spawnSync([process.execPath, cliPath, "task", "child", "--dir", dir]);
+      expect(task.exitCode).toBe(0);
+      const detail = JSON.parse(new TextDecoder().decode(task.stdout));
+      expect(detail.task).toMatchObject({
+        id: "child",
+        parentId: "parent",
+      });
+      expect(detail.timeline.map((event: { type: string }) => event.type)).toContain("transition.requested");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("inspect wait returns the next chronicle event", async () => {
     const dir = await tmp();
     try {

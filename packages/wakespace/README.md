@@ -65,6 +65,14 @@ for the next chronicle event:
 wakespace inspect wait --task <taskId> --timeout 30000
 ```
 
+When a task is too broad, split a narrower child task and let the lead merge
+accepted fields back into the parent:
+
+```sh
+wakespace create "small bounded change" --parent <parentTaskId> --workflow general
+wakespace submit <taskId> transition "accepted"
+```
+
 ## Live Smoke
 
 ```sh

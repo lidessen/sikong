@@ -5,9 +5,9 @@
  * durable workspace dir; `run` drives pending tasks' wakes to quiescence. Write
  * commands take an exclusive dir lock — don't run two writers on one --dir.
  *
- *   create <request> [--workflow <id>] [--project <id>] [--id <id>]   publish a task (intake-routed unless --workflow)
+ *   create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>]   publish a task
  *   run [--task <id>]                                                 drive pending task(s) to done/quiet (exit 1 if any wake errored)
- *   submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>
+ *   submit <id> <set-field <f> <v> | transition [reason] | cancel [reason] | block <reason> | unblock>
  *   register <workflow.yaml>                                          register a workflow definition
  *   overview [--project <id>] [--json]                                  human workspace dashboard
  *   status [--project <id>] [--text] | task <id> [--text] | chronicle [--task <id>] [-n N] [--text]
@@ -42,6 +42,7 @@ const VALUE_FLAGS = new Set([
   "--root", "--name", "--model", "--worker", "--runtime", "--provider", "--desc",
   "--permission", "--permission-mode",
   "--after", "--timeout", "--poll",
+  "--parent",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--text", "--human"]);
 const fail = (msg: string, code = 2): never => {
@@ -152,10 +153,13 @@ function parseLeadCommand(op: string, rest: string[]): Command {
       if (!reason) throw new Error("block needs <reason>");
       return { kind: "block", reason };
     }
+    case "transition":
+    case "request-transition":
+      return { kind: "request_transition", ...(rest.length ? { reason: rest.join(" ") } : {}) };
     case "unblock":
       return { kind: "unblock" };
     default:
-      throw new Error(`unknown submit op "${op}" (set-field | cancel | block | unblock)`);
+      throw new Error(`unknown submit op "${op}" (set-field | transition | cancel | block | unblock)`);
   }
 }
 
@@ -287,12 +291,13 @@ switch (cmd) {
   // ---- drive (constructs the engine; create/run reach DeepSeek) ------------
   case "create": {
     const request = positional[1];
-    if (!request) fail("usage: cli create <request> [--workflow <id>] [--project <id>] [--id <id>]");
+    if (!request) fail("usage: cli create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>]");
     const ws = await openWorkspace(dir);
     const projectId = flag("--project") ?? "default";
     const id = flag("--id");
     const workflowId = flag("--workflow");
     const workerId = flag("--worker");
+    const parentId = flag("--parent");
     let task;
     try {
       if (workflowId) {
@@ -309,6 +314,7 @@ switch (cmd) {
           wake: false,
           ...(id ? { taskId: id } : {}),
           ...(workerId ? { workerId } : {}),
+          ...(parentId ? { parentId } : {}),
         });
       } else {
         task = await ws.engine.intake(request!, {
@@ -316,6 +322,7 @@ switch (cmd) {
           wake: false,
           ...(id ? { taskId: id } : {}),
           ...(workerId ? { workerId } : {}),
+          ...(parentId ? { parentId } : {}),
         });
       }
     } catch (err) {
@@ -351,7 +358,7 @@ switch (cmd) {
   case "submit": {
     const id = positional[1];
     const op = positional[2];
-    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>");
+    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | transition [reason] | cancel [reason] | block <reason> | unblock>");
     const ws = await openWorkspace(dir);
     let command: Command;
     try {
@@ -521,9 +528,9 @@ switch (cmd) {
     console.log(
       `wakespace CLI (dir: ${dir})\n\n` +
         "drive:\n" +
-        "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--id <id>]\n" +
+        "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--parent <id>] [--id <id>]\n" +
         "  run [--task <id>]\n" +
-        "  submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>\n" +
+        "  submit <id> <set-field <f> <v> | transition [reason] | cancel [reason] | block <reason> | unblock>\n" +
         "  register <workflow.yaml>\n" +
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
         "  project memory <id> [markdown]\n" +
