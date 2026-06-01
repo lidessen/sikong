@@ -79,6 +79,81 @@ describe("WorkflowEngine wake cycle", () => {
     expect((await engine.getTask("g1"))?.status).toBe("done");
   });
 
+  test("runs a forced commit pass when a worker returns text without state commands", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-commit-tools-"));
+    await writeFile(join(root, "marker.txt"), "done\n", "utf8");
+    let calls = 0;
+    let commitRuntimeOptions: unknown;
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (calls === 1) {
+          await input.tools?.writeFile?.execute?.({ path: "marker.txt", content: "done\n" }, {});
+          return;
+        }
+        commitRuntimeOptions = input.runtimeOptions;
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_done"]);
+        await input.tools?.commit_done?.execute?.(
+          { summary: "validated by worker commit pass", reason: "committed" },
+          {},
+        );
+      }, "ai-sdk");
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "commit1", fields: { request: "validate" } });
+    await engine.idle();
+
+    const task = await engine.getTask("commit1");
+    expect(calls).toBe(2);
+    expect(task?.status).toBe("done");
+    expect(task?.fields.summary).toBe("validated by worker commit pass");
+    expect(commitRuntimeOptions).toMatchObject({ toolChoice: "required" });
+    expect(commitRuntimeOptions).toMatchObject({ activeTools: ["commit_done", "block", "cancel"] });
+    expect(commitRuntimeOptions).toMatchObject({
+      providerOptions: { deepseek: { thinking: { type: "disabled" } } },
+    });
+  });
+
+  test("blocks an ungrounded forced commit pass when no project write ran", async () => {
+    let calls = 0;
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (calls === 1) return;
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel"]);
+        await input.tools?.block?.execute?.({ reason: "no project writeFile evidence" }, {});
+      }, "ai-sdk");
+    const engine = newEngine(loop);
+
+    await engine.createTask({ projectId: "p", taskId: "commit-ungrounded", fields: { request: "validate" } });
+    await engine.idle();
+
+    const task = await engine.getTask("commit-ungrounded");
+    expect(calls).toBe(2);
+    expect(task?.status).toBe("blocked");
+  });
+
+  test("reports a wake error when even the forced commit pass emits no state commands", async () => {
+    const errors: string[] = [];
+    const engine = newEngine(
+      () => scriptLoop(async () => {}),
+      [],
+      { onError: ({ error }: { error: Error }) => errors.push(error.message) },
+    );
+
+    await engine.createTask({ projectId: "p", taskId: "commit-empty", fields: { request: "validate" } });
+    await engine.idle();
+
+    expect((await engine.getTask("commit-empty"))?.status).toBe("in_progress");
+    expect(errors).toContain("worker completed without calling any wakespace state tool");
+  });
+
   test("an external command can finish a stage with no agent wake (pre-advance)", async () => {
     const wf: WorkflowDef = {
       id: "lead",
@@ -280,6 +355,7 @@ describe("WorkflowEngine wake cycle", () => {
     await writeFile(join(root, "src", "a.txt"), "needle\n", "utf8");
     let sawRg = false;
     let sawProjectPrompt = false;
+    let runtimeOptions: unknown;
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
@@ -289,6 +365,7 @@ describe("WorkflowEngine wake cycle", () => {
         scriptLoop(async (input) => {
           sawRg = Boolean(input.tools?.rg);
           sawProjectPrompt = Boolean(input.system?.includes("Project tools"));
+          runtimeOptions = input.runtimeOptions;
           const result = (await input.tools?.rg?.execute?.(
             { pattern: "needle", path: "src" },
             {},
@@ -303,6 +380,7 @@ describe("WorkflowEngine wake cycle", () => {
 
     expect(sawRg).toBe(true);
     expect(sawProjectPrompt).toBe(true);
+    expect(runtimeOptions).toMatchObject({ toolChoice: "required" });
     expect((await engine.getTask("ai-tools"))?.status).toBe("done");
   });
 

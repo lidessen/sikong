@@ -63,6 +63,29 @@ describe("projects", () => {
     }
   });
 
+  test("JsonProjectStore stores project memory as markdown beside the structured definition", async () => {
+    const dir = await tmp();
+    try {
+      const ps = new JsonProjectStore(dir);
+      await ps.put({
+        id: "web",
+        name: "Web",
+        root: "/repo/web",
+        memory: "do not serialize me",
+      });
+      await ps.putMemory("web", "# Project Memory\n\nPrefer DeepSeek for dogfood wakes.\n");
+
+      const yaml = await readFile(join(dir, "projects", "web.yaml"), "utf8");
+      expect(yaml).not.toContain("do not serialize me");
+      expect(await readFile(join(dir, "projects", "web.md"), "utf8")).toContain("Prefer DeepSeek");
+      expect((await ps.get("web"))?.memory).toContain("Prefer DeepSeek");
+      expect((await ps.list()).find((p) => p.id === "web")?.memory).toContain("Prefer DeepSeek");
+      expect(await ps.getMemory("web")).toContain("Prefer DeepSeek");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("createTask rejects an unknown project and uses the project's default workflow", async () => {
     const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
     registry.register(BUG);

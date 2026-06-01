@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
   createProjectTools,
+  defineTool,
   emptyUsage,
   type AgentLoop,
   type LoopEvent,
   type RunResult,
+  type ToolSet,
 } from "agent-loop";
 import {
   filterValidFields,
@@ -32,7 +34,7 @@ import type {
 import type { Project } from "../project";
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
-import { buildPrompt, buildSystem } from "./prompt";
+import { buildCommitSystem, buildPrompt, buildSystem } from "./prompt";
 
 function isTerminal(status: TaskStatus): boolean {
   return status === "done" || status === "cancelled";
@@ -338,33 +340,139 @@ export class WorkflowEngine {
         `task ${taskId}: worker runtime "${loop.id}" lacks the "tools" capability that command tools require (use claude-code or ai-sdk, not codex/cursor)`,
       );
     const { tools: commandTools, drain } = buildCommandTools(wf, stage);
-    const projectTools =
+    const rawProjectTools =
       loop.id === "ai-sdk" && project?.root
         ? await createProjectTools({ cwd: project.root, ...(project.env ? { env: project.env } : {}) })
         : {};
+    let projectToolCalls = 0;
+    let projectWriteCalls = 0;
+    const projectTools: ToolSet = {};
+    for (const [name, tool] of Object.entries(rawProjectTools)) {
+      projectTools[name] = tool.execute
+        ? {
+            ...tool,
+            execute: async (args, ctx) => {
+              projectToolCalls++;
+              if (name === "writeFile") projectWriteCalls++;
+              return tool.execute!(args, ctx);
+            },
+          }
+        : tool;
+    }
     const tools = { ...projectTools, ...commandTools };
     this.o.hooks?.onWakeStart?.({ taskId, wakeId, stageId: task.stageId });
     await this.chron({ type: "wake.start", taskId, wakeId, summary: `wake @ "${task.stageId}"` });
 
     const controller = new AbortController();
+    const aiSdkRuntimeOptions =
+      loop.id === "ai-sdk"
+        ? {
+            toolChoice: "required",
+            activeTools: Object.keys(tools),
+            providerOptions: { deepseek: { thinking: { type: "disabled" } } },
+          }
+        : undefined;
     const run = loop.run({
-      system: buildSystem(task, wf, stage, Object.keys(projectTools)),
+      system: buildSystem(task, wf, stage, Object.keys(projectTools), project?.memory),
       prompt: buildPrompt(task, wf, stage),
       tools,
       signal: controller.signal,
       ...(this.o.maxStepsPerWake ? { maxSteps: this.o.maxStepsPerWake } : {}),
+      ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),
     });
-    const consume = (async (): Promise<RunResult> => {
+    const consumeRun = async (runHandle: ReturnType<AgentLoop["run"]>): Promise<RunResult> => {
       if (this.o.hooks?.onLoopEvent) {
-        for await (const event of run) this.o.hooks.onLoopEvent({ taskId, wakeId, event });
+        for await (const event of runHandle) this.o.hooks.onLoopEvent({ taskId, wakeId, event });
       }
-      return run.result;
-    })();
-    const result = await this.boundedRun(consume, () => {
+      return runHandle.result;
+    };
+    let result = await this.boundedRun(consumeRun(run), () => {
       controller.abort();
       run.cancel("wake timeout");
     });
-    const commands = drain();
+    let commands = drain();
+
+    if (commands.length === 0 && result.status !== "error") {
+      await this.chron({
+        type: "wake.commit",
+        taskId,
+        wakeId,
+        summary: "worker produced no state commands; forcing a state-tool commit pass",
+      });
+      const commitCommands: Command[] = [];
+      const pushCommit = (command: Command): { acknowledged: true } => {
+        commitCommands.push(command);
+        return { acknowledged: true };
+      };
+      const commitTools: ToolSet = {};
+      if (projectWriteCalls > 0) {
+        commitTools.commit_done = defineTool({
+          description:
+            "Commit successful completion to wakespace. Provide a concise summary; the engine records it and requests the workflow transition.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              summary: { type: "string" },
+              reason: { type: "string" },
+            },
+            required: ["summary"],
+            additionalProperties: false,
+          },
+          execute: (args) => {
+            const summary = String(args.summary);
+            pushCommit({ kind: "set_field", field: "summary", value: summary });
+            return pushCommit({
+              kind: "request_transition",
+              reason: args.reason ? String(args.reason) : summary,
+            });
+          },
+        });
+      }
+      commitTools.block = defineTool({
+        description: "Block the task when it cannot be completed. State the concrete reason.",
+        inputSchema: {
+          type: "object",
+          properties: { reason: { type: "string" } },
+          required: ["reason"],
+          additionalProperties: false,
+        },
+        execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
+      });
+      commitTools.cancel = defineTool({
+        description: "Cancel the task when it should not be completed at all.",
+        inputSchema: {
+          type: "object",
+          properties: { reason: { type: "string" } },
+          additionalProperties: false,
+        },
+        execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
+      });
+      const commitController = new AbortController();
+      const commitPrompt =
+        projectWriteCalls > 0
+          ? "Commit durable wakespace progress now. Call `commit_done` if complete, otherwise call `block` or `cancel`. Do not answer in plain text."
+          : "Commit durable wakespace progress now. No project writeFile evidence was observed, so call `block` with a concrete reason or `cancel`. Do not answer in plain text.";
+      const commitRun = loop.run({
+        system: buildCommitSystem(task, wf, result.text, { projectToolCalls, projectWriteCalls }),
+        prompt: commitPrompt,
+        tools: commitTools,
+        signal: commitController.signal,
+        maxSteps: 2,
+        runtimeOptions:
+          loop.id === "ai-sdk"
+            ? {
+                toolChoice: "required",
+                activeTools: Object.keys(commitTools),
+                providerOptions: { deepseek: { thinking: { type: "disabled" } } },
+              }
+            : undefined,
+      });
+      result = await this.boundedRun(consumeRun(commitRun), () => {
+        commitController.abort();
+        commitRun.cancel("wake commit timeout");
+      });
+      commands = [...drain(), ...commitCommands];
+    }
 
     // (3) Apply the agent's commands against the LIVE task (re-loaded so a command
     // that raced in via submitCommand — e.g. a cancel — is respected, and no
@@ -407,7 +515,11 @@ export class WorkflowEngine {
     task = await this.advance(taskId, wf, "engine", wakeId);
     const advancedTo = task.stageId !== stageAtStart ? task.stageId : undefined;
     const error =
-      result.status === "error" ? (result.error ?? new Error("wake run failed")) : undefined;
+      result.status === "error"
+        ? (result.error ?? new Error("wake run failed"))
+        : commands.length === 0
+          ? new Error("worker completed without calling any wakespace state tool")
+          : undefined;
     this.o.hooks?.onWakeEnd?.({
       taskId,
       wakeId,

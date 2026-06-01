@@ -6,6 +6,7 @@ packages/wakespace/npm/
 .env
 .env.*
 !.env.example
+.wakespace/
 coverage/
 *.tsbuildinfo
 .vitest/

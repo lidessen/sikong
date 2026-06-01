@@ -6,6 +6,7 @@ import {
   type ToolSet as AiToolSet,
   type LanguageModel,
   type StepResult,
+  type ToolChoice,
   type FlexibleSchema,
   type JSONSchema7,
 } from "ai";
@@ -28,6 +29,12 @@ export interface AiSdkRuntimeOptions {
   instructions?: string;
   /** Override the soft step cap for this run (otherwise `req.maxSteps`). */
   maxSteps?: number;
+  /** Override AI SDK tool choice for this run. */
+  toolChoice?: ToolChoice<AiToolSet>;
+  /** Limit which tools are active for this run. */
+  activeTools?: string[];
+  /** Provider-specific options passed through to the AI SDK. */
+  providerOptions?: Record<string, unknown>;
 }
 
 export interface AiSdkAdapterOptions {
@@ -138,6 +145,9 @@ export class AiSdkAdapter implements BackendAdapter {
           model,
           instructions: system || undefined,
           tools,
+          ...(o.toolChoice ? { toolChoice: o.toolChoice } : {}),
+          ...(o.activeTools ? { activeTools: o.activeTools as Array<keyof AiToolSet> } : {}),
+          ...(o.providerOptions ? { providerOptions: o.providerOptions as never } : {}),
           ...(stepBudget ? { stopWhen: stepCountIs(stepBudget) } : {}),
           prepareStep,
         });

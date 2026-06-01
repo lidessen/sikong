@@ -299,7 +299,7 @@ function eventTypesInCurrentStage(events: readonly EventLike[]): ReadonlySet<str
   let start = 0;
   for (let i = events.length - 1; i >= 0; i--) {
     const t = events[i]?.type;
-    if (t === "stage.entered" || t === "task.created") {
+    if (t === "stage.entered" || t === "task.created" || t === "task.unblocked") {
       start = i + 1;
       break;
     }

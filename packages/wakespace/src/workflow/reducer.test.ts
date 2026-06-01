@@ -140,6 +140,30 @@ describe("tryAdvance (guard-driven progression)", () => {
     expect(tryAdvance(t, WF, [])).toEqual([]);
   });
 
+  test("transition requests do not survive block and unblock", async () => {
+    const wf: WorkflowDef = {
+      id: "block-window",
+      version: "1",
+      name: "Block Window",
+      description: "",
+      fields: {},
+      stages: [
+        { id: "open", category: "in_progress", entry: { op: "always" } },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    const es = new MemoryEventStore(() => 1);
+    await es.append("t", initTask({ taskId: "t", projectId: "p", workflow: wf }));
+    let t = project(await es.load("t"), wf);
+
+    await es.append("t", reduceCommands(t, wf, [{ kind: "request_transition" }, { kind: "block", reason: "hold" }]));
+    t = project(await es.load("t"), wf);
+    await es.append("t", reduceCommands(t, wf, [{ kind: "unblock" }]));
+    t = project(await es.load("t"), wf);
+
+    expect(tryAdvance(t, wf, await es.load("t"))).toEqual([]);
+  });
+
   test("hasEvent guards do not leak across stage boundaries", async () => {
     const leaky: WorkflowDef = {
       id: "leak",

@@ -20,6 +20,12 @@ export interface Project {
   env?: Record<string, string>;
   /** Runtime permission posture for this project's wakes, overriding the worker default when set. */
   permissionMode?: WorkerPermissionMode;
+  /**
+   * Free-form project context loaded from `projects/<id>.md`. This is advisory
+   * memory for workers, not workflow state, and is not serialized into the
+   * structured project YAML.
+   */
+  memory?: string;
 }
 
 /** The builtin fallback project — the zero-config default every task gets without `--project`. */

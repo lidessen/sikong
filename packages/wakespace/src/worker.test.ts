@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockLoop } from "agent-loop";
@@ -59,6 +59,32 @@ describe("workers", () => {
     for (const s of d.suggestions) {
       expect(d.runtimes).toContain(s.runtime);
       expect(d.providers).toContain(s.provider);
+    }
+  });
+
+  test("discoverWorkers reports codex and cursor without suggesting them as command-tool workers", async () => {
+    const dir = await tmp();
+    const oldPath = process.env.PATH;
+    const oldCursorKey = process.env.CURSOR_API_KEY;
+    try {
+      const codex = join(dir, "codex");
+      await writeFile(codex, "#!/bin/sh\nexit 0\n");
+      await chmod(codex, 0o755);
+      process.env.PATH = `${dir}:${oldPath ?? ""}`;
+      process.env.CURSOR_API_KEY = "test-cursor-key";
+
+      const d = await discoverWorkers();
+      expect(d.runtimes).toContain("codex");
+      expect(d.runtimes).toContain("cursor");
+      expect(d.runtimeDetails.find((r) => r.id === "codex")?.usableAsWorker).toBe(false);
+      expect(d.runtimeDetails.find((r) => r.id === "cursor")?.usableAsWorker).toBe(false);
+      expect(d.suggestions.map((s) => s.runtime as string)).not.toContain("codex");
+      expect(d.suggestions.map((s) => s.runtime as string)).not.toContain("cursor");
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldCursorKey === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = oldCursorKey;
+      await rm(dir, { recursive: true, force: true });
     }
   });
 

@@ -22,6 +22,7 @@ import type {
  *   events/<taskId>.jsonl      — append-only event log (system of record)
  *   projections/<taskId>.json  — current task projection (read side, written atomically)
  *   projects/<id>.yaml         — project definitions
+ *   projects/<id>.md           — optional project memory
  *   workers/<id>.yaml          — worker definitions
  *   chronicle.jsonl            — append-only activity log
  *
@@ -199,6 +200,7 @@ export class JsonProjectionStore implements ProjectionStore {
 /** Durable `ProjectStore` (projects/<id>.yaml, atomic writes). The builtin `default` is always available. */
 export class JsonProjectStore implements ProjectStore {
   private readonly queue = new WriteQueue();
+  static readonly MEMORY_LIMIT_CHARS = 12_000;
 
   constructor(private readonly dir: string) {}
 
@@ -208,9 +210,24 @@ export class JsonProjectStore implements ProjectStore {
   private file(id: string): string {
     return yamlFile(this.root, sanitize(id));
   }
+  memoryPath(id: string): string {
+    return join(this.root, `${sanitize(id)}.md`);
+  }
+
+  private async attachMemory(project: Project): Promise<Project> {
+    try {
+      const memory = await readFile(this.memoryPath(project.id), "utf8");
+      return { ...project, memory: limitProjectMemory(memory) };
+    } catch (err) {
+      if (isENOENT(err)) return project;
+      throw err;
+    }
+  }
 
   async get(id: string): Promise<Project | null> {
-    return (await readFirstDataFile<Project>(this.root, sanitize(id))) ?? (id === DEFAULT_PROJECT.id ? DEFAULT_PROJECT : null);
+    const project =
+      (await readFirstDataFile<Project>(this.root, sanitize(id))) ?? (id === DEFAULT_PROJECT.id ? DEFAULT_PROJECT : null);
+    return project ? await this.attachMemory(project) : null;
   }
 
   put(project: Project): Promise<void> {
@@ -218,7 +235,27 @@ export class JsonProjectStore implements ProjectStore {
       await mkdir(this.root, { recursive: true });
       const file = this.file(project.id);
       const tmp = `${file}.${process.pid}.tmp`;
-      await writeFile(tmp, stringifyYaml(project));
+      const { memory: _memory, ...definition } = project;
+      await writeFile(tmp, stringifyYaml(definition));
+      await rename(tmp, file);
+    });
+  }
+
+  async getMemory(id: string): Promise<string> {
+    try {
+      return limitProjectMemory(await readFile(this.memoryPath(id), "utf8"));
+    } catch (err) {
+      if (isENOENT(err)) return "";
+      throw err;
+    }
+  }
+
+  putMemory(id: string, memory: string): Promise<void> {
+    return this.queue.run(async () => {
+      await mkdir(this.root, { recursive: true });
+      const file = this.memoryPath(id);
+      const tmp = `${file}.${process.pid}.tmp`;
+      await writeFile(tmp, memory);
       await rename(tmp, file);
     });
   }
@@ -237,13 +274,18 @@ export class JsonProjectStore implements ProjectStore {
       try {
         const file = join(this.root, name);
         const p = parseDataFile<Project>(await readFile(file, "utf8"), file);
-        out.set(p.id, p);
+        out.set(p.id, await this.attachMemory(p));
       } catch {
         // skip a torn/invalid project file
       }
     }
-    return [...out.values()];
+    return await Promise.all([...out.values()].map((p) => this.attachMemory(p)));
   }
+}
+
+function limitProjectMemory(memory: string): string {
+  if (memory.length <= JsonProjectStore.MEMORY_LIMIT_CHARS) return memory;
+  return `${memory.slice(0, JsonProjectStore.MEMORY_LIMIT_CHARS)}\n\n[project memory truncated]`;
 }
 
 /** Durable `WorkerStore` (workers/<id>.yaml, atomic writes). No builtins. */

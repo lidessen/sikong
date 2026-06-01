@@ -140,6 +140,7 @@ const WRITE_CMDS = new Set(["create", "run", "submit", "register"]);
 const needsLock =
   (!!cmd && WRITE_CMDS.has(cmd)) ||
   (cmd === "project" && positional[1] === "create") ||
+  (cmd === "project" && positional[1] === "memory" && positional.length > 3) ||
   (cmd === "worker" && (positional[1] === "create" || positional[1] === "default"));
 if (needsLock) {
   let lockPath: string;
@@ -332,7 +333,7 @@ switch (cmd) {
       }
       for (const p of list)
         console.log(
-          `  ${p.id}  ${p.name}  root=${p.root}${p.defaultWorkflowId ? ` workflow=${p.defaultWorkflowId}` : ""}${p.defaultWorker ? ` worker=${p.defaultWorker}` : ""}`,
+          `  ${p.id}  ${p.name}  root=${p.root}${p.defaultWorkflowId ? ` workflow=${p.defaultWorkflowId}` : ""}${p.defaultWorker ? ` worker=${p.defaultWorker}` : ""}${p.memory ? " memory=md" : ""}`,
         );
       break;
     }
@@ -354,7 +355,26 @@ switch (cmd) {
       else printJson({ ok: true, project });
       break;
     }
-    fail("usage: cli project <create <id> | list>");
+    if (sub === "memory") {
+      const id = positional[2];
+      if (!id || !isValidProjectId(id)) fail("usage: cli project memory <id> [markdown]");
+      const projectId = id as string;
+      const store = new JsonProjectStore(dir);
+      const project = await store.get(projectId);
+      if (!project) fail(`project "${projectId}" not found`, 1);
+      const markdown = positional.slice(3).join(" ");
+      if (markdown) {
+        await store.putMemory(projectId, markdown.endsWith("\n") ? markdown : `${markdown}\n`);
+        if (text) console.log(`updated project memory ${projectId} (${store.memoryPath(projectId)})`);
+        else printJson({ ok: true, projectId, path: store.memoryPath(projectId) });
+      } else {
+        const memory = await store.getMemory(projectId);
+        if (text) console.log(memory);
+        else printJson({ projectId, memory, path: store.memoryPath(projectId) });
+      }
+      break;
+    }
+    fail("usage: cli project <create <id> | list | memory <id> [markdown]>");
     break;
   }
   case "worker": {
@@ -367,6 +387,8 @@ switch (cmd) {
       }
       console.log(`providers: ${d.providers.join(", ") || "(none — set a provider API key)"}`);
       console.log(`runtimes:  ${d.runtimes.join(", ") || "(none — install @ai-sdk/<provider> or the claude CLI)"}`);
+      for (const r of d.runtimeDetails.filter((rt) => !rt.usableAsWorker))
+        console.log(`  ${r.id}: visible, not createable as a wakespace worker — ${r.reason}`);
       console.log("\nsuggested workers (create the ones you want, confirm the model):");
       if (d.suggestions.length === 0) console.log("  (none available in this environment)");
       for (const s of d.suggestions)
@@ -437,6 +459,7 @@ switch (cmd) {
         "  submit <id> <set-field <f> <v> | cancel [reason] | block <reason> | unblock>\n" +
         "  register <workflow.yaml>\n" +
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
+        "  project memory <id> [markdown]\n" +
         "  worker discover | create <id> --runtime <r> --provider <p> --model <m> [--desc <d>] [--permission <mode>] | default <id>\n" +
         "read:\n" +
         "  overview [--project <id>] [--json]     human dashboard (text by default)\n" +

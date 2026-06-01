@@ -21,6 +21,7 @@ export type ChronicleType =
   | "task.created"
   | "intake.routed"
   | "wake.start"
+  | "wake.commit"
   | "wake.end"
   | "wake.error"
   | "task.advanced"

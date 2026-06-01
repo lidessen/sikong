@@ -24,6 +24,7 @@ export function buildSystem(
   wf: WorkflowDef,
   stage: StageDef | undefined,
   projectToolNames: readonly string[] = [],
+  projectMemory = "",
 ): string {
   const lines: string[] = [
     `# Workflow: ${wf.name}`,
@@ -34,6 +35,7 @@ export function buildSystem(
     }.`,
   ];
   if (stage?.instructions) lines.push("", "## Stage", stage.instructions);
+  if (projectMemory.trim()) lines.push("", "## Project memory", projectMemory.trim());
 
   const fieldNames = Object.keys(wf.fields);
   if (fieldNames.length) {
@@ -68,4 +70,28 @@ export function buildPrompt(task: Task, wf: WorkflowDef, stage: StageDef | undef
   void wf;
   void stage;
   return `Advance task ${task.id} now: do this stage's work and update the task via the tools.`;
+}
+
+export function buildCommitSystem(
+  task: Task,
+  wf: WorkflowDef,
+  priorText: string,
+  evidence: { projectToolCalls: number; projectWriteCalls: number },
+): string {
+  const lines = [
+    `# Workflow: ${wf.name}`,
+    "",
+    `You are committing durable progress for task ${task.id}.`,
+    "",
+    "The previous worker pass ended without calling any wakespace state tool.",
+    `Project tool calls observed in that pass: ${evidence.projectToolCalls}.`,
+    `Project writeFile calls observed in that pass: ${evidence.projectWriteCalls}.`,
+    "You must now call at least one provided state tool. Do not answer in plain text.",
+    evidence.projectWriteCalls > 0
+      ? "If the task work is complete, call `commit_done` with a concise summary grounded in the project edits already performed."
+      : "Because no project writeFile call was observed, there is no edit evidence for fallback completion. Do not mark the task done; call `block` with a concrete reason.",
+    "If the task cannot be completed, call `block` with a concrete reason.",
+  ];
+  if (priorText.trim()) lines.push("", "## Previous worker text", priorText.trim());
+  return lines.join("\n");
 }

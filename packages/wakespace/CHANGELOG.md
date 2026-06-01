@@ -3,6 +3,23 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## 0.1.1 — 2026-06-01
+
+### Added
+
+- Added project markdown memory files that are loaded into worker prompts as bounded project context.
+- Documented the global ~/.wakespace home layout for projects, worktrees, memory, workers, and state.
+
+### Changed
+
+- Worker discovery now reports codex and cursor as visible but non-createable runtimes when they lack wakespace tool capability.
+- AI SDK wakes now require tool calls so workers cannot silently complete in plain text.
+
+### Fixed
+
+- Added a commit pass for workers that perform project-tool work but forget wakespace state tools, and block fallback completion when no write evidence exists.
+- Prevented stale transition.requested events from completing a task after block and unblock.
+
 ## 0.1.0 — 2026-06-01
 
 Initial dogfood release. Published as a CLI-only package: a tiny cross-platform

@@ -13,6 +13,8 @@ import { dirname, join } from "node:path";
 
 /** Tools-capable runtimes only — a worker must support command tools. */
 export type WorkerRuntime = "ai-sdk" | "claude-code";
+/** Runtime ids that discovery can report, including runtimes not usable for wakespace command-tool workers yet. */
+export type DiscoveredRuntime = WorkerRuntime | "codex" | "cursor";
 /** Built-in providers we can resolve a loop for. */
 export type WorkerProvider = "deepseek" | "anthropic" | "openai";
 /** Runtime permission posture. Currently applied by claude-code workers. */
@@ -44,9 +46,16 @@ export interface WorkerSuggestion {
   description: string;
 }
 
+export interface RuntimeDiscovery {
+  id: DiscoveredRuntime;
+  usableAsWorker: boolean;
+  reason?: string;
+}
+
 export interface Discovery {
   providers: WorkerProvider[];
-  runtimes: WorkerRuntime[];
+  runtimes: DiscoveredRuntime[];
+  runtimeDetails: RuntimeDiscovery[];
   suggestions: WorkerSuggestion[];
 }
 
@@ -113,6 +122,16 @@ async function hasAiSdkProvider(provider: WorkerProvider): Promise<boolean> {
   }
 }
 
+async function hasCursorSdk(): Promise<boolean> {
+  if (await hasPackage("@cursor/sdk")) return true;
+  try {
+    await import("@cursor/sdk");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Inspect the environment for usable providers/runtimes and suggest workers to create. */
 export async function discoverWorkers(): Promise<Discovery> {
   const providers = (Object.keys(PROVIDER_ENV) as WorkerProvider[]).filter((p) =>
@@ -124,14 +143,35 @@ export async function discoverWorkers(): Promise<Discovery> {
     aiSdkProviderAvailable.set(provider, await hasAiSdkProvider(provider));
   }
 
-  const runtimes: WorkerRuntime[] = [];
-  if (await onPath("claude")) runtimes.push("claude-code");
+  const runtimeDetails: RuntimeDiscovery[] = [];
+  const runnableWorkers: WorkerRuntime[] = [];
+  if (await onPath("claude")) {
+    runtimeDetails.push({ id: "claude-code", usableAsWorker: true });
+    runnableWorkers.push("claude-code");
+  }
   // In the published CLI, these providers may be compiled into the binary rather
   // than present as files under node_modules.
-  if ([...aiSdkProviderAvailable.values()].some(Boolean)) runtimes.push("ai-sdk");
+  if ([...aiSdkProviderAvailable.values()].some(Boolean)) {
+    runtimeDetails.push({ id: "ai-sdk", usableAsWorker: true });
+    runnableWorkers.push("ai-sdk");
+  }
+  if (await onPath("codex")) {
+    runtimeDetails.push({
+      id: "codex",
+      usableAsWorker: false,
+      reason: "codex lacks the tools capability required by wakespace command tools",
+    });
+  }
+  if (process.env.CURSOR_API_KEY || (await hasCursorSdk())) {
+    runtimeDetails.push({
+      id: "cursor",
+      usableAsWorker: false,
+      reason: "cursor lacks the tools capability required by wakespace command tools",
+    });
+  }
 
   const suggestions: WorkerSuggestion[] = [];
-  for (const runtime of runtimes)
+  for (const runtime of runnableWorkers)
     for (const provider of COMPATIBLE[runtime])
       if (providers.includes(provider) && (runtime !== "ai-sdk" || aiSdkProviderAvailable.get(provider)))
         suggestions.push({
@@ -142,5 +182,5 @@ export async function discoverWorkers(): Promise<Discovery> {
           description: `${provider} via ${runtime} (confirm the model)`,
         });
 
-  return { providers, runtimes, suggestions };
+  return { providers, runtimes: runtimeDetails.map((r) => r.id), runtimeDetails, suggestions };
 }
