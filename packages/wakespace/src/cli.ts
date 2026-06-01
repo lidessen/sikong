@@ -110,8 +110,56 @@ function printView<T>(value: T, render: (value: T) => string): void {
   console.log(text ? render(value) : JSON.stringify(value, null, 2));
 }
 
-function chronicleLine(e: { ts: number; type: string; taskId?: string; summary: string }): string {
-  return `${new Date(e.ts).toISOString().slice(11, 19)} ${e.type}${e.taskId ? ` ${e.taskId}` : ""} — ${e.summary}`;
+function csv(value: unknown): string {
+  return Array.isArray(value) ? value.map(String).join(",") : "";
+}
+
+function toolStarts(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const parts = Object.entries(value as Record<string, unknown>)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, count]) => `${name}:${String(count)}`);
+  return parts.join(",");
+}
+
+function chronicleDataSuffix(e: { type: string; data?: Record<string, unknown> }): string {
+  const data = e.data;
+  if (!data) return "";
+  if (e.type === "wake.diagnostics") {
+    const parts = [
+      `phase=${String(data.phase ?? "")}`,
+      `stateCommands=${String(data.stateCommands ?? 0)}`,
+      `projectTools=${String(data.projectToolCalls ?? 0)}`,
+      `projectWrites=${String(data.projectWriteCalls ?? 0)}`,
+      `tools=${toolStarts(data.toolCallStarts) || "none"}`,
+    ];
+    return ` [${parts.join(" ")}]`;
+  }
+  if (e.type === "wake.commit") {
+    const parts = [
+      `fallback=${String(data.fallbackPolicy ?? "")}`,
+      `projectTools=${String(data.projectToolCalls ?? 0)}`,
+      `projectWrites=${String(data.projectWriteCalls ?? 0)}`,
+      `allowed=${csv(data.allowedTools) || "none"}`,
+    ];
+    const outputFields = csv(data.outputFields);
+    if (outputFields) parts.push(`outputFields=${outputFields}`);
+    return ` [${parts.join(" ")}]`;
+  }
+  if (e.type === "wake.progress") {
+    const parts = [
+      `phase=${String(data.phase ?? "")}`,
+      `event=${String(data.event ?? "")}`,
+      `tool=${String(data.tool ?? "")}`,
+    ];
+    if (data.error) parts.push(`error=${String(data.error).slice(0, 120)}`);
+    return ` [${parts.join(" ")}]`;
+  }
+  return "";
+}
+
+function chronicleLine(e: { ts: number; type: string; taskId?: string; summary: string; data?: Record<string, unknown> }): string {
+  return `${new Date(e.ts).toISOString().slice(11, 19)} ${e.type}${e.taskId ? ` ${e.taskId}` : ""} — ${e.summary}${chronicleDataSuffix(e)}`;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

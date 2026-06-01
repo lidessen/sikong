@@ -790,6 +790,32 @@ describe("WorkflowEngine wake cycle", () => {
       expect.arrayContaining(["task.created", "wake.start", "task.advanced", "task.terminal", "wake.end"]),
     );
   });
+
+  test("the chronicle records wake progress tool events before wake end", async () => {
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "x" } } }),
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "progress" });
+    await engine.idle();
+
+    const entries = (await chronicle.recent({ taskId: "progress", limit: 50 })).sort((a, b) => a.seq - b.seq);
+    const progressStart = entries.find((entry) => entry.type === "wake.progress" && entry.data?.event === "tool_call_start");
+    const progressEnd = entries.find((entry) => entry.type === "wake.progress" && entry.data?.event === "tool_call_end");
+    const wakeEndIndex = entries.findIndex((entry) => entry.type === "wake.end");
+
+    expect(progressStart?.summary).toBe("tool request_transition started");
+    expect(progressEnd?.summary).toBe("tool request_transition ended");
+    expect(progressStart?.data).toMatchObject({ phase: "worker", tool: "request_transition" });
+    expect(progressEnd?.data).toMatchObject({ phase: "worker", tool: "request_transition" });
+    expect(entries.indexOf(progressStart!)).toBeLessThan(wakeEndIndex);
+    expect(entries.indexOf(progressEnd!)).toBeLessThan(wakeEndIndex);
+  });
 });
 
 /** A loop whose run() executes `body` (which may await), resolving when it finishes. */

@@ -129,6 +129,40 @@ function toolCountsSummary(counts: Record<string, number>): string {
   return parts.length ? parts.join(", ") : "none";
 }
 
+function progressSummary(event: LoopEvent): string | null {
+  switch (event.type) {
+    case "tool_call_start":
+      return `tool ${event.name} started`;
+    case "tool_call_end":
+      return event.error ? `tool ${event.name} failed` : `tool ${event.name} ended`;
+    default:
+      return null;
+  }
+}
+
+function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<string, unknown> | null {
+  switch (event.type) {
+    case "tool_call_start":
+      return {
+        phase,
+        event: event.type,
+        tool: event.name,
+        ...(event.callId ? { callId: event.callId } : {}),
+      };
+    case "tool_call_end":
+      return {
+        phase,
+        event: event.type,
+        tool: event.name,
+        ...(event.callId ? { callId: event.callId } : {}),
+        ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
+        ...(event.error ? { error: event.error } : {}),
+      };
+    default:
+      return null;
+  }
+}
+
 function toolResultSucceeded(result: unknown): boolean {
   return !(isRecord(result) && typeof result.error === "string" && result.error.length > 0);
 }
@@ -497,6 +531,9 @@ export class WorkflowEngine {
       for await (const event of runHandle) {
         observeLoopEvent(diagnostics, event);
         this.o.hooks?.onLoopEvent?.({ taskId, wakeId, event });
+        const summary = progressSummary(event);
+        const data = progressData(diagnostics.phase, event);
+        if (summary && data) await this.chron({ type: "wake.progress", taskId, wakeId, summary, data });
       }
       return runHandle.result;
     };

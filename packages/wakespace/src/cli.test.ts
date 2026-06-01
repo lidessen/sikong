@@ -113,4 +113,60 @@ describe("wakespace CLI", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("chronicle --text renders diagnostic facts from event data", async () => {
+    const dir = await tmp();
+    try {
+      const store = new JsonWorkspaceChronicleStore(dir);
+      await store.append({
+        type: "wake.diagnostics",
+        taskId: "t1",
+        wakeId: "w1",
+        summary: "worker pass",
+        data: {
+          phase: "worker",
+          stateCommands: 0,
+          projectToolCalls: 3,
+          projectWriteCalls: 1,
+          toolCallStarts: { readFile: 2, replaceInFile: 1 },
+        },
+      });
+      await store.append({
+        type: "wake.commit",
+        taskId: "t1",
+        wakeId: "w1",
+        summary: "commit fallback",
+        data: {
+          fallbackPolicy: "state_commit_allowed",
+          projectToolCalls: 3,
+          projectWriteCalls: 1,
+          allowedTools: ["commit_stage", "block"],
+          outputFields: ["summary"],
+        },
+      });
+
+      const out = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "chronicle",
+        "--dir",
+        dir,
+        "--task",
+        "t1",
+        "-n",
+        "2",
+        "--text",
+      ]);
+      expect(out.exitCode).toBe(0);
+      const text = new TextDecoder().decode(out.stdout);
+      expect(text).toContain(
+        "wake.diagnostics t1 — worker pass [phase=worker stateCommands=0 projectTools=3 projectWrites=1 tools=readFile:2,replaceInFile:1]",
+      );
+      expect(text).toContain(
+        "wake.commit t1 — commit fallback [fallback=state_commit_allowed projectTools=3 projectWrites=1 allowed=commit_stage,block outputFields=summary]",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
