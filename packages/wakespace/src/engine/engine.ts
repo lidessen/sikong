@@ -507,6 +507,11 @@ export class WorkflowEngine {
       let stageCommitted = false;
       const pushCommit = (command: Command): { acknowledged: true } => {
         if (stageCommitted && (command.kind === "block" || command.kind === "cancel")) return { acknowledged: true };
+        if (
+          (command.kind === "block" || command.kind === "cancel") &&
+          commitCommands.some((existing) => existing.kind === "block" || existing.kind === "cancel")
+        )
+          return { acknowledged: true };
         commitCommands.push(command);
         return { acknowledged: true };
       };

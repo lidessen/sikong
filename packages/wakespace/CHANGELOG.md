@@ -11,6 +11,11 @@ All notable changes to `wakespace` are documented here. This project adheres to
   forced commit pass, including state-command counts, project tool/write
   evidence, tool-call summaries, and first-pass text previews.
 
+### Fixed
+
+- Forced commit fallback now coalesces duplicate block/cancel calls so a worker
+  retry does not create misleading `command.rejected` chronicle noise.
+
 ## 0.1.3 — 2026-06-01
 
 ### Changed

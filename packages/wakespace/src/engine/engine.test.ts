@@ -223,6 +223,7 @@ describe("WorkflowEngine wake cycle", () => {
   });
 
   test("blocks an ungrounded forced commit pass when no project write ran", async () => {
+    const chronicle = new MemoryChronicleStore(() => 1);
     let calls = 0;
     const loop: LoopFactory = () =>
       scriptLoop(async (input) => {
@@ -230,8 +231,16 @@ describe("WorkflowEngine wake cycle", () => {
         if (calls === 1) return;
         expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
         await input.tools?.block?.execute?.({ reason: "no project writeFile evidence" }, {});
+        await input.tools?.block?.execute?.({ reason: "duplicate block should be coalesced" }, {});
       }, "ai-sdk");
-    const engine = newEngine(loop);
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry,
+      chronicle,
+      loop,
+    });
 
     await engine.createTask({ projectId: "p", taskId: "commit-ungrounded", fields: { request: "validate" } });
     await engine.idle();
@@ -239,6 +248,12 @@ describe("WorkflowEngine wake cycle", () => {
     const task = await engine.getTask("commit-ungrounded");
     expect(calls).toBe(2);
     expect(task?.status).toBe("blocked");
+    const entries = await chronicle.recent({ taskId: "commit-ungrounded", limit: 20 });
+    expect(entries.map((entry) => entry.type)).not.toContain("command.rejected");
+    const commitDiagnostics = entries.find(
+      (entry) => entry.type === "wake.diagnostics" && entry.data?.phase === "commit",
+    );
+    expect(commitDiagnostics?.data).toMatchObject({ stateCommands: 1, allowedTools: ["block"] });
   });
 
   test("allows a no-write forced commit pass on development planning stages", async () => {
