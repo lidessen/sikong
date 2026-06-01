@@ -27,7 +27,16 @@ describe("project tools", () => {
     const tools = await createProjectTools({ cwd: root });
 
     expect(Object.keys(tools)).toEqual(
-      expect.arrayContaining(["bash", "readFile", "writeFile", "rg", "grep", "web_fetch", "web_search"]),
+      expect.arrayContaining([
+        "bash",
+        "readFile",
+        "writeFile",
+        "replaceInFile",
+        "rg",
+        "grep",
+        "web_fetch",
+        "web_search",
+      ]),
     );
     await expect(execute(tools.readFile, { path: "src/a.txt" })).resolves.toEqual({
       content: "needle\nother\n",
@@ -39,6 +48,29 @@ describe("project tools", () => {
     const bash = (await execute(tools.bash, { command: "rg needle ." })) as { stdout?: string; exitCode?: number };
     expect(bash.exitCode).toBe(0);
     expect(bash.stdout).toContain("src/a.txt:1:needle");
+  });
+
+  test("replaces exact text inside an existing project file", async () => {
+    const root = await tempProject();
+    const tools = await createProjectTools({ cwd: root });
+
+    await expect(
+      execute(tools.replaceInFile, {
+        path: "src/a.txt",
+        search: "needle\n",
+        replace: "needle\npatched\n",
+        expected_replacements: 1,
+      }),
+    ).resolves.toMatchObject({ path: "src/a.txt", replacements: 1 });
+    await expect(readFile(join(root, "src", "a.txt"), "utf8")).resolves.toBe("needle\npatched\nother\n");
+
+    await expect(
+      execute(tools.replaceInFile, {
+        path: "src/a.txt",
+        search: "missing",
+        replace: "x",
+      }),
+    ).resolves.toMatchObject({ error: expect.stringContaining("Search text not found") });
   });
 
   test("searches with ripgrep and rejects paths outside the project root", async () => {

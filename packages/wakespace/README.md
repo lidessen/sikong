@@ -58,6 +58,13 @@ For a human-readable snapshot of projects, workers, tasks, and recent activity:
 wakespace overview
 ```
 
+To coordinate with a concurrently running wake without streaming `run`, wait
+for the next chronicle event:
+
+```sh
+wakespace inspect wait --task <taskId> --timeout 30000
+```
+
 ## Live Smoke
 
 ```sh

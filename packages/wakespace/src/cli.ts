@@ -11,6 +11,7 @@
  *   register <workflow.yaml>                                          register a workflow definition
  *   overview [--project <id>] [--json]                                  human workspace dashboard
  *   status [--project <id>] [--text] | task <id> [--text] | chronicle [--task <id>] [-n N] [--text]
+ *   inspect wait [--task <id>] [--after <seq>] [--timeout <ms>] [--text]
  *   --dir <path>   workspace dir override (default $WAKESPACE_HOME or ~/.wakespace; legacy $WAKESPACE_DIR still works)
  *
  *   Agent-facing commands default to JSON. Use --text for ad-hoc human output.
@@ -40,6 +41,7 @@ const VALUE_FLAGS = new Set([
   "--dir", "--project", "--workflow", "--id", "--task", "-n",
   "--root", "--name", "--model", "--worker", "--runtime", "--provider", "--desc",
   "--permission", "--permission-mode",
+  "--after", "--timeout", "--poll",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--text", "--human"]);
 const fail = (msg: string, code = 2): never => {
@@ -105,6 +107,40 @@ function printJson(value: unknown): void {
 
 function printView<T>(value: T, render: (value: T) => string): void {
   console.log(text ? render(value) : JSON.stringify(value, null, 2));
+}
+
+function chronicleLine(e: { ts: number; type: string; taskId?: string; summary: string }): string {
+  return `${new Date(e.ts).toISOString().slice(11, 19)} ${e.type}${e.taskId ? ` ${e.taskId}` : ""} — ${e.summary}`;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function parseNonNegativeNumber(raw: string | undefined, name: string, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) fail(`${name} must be a non-negative number (got "${raw}")`);
+  return n;
+}
+
+async function waitForNextChronicleEvent(
+  store: JsonWorkspaceChronicleStore,
+  opts: { taskId?: string; afterSeq?: number; timeoutMs: number; pollMs: number },
+) {
+  const startedAt = Date.now();
+  const baseline =
+    opts.afterSeq ??
+    ((await store.recent({ ...(opts.taskId ? { taskId: opts.taskId } : {}), limit: 1 }))[0]?.seq ?? 0);
+  const deadline = startedAt + opts.timeoutMs;
+  while (true) {
+    const entries = await store.recent({ ...(opts.taskId ? { taskId: opts.taskId } : {}), limit: 200 });
+    const next = entries
+      .filter((entry) => entry.seq > baseline)
+      .sort((a, b) => a.seq - b.seq || a.ts - b.ts)[0];
+    if (next) return { event: next, afterSeq: baseline, waitedMs: Date.now() - startedAt };
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { event: null, afterSeq: baseline, waitedMs: Date.now() - startedAt };
+    await sleep(Math.min(opts.pollMs, remaining));
+  }
 }
 
 function parseLeadCommand(op: string, rest: string[]): Command {
@@ -220,10 +256,31 @@ switch (cmd) {
       printJson(entries);
       break;
     }
-    for (const e of entries)
-      console.log(
-        `${new Date(e.ts).toISOString().slice(11, 19)} ${e.type}${e.taskId ? ` ${e.taskId}` : ""} — ${e.summary}`,
-      );
+    for (const e of entries) console.log(chronicleLine(e));
+    break;
+  }
+  case "inspect": {
+    const sub = positional[1];
+    if (sub !== "wait") fail("usage: cli inspect wait [--task <id>] [--after <seq>] [--timeout <ms>] [--text]");
+    const afterRaw = flag("--after");
+    const afterSeq = afterRaw === undefined ? undefined : parseNonNegativeNumber(afterRaw, "--after", 0);
+    const timeoutMs = parseNonNegativeNumber(flag("--timeout"), "--timeout", 30_000);
+    const pollMs = Math.max(10, parseNonNegativeNumber(flag("--poll"), "--poll", 250));
+    const taskId = flag("--task");
+    const result = await waitForNextChronicleEvent(new JsonWorkspaceChronicleStore(dir), {
+      ...(taskId ? { taskId } : {}),
+      ...(afterSeq !== undefined ? { afterSeq } : {}),
+      timeoutMs,
+      pollMs,
+    });
+    if (result.event) {
+      if (text) console.log(chronicleLine(result.event));
+      else printJson({ ok: true, timedOut: false, ...result });
+      break;
+    }
+    if (text) console.log(`timeout waiting for chronicle event after seq ${result.afterSeq}`);
+    else printJson({ ok: false, timedOut: true, afterSeq: result.afterSeq, waitedMs: result.waitedMs, timeoutMs });
+    process.exit(124);
     break;
   }
 
@@ -471,14 +528,15 @@ switch (cmd) {
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
         "  project memory <id> [markdown]\n" +
         "  worker discover | create <id> --runtime <r> --provider <p> --model <m> [--desc <d>] [--permission <mode>] | default <id>\n" +
-        "read:\n" +
-        "  overview [--project <id>] [--json]     human dashboard (text by default)\n" +
-        "  project list [--text]\n" +
-        "  worker list [--text]\n" +
-        "  status [--project <id>] [--text]\n" +
-        "  task <id> [--text]\n" +
-        "  chronicle [--task <id>] [-n <N>] [--text]\n" +
-        "  --json is accepted for compatibility; agent-facing commands already default to JSON\n" +
+      "read:\n" +
+      "  overview [--project <id>] [--json]     human dashboard (text by default)\n" +
+      "  project list [--text]\n" +
+      "  worker list [--text]\n" +
+      "  status [--project <id>] [--text]\n" +
+      "  task <id> [--text]\n" +
+      "  chronicle [--task <id>] [-n <N>] [--text]\n" +
+      "  inspect wait [--task <id>] [--after <seq>] [--timeout <ms>] [--text]\n" +
+      "  --json is accepted for compatibility; agent-facing commands already default to JSON\n" +
         "  --dir <path>   workspace dir override ($WAKESPACE_HOME or ~/.wakespace by default; legacy $WAKESPACE_DIR still works)",
     );
     if (cmd && cmd !== "help") process.exit(2);

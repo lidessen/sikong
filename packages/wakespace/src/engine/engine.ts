@@ -44,6 +44,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+const PROJECT_WRITE_TOOL_NAMES = new Set(["writeFile", "replaceInFile"]);
 const DIAGNOSTIC_TEXT_LIMIT = 800;
 
 interface RunDiagnostics {
@@ -442,7 +443,7 @@ export class WorkflowEngine {
             ...tool,
             execute: async (args, ctx) => {
               projectToolCalls++;
-              if (name === "writeFile") projectWriteCalls++;
+              if (PROJECT_WRITE_TOOL_NAMES.has(name)) projectWriteCalls++;
               return tool.execute!(args, ctx);
             },
           }

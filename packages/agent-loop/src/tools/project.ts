@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute, relative, resolve } from "node:path";
 import { lookup } from "node:dns/promises";
@@ -59,6 +59,19 @@ const webSearchSchema = z.object({
   search_lang: z.string().min(2).max(5).optional().describe("Search language code, such as en."),
 });
 
+const replaceInFileSchema = z.object({
+  path: z.string().min(1).describe("File to edit, relative to the project root."),
+  search: z.string().min(1).describe("Exact text to replace."),
+  replace: z.string().describe("Replacement text."),
+  expected_replacements: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Require exactly this many replacements; if it differs, no file is written."),
+});
+
 export async function createProjectTools(options: ProjectToolOptions): Promise<ToolSet> {
   const cwd = resolve(options.cwd);
   const [{ createBashTool }, { Bash, ReadWriteFs }] = await Promise.all([
@@ -86,6 +99,7 @@ export async function createProjectTools(options: ProjectToolOptions): Promise<T
     readFile: fromAiSdkTool(bashTools.readFile),
     writeFile: fromAiSdkTool(bashTools.writeFile),
   };
+  out.replaceInFile = createReplaceInFileTool({ cwd });
 
   const rg = createRipgrepTool({ cwd });
   out.rg = rg;
@@ -161,6 +175,42 @@ function createRipgrepTool(opts: { cwd: string }): ToolDefinition {
         exitCode,
         ...(result.stderr ? { stderr: result.stderr } : {}),
       };
+    },
+  });
+}
+
+function createReplaceInFileTool(opts: { cwd: string }): ToolDefinition {
+  return defineTool({
+    description:
+      "Edit an existing project file by replacing exact text. Safer than writeFile for small source changes because it preserves the rest of the file.",
+    inputSchema: replaceInFileSchema,
+    execute: async (rawArgs) => {
+      const args = replaceInFileSchema.parse(rawArgs);
+      const pathResult = await resolveProjectPath(opts.cwd, args.path);
+      if (!pathResult.ok) return { error: pathResult.error };
+      const filePath = resolve(opts.cwd, pathResult.rgPath);
+      let before: string;
+      try {
+        before = await readFile(filePath, "utf8");
+      } catch (err) {
+        return { error: `Could not read "${pathResult.rgPath}": ${(err as Error).message}` };
+      }
+      const parts = before.split(args.search);
+      const replacements = parts.length - 1;
+      if (replacements === 0) return { error: `Search text not found in "${pathResult.rgPath}".` };
+      if (args.expected_replacements !== undefined && replacements !== args.expected_replacements) {
+        return {
+          error: `Expected ${args.expected_replacements} replacement(s) in "${pathResult.rgPath}", found ${replacements}. No file was written.`,
+          replacements,
+        };
+      }
+      const after = parts.join(args.replace);
+      try {
+        await writeFile(filePath, after, "utf8");
+      } catch (err) {
+        return { error: `Could not write "${pathResult.rgPath}": ${(err as Error).message}` };
+      }
+      return { path: pathResult.rgPath, replacements, bytes: new TextEncoder().encode(after).byteLength };
     },
   });
 }

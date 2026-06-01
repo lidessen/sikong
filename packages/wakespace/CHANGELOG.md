@@ -10,6 +10,10 @@ All notable changes to `wakespace` are documented here. This project adheres to
 - Wake chronicles now record bounded worker diagnostics for each worker and
   forced commit pass, including state-command counts, project tool/write
   evidence, tool-call summaries, and first-pass text previews.
+- Added `inspect wait`, a read-side command that waits for the next chronicle
+  event (optionally scoped by task) or exits on timeout.
+- AI SDK project workers now get `replaceInFile` for exact small source edits;
+  wakespace counts it as project write evidence alongside `writeFile`.
 
 ### Fixed
 
