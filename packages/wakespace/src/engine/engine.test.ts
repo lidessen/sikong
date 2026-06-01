@@ -51,6 +51,29 @@ const TWO_STEP: WorkflowDef = {
   ],
 };
 
+const SIMPLE_COMMIT: WorkflowDef = {
+  id: "simple-commit",
+  version: "1",
+  name: "Simple Commit",
+  description: "single-stage workflow used to test commit fallback behavior",
+  fields: {
+    summary: { type: "string", description: "result summary" },
+  },
+  stages: [
+    {
+      id: "work",
+      category: "in_progress",
+      entry: { op: "always" },
+      outputFields: ["summary"],
+    },
+    {
+      id: "done",
+      category: "done",
+      entry: { op: "hasEvent", eventType: "transition.requested" },
+    },
+  ],
+};
+
 describe("WorkflowEngine wake cycle", () => {
   test("drives a multi-stage task to done across self-continued wakes", async () => {
     const loop: LoopFactory = (ctx) =>
@@ -77,6 +100,24 @@ describe("WorkflowEngine wake cycle", () => {
     await engine.idle();
 
     expect((await engine.getTask("g1"))?.status).toBe("done");
+  });
+
+  test("stops the worker pass after a terminal workflow command", async () => {
+    let transitionAttempts = 0;
+    const loop: LoopFactory = () =>
+      cancellableScriptLoop(async (input, isCancelled) => {
+        for (let i = 0; i < 20 && !isCancelled(); i++) {
+          transitionAttempts++;
+          await input.tools?.request_transition?.execute?.({ reason: `done ${i}` }, {});
+        }
+      }, "ai-sdk");
+    const engine = newEngine(loop);
+
+    await engine.createTask({ projectId: "p", taskId: "terminal-worker", fields: { request: "finish" } });
+    await engine.idle();
+
+    expect(transitionAttempts).toBe(1);
+    expect((await engine.getTask("terminal-worker"))?.status).toBe("done");
   });
 
   test("worker cancel records an approval request instead of terminating the task", async () => {
@@ -502,21 +543,26 @@ describe("WorkflowEngine wake cycle", () => {
   });
 
   test("blocks an ungrounded forced commit pass when no project write ran", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-commit-ungrounded-"));
     const chronicle = new MemoryChronicleStore(() => 1);
     let calls = 0;
+    let blockAttempts = 0;
     const loop: LoopFactory = () =>
-      scriptLoop(async (input) => {
+      cancellableScriptLoop(async (input, isCancelled) => {
         calls++;
         if (calls === 1) return;
         expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
-        await input.tools?.block?.execute?.({ reason: "no project writeFile evidence" }, {});
-        await input.tools?.block?.execute?.({ reason: "duplicate block should be coalesced" }, {});
+        for (let i = 0; i < 20 && !isCancelled(); i++) {
+          blockAttempts++;
+          await input.tools?.block?.execute?.({ reason: `no project writeFile evidence ${i}` }, {});
+        }
       }, "ai-sdk");
     const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
       registry,
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
       chronicle,
       loop,
     });
@@ -526,6 +572,7 @@ describe("WorkflowEngine wake cycle", () => {
 
     const task = await engine.getTask("commit-ungrounded");
     expect(calls).toBe(2);
+    expect(blockAttempts).toBe(1);
     expect(task?.status).toBe("blocked");
     const entries = await chronicle.recent({ taskId: "commit-ungrounded", limit: 20 });
     expect(entries.map((entry) => entry.type)).not.toContain("command.rejected");
@@ -533,6 +580,95 @@ describe("WorkflowEngine wake cycle", () => {
       (entry) => entry.type === "wake.diagnostics" && entry.data?.phase === "commit",
     );
     expect(commitDiagnostics?.data).toMatchObject({ stateCommands: 1, allowedTools: ["block"] });
+  });
+
+  test("rejects implementation progress commands without project write evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-ungrounded-progress-"));
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let calls = 0;
+    let blockAttempts = 0;
+    const loop: LoopFactory = () =>
+      cancellableScriptLoop(async (input, isCancelled) => {
+        calls++;
+        if (calls === 1) {
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "claimed without edit" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "claimed done" }, {});
+          return;
+        }
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
+        for (let i = 0; i < 20 && !isCancelled(); i++) {
+          blockAttempts++;
+          await input.tools?.block?.execute?.({ reason: `missing project write evidence ${i}` }, {});
+        }
+      }, "ai-sdk");
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "ungrounded-progress", fields: { request: "claim done" } });
+    await engine.idle();
+
+    const task = await engine.getTask("ungrounded-progress");
+    expect(calls).toBe(2);
+    expect(blockAttempts).toBe(1);
+    expect(task?.status).toBe("blocked");
+    expect(task?.fields.summary).toBeUndefined();
+    const rejections = await chronicle.recent({ taskId: "ungrounded-progress", type: "command.rejected", limit: 10 });
+    expect(rejections.map((entry) => entry.summary).sort()).toEqual([
+      "rejected request_transition: project write evidence is required before recording implementation progress",
+      "rejected set_field: project write evidence is required before recording implementation progress",
+    ]);
+    const workerDiagnostics = (
+      await chronicle.recent({ taskId: "ungrounded-progress", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "worker");
+    expect(workerDiagnostics?.data).toMatchObject({ stateCommands: 0, rejectedStateCommands: 2 });
+  });
+
+  test("stops the commit fallback after a successful commit_stage", async () => {
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let calls = 0;
+    let commitStageAttempts = 0;
+    const loop: LoopFactory = () =>
+      cancellableScriptLoop(async (input, isCancelled) => {
+        calls++;
+        if (calls === 1) return;
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
+        for (let i = 0; i < 20 && !isCancelled(); i++) {
+          commitStageAttempts++;
+          await input.tools?.commit_stage?.execute?.(
+            { fields: { summary: `committed ${i}` }, reason: `complete ${i}` },
+            {},
+          );
+        }
+      }, "ai-sdk");
+    const registry = new MemoryWorkflowRegistry(SIMPLE_COMMIT);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry,
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "simple-commit", taskId: "commit-stage-once" });
+    await engine.idle();
+
+    expect(calls).toBe(2);
+    expect(commitStageAttempts).toBe(1);
+    expect((await engine.getTask("commit-stage-once"))?.status).toBe("done");
+    const commitDiagnostics = (
+      await chronicle.recent({ taskId: "commit-stage-once", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "commit");
+    expect(commitDiagnostics?.data).toMatchObject({
+      status: "cancelled",
+      stateCommands: 2,
+      allowedTools: ["commit_stage", "block", "cancel"],
+    });
   });
 
   test("allows a no-write forced commit pass on development planning stages", async () => {
@@ -860,6 +996,10 @@ describe("WorkflowEngine wake cycle", () => {
             {},
           )) as { matches?: string[] } | undefined;
           expect(result?.matches).toEqual(["src/a.txt:1:needle"]);
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "src/a.txt", search: "needle", replace: "found", expected_replacements: 1 },
+            {},
+          );
           await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
         }, "ai-sdk"),
     });
@@ -1032,6 +1172,44 @@ function scriptLoop(body: (input: RunInput) => Promise<string | void>, id = "scr
         usage: result.then((r) => r.usage),
         steer: async () => ({ mode: "rejected" as const }),
         cancel: () => {},
+      };
+    },
+    preflight: async () => ({ ok: true }),
+    dispose: async () => {},
+  };
+}
+
+/** A script loop that lets tests observe whether the engine cancelled the run. */
+function cancellableScriptLoop(
+  body: (input: RunInput, isCancelled: () => boolean) => Promise<string | void>,
+  id = "scripted-cancellable",
+): AgentLoop {
+  const capabilities: CapabilityList = ["tools"];
+  return {
+    id,
+    capabilities,
+    supports: (c: Capability) => capabilities.includes(c),
+    run(input: RunInput): RunHandle {
+      let cancelled = false;
+      const work = body(input, () => cancelled);
+      const result = work.then((text) => ({
+        events: [] as LoopEvent[],
+        usage: emptyUsage(),
+        durationMs: 0,
+        status: cancelled ? ("cancelled" as const) : ("completed" as const),
+        text: text ?? "",
+      }));
+      const none = async function* (): AsyncGenerator<never> {};
+      return {
+        [Symbol.asyncIterator]: () => none(),
+        textStream: none(),
+        result,
+        text: result.then((r) => r.text),
+        usage: result.then((r) => r.usage),
+        steer: async () => ({ mode: "rejected" as const }),
+        cancel: () => {
+          cancelled = true;
+        },
       };
     },
     preflight: async () => ({ ok: true }),

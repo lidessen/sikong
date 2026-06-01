@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { makeLoop, mockLoop, type LoopEvent } from "../index";
 import { MockAdapter } from "../adapters/mock";
+import type { BackendAdapter, BackendRun } from "../core/adapter";
 
 describe("loop factories + executor", () => {
   test("one run streams events and resolves a result", async () => {
@@ -109,5 +110,39 @@ describe("loop factories + executor", () => {
     expect(() => bare.run({ prompt: "x", tools: { foo: { description: "f" } } })).toThrow(
       /does not support capability "tools"/,
     );
+  });
+
+  test("cancelled backend result rejections do not surface as run errors", async () => {
+    const adapter: BackendAdapter = {
+      id: "cancel-reject",
+      capabilities: [],
+      start(): BackendRun {
+        let cancelled = false;
+        let rejectResult!: (err: Error) => void;
+        const result = new Promise<never>((_, reject) => {
+          rejectResult = reject;
+        });
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text", text: "started" } as LoopEvent;
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (cancelled) throw new Error("backend cancelled");
+          },
+          result,
+          cancel() {
+            cancelled = true;
+            rejectResult(new Error("backend result cancelled"));
+          },
+        };
+      },
+    };
+    const loop = makeLoop("cancel-reject", [], async () => adapter);
+    const run = loop.run("go");
+
+    run.cancel("stop");
+    const result = await run.result;
+
+    expect(result.status).toBe("cancelled");
+    expect(result.error).toBeUndefined();
   });
 });

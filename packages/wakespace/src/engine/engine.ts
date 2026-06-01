@@ -238,6 +238,28 @@ function isStageCommitSignal(command: Command, stage: ReturnType<typeof stageByI
   }
 }
 
+function closesCurrentRun(command: Command): boolean {
+  switch (command.kind) {
+    case "request_transition":
+    case "block":
+    case "cancel":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function requiresProjectWriteEvidence(command: Command, stage: ReturnType<typeof stageById>): boolean {
+  switch (command.kind) {
+    case "request_transition":
+      return true;
+    case "set_field":
+      return stage?.outputFields?.includes(command.field) ?? false;
+    default:
+      return false;
+  }
+}
+
 /** Task ids become filenames in the durable stores — keep them collision- and traversal-safe. */
 function assertValidTaskId(id: string): void {
   if (!id || id === "." || id === ".." || !/^[A-Za-z0-9._-]+$/.test(id))
@@ -535,7 +557,22 @@ export class WorkflowEngine {
       throw new Error(
         `task ${taskId}: worker runtime "${loop.id}" lacks the "tools" capability that command tools require (use claude-code or ai-sdk, not codex/cursor)`,
       );
-    const { tools: commandTools, drain } = buildCommandTools(wf, stage);
+    const controller = new AbortController();
+    let workerRun: ReturnType<AgentLoop["run"]> | undefined;
+    let pendingWorkerStop: string | undefined;
+    const stopWorkerRun = (reason: string) => {
+      if (workerRun) {
+        controller.abort(reason);
+        workerRun.cancel(reason);
+      } else {
+        pendingWorkerStop = reason;
+      }
+    };
+    const { tools: commandTools, drain } = buildCommandTools(wf, stage, {
+      onCommand: (command) => {
+        if (closesCurrentRun(command)) stopWorkerRun(`wakespace ${command.kind} recorded`);
+      },
+    });
     const rawProjectTools =
       loop.id === "ai-sdk" && project?.root
         ? await createProjectTools({ cwd: project.root, ...(project.env ? { env: project.env } : {}) })
@@ -569,10 +606,10 @@ export class WorkflowEngine {
         : tool;
     }
     const tools = { ...projectTools, ...commandTools };
+    const projectWriteGateActive = projectWriteRequired && Object.keys(projectTools).length > 0;
     this.o.hooks?.onWakeStart?.({ taskId, wakeId, stageId: task.stageId });
     await this.chron({ type: "wake.start", taskId, wakeId, summary: `wake @ "${task.stageId}"` });
 
-    const controller = new AbortController();
     const aiSdkRuntimeOptions =
       loop.id === "ai-sdk"
         ? {
@@ -588,6 +625,8 @@ export class WorkflowEngine {
       signal: controller.signal,
       ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),
     });
+    workerRun = run;
+    if (pendingWorkerStop) stopWorkerRun(pendingWorkerStop);
     const consumeRun = async (
       runHandle: ReturnType<AgentLoop["run"]>,
       diagnostics: RunDiagnostics,
@@ -607,13 +646,27 @@ export class WorkflowEngine {
       run.cancel("wake timeout");
     });
     let commands = drain();
+    const rejectedProjectProgress =
+      projectWriteGateActive && projectWriteCalls === 0
+        ? commands.filter((command) => requiresProjectWriteEvidence(command, stage))
+        : [];
+    if (rejectedProjectProgress.length) {
+      const reason = "project write evidence is required before recording implementation progress";
+      for (const command of rejectedProjectProgress) {
+        this.o.hooks?.onReject?.({ taskId, wakeId, command, reason });
+        await this.chron({ type: "command.rejected", taskId, wakeId, summary: `rejected ${command.kind}: ${reason}` });
+      }
+      const rejected = new Set(rejectedProjectProgress);
+      commands = commands.filter((command) => !rejected.has(command));
+    }
     const workerDiagnosticData = {
       ...finalizeRunDiagnostics(workerDiagnostics, result),
       stageId: task.stageId,
       stateCommands: commands.length,
+      ...(rejectedProjectProgress.length ? { rejectedStateCommands: rejectedProjectProgress.length } : {}),
       projectToolCalls,
       projectWriteCalls,
-      projectWriteRequired,
+      projectWriteRequired: projectWriteGateActive,
     };
     await this.chron({
       type: "wake.diagnostics",
@@ -629,6 +682,17 @@ export class WorkflowEngine {
       const firstPassCommands = commands;
       const commitCommands: Command[] = [];
       let stageCommitted = false;
+      let commitRun: ReturnType<AgentLoop["run"]> | undefined;
+      let pendingCommitStop: string | undefined;
+      const commitController = new AbortController();
+      const stopCommitRun = (reason: string) => {
+        if (commitRun) {
+          commitController.abort(reason);
+          commitRun.cancel(reason);
+        } else {
+          pendingCommitStop = reason;
+        }
+      };
       const pushCommit = (command: Command): { acknowledged: true } => {
         if (stageCommitted && (command.kind === "block" || command.kind === "cancel")) return { acknowledged: true };
         if (
@@ -637,9 +701,10 @@ export class WorkflowEngine {
         )
           return { acknowledged: true };
         commitCommands.push(command);
+        if (closesCurrentRun(command)) stopCommitRun(`wakespace ${command.kind} recorded`);
         return { acknowledged: true };
       };
-      const canCommitStageProgress = !projectWriteRequired || projectWriteCalls > 0;
+      const canCommitStageProgress = !projectWriteGateActive || projectWriteCalls > 0;
       const commitTools: ToolSet = {};
       if (canCommitStageProgress) {
         const allowedFields = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
@@ -731,23 +796,22 @@ export class WorkflowEngine {
           allowedTools: Object.keys(commitTools),
           projectToolCalls,
           projectWriteCalls,
-          projectWriteRequired,
+          projectWriteRequired: projectWriteGateActive,
           ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
           firstPassTextChars: firstPassText.chars,
           ...(firstPassText.preview ? { firstPassTextPreview: firstPassText.preview } : {}),
           firstPassTextTruncated: firstPassText.truncated,
         },
       });
-      const commitController = new AbortController();
       const commitPrompt =
         canCommitStageProgress
           ? "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete. Block only if progress is impossible. Do not answer in plain text."
           : "Commit durable wakespace progress now. This stage requires project write evidence, but no successful project write tool call was observed, so call `block` with a concrete reason. Do not answer in plain text.";
-      const commitRun = loop.run({
+      commitRun = loop.run({
         system: buildCommitSystem(task, wf, stage, result.text, {
           projectToolCalls,
           projectWriteCalls,
-          projectWriteRequired,
+          projectWriteRequired: projectWriteGateActive,
         }),
         prompt: commitPrompt,
         tools: commitTools,
@@ -761,6 +825,7 @@ export class WorkflowEngine {
               }
             : undefined,
       });
+      if (pendingCommitStop) stopCommitRun(pendingCommitStop);
       const commitDiagnostics = createRunDiagnostics("commit");
       result = await this.boundedRun(consumeRun(commitRun, commitDiagnostics), () => {
         commitController.abort();

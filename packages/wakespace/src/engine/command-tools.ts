@@ -22,10 +22,12 @@ export type CommandToolName = (typeof COMMAND_TOOL_NAMES)[number];
 export function buildCommandTools(
   wf: WorkflowDef,
   stage: StageDef | undefined,
+  opts: { onCommand?: (command: Command) => void } = {},
 ): { tools: ToolSet; drain: () => Command[] } {
   const sink: Command[] = [];
   const push = (cmd: Command): { acknowledged: true } => {
     sink.push(cmd);
+    opts.onCommand?.(cmd);
     return { acknowledged: true };
   };
   const allow = stage?.tools ? new Set(stage.tools) : null; // null ⇒ all defaults

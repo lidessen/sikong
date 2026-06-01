@@ -3,6 +3,18 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- Terminal workflow state tools now stop the current agent run after recording
+  durable intent. This prevents commit fallback loops such as repeated
+  `commit_stage` or `block` calls without reintroducing fixed tool-call or step
+  budgets.
+- Implementation-stage progress fields and transitions are rejected until a
+  successful structured project write is observed, preventing no-edit worker
+  turns from recording fake implementation progress.
+
 ## 0.1.6 — 2026-06-01
 
 ### Changed

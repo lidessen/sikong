@@ -82,6 +82,12 @@ hooks, and role separation.
   should come from the model/context window and wall-clock timeout handling.
 - Keep normalized project tool and write counts in `wake.diagnostics` and
   `wake.commit` as facts for PM review, not as policy gates.
+- Stop the current agent run after terminal workflow intent is recorded through
+  `request_transition`, `block`, `cancel`, or commit fallback's `commit_stage`;
+  this is lifecycle control, not a budget.
+- In stages that require project writes and have project tools available,
+  reject output-field `set_field` commands and `request_transition` until a
+  successful structured project write has been observed.
 - Refuse `writeFile` overwrites of existing files in project-write stages.
 - Generate JSON schema for `commit_stage.fields` from workflow field types and
   validate field values in the tool executor.

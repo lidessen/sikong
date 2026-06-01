@@ -103,8 +103,12 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
 
   function doCancel(reason?: string): void {
     wasCancelled = true;
-    if (backendRun) backendRun.cancel(reason);
-    else cancelledBeforeStart = true;
+    if (backendRun) {
+      void backendRun.result.catch(() => {});
+      backendRun.cancel(reason);
+    } else {
+      cancelledBeforeStart = true;
+    }
   }
 
   async function applyDecision(decision: HookDecision | void): Promise<void> {
@@ -201,6 +205,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
       else finalize("completed", await backendRun.result);
     } catch (err) {
       if (wasCancelled) {
+        if (backendRun) void backendRun.result.catch(() => {});
         finalize("cancelled");
         return;
       }
