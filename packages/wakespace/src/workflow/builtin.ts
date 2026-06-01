@@ -84,7 +84,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Implement the designed change with project tools. Use writeFile for edits, set `implementation`, set `changedFiles` to a JSON array of changed project paths, then request transition. Block instead of requesting transition if no edit should be made.",
+        "Implement the designed change with project tools. Prefer replaceInFile for localized source edits (safer than writeFile); fall back to writeFile only for new files or large rewrites. Do not use writeFile to overwrite existing source files; use replaceInFile instead. Do not spend the wake only on inspection once the edit target is clear. Set `implementation`, set `changedFiles` to a JSON array of changed project paths, then request transition. Block instead of requesting transition if no edit should be made.",
     },
     {
       id: "verify",

@@ -30,6 +30,9 @@ All notable changes to `wakespace` are documented here. This project adheres to
 - Default wake step budget increased from 6 to 12 so development workers have
   enough room to inspect, edit, and commit state in one small implementation
   wake.
+- Development implement-stage instructions now prefer `replaceInFile` for
+  localized edits and explicitly warn workers not to spend the wake only on
+  inspection after the edit target is clear.
 
 ## 0.1.3 — 2026-06-01
 
