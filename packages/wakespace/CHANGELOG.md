@@ -3,6 +3,20 @@
 All notable changes to `wakespace` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- Implementation stages that require project writes now cap pre-write project
+  exploration. After the budget is exhausted, project tools reject the rest of
+  the worker pass, cancel the run, and route to commit fallback instead of
+  allowing repeated read retries or late writes.
+- Coding-stage project writes now refuse `writeFile` overwrites of existing
+  files, steering workers toward structured `replaceInFile` edits for existing
+  source.
+- Forced commit tools now expose workflow-field JSON schema and reject invalid
+  field payload types before reducer application.
+
 ## 0.1.4 — 2026-06-01
 
 ### Added

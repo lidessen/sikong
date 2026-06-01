@@ -1,4 +1,4 @@
-import type { StageDef, WorkflowDef, Task } from "../workflow/types";
+import { DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE, type StageDef, type WorkflowDef, type Task } from "../workflow/types";
 import { COMMAND_TOOL_NAMES, type CommandToolName } from "./command-tools";
 
 function stageToolNames(stage: StageDef | undefined): readonly CommandToolName[] {
@@ -62,6 +62,12 @@ export function buildSystem(
       `Project tools available to this worker: ${projectToolNames.map((n) => `\`${n}\``).join(", ")}.`,
       "Use them to inspect and edit the project, search code, and fetch web context when the stage requires it. Local project tools are scoped to the project root. They do not replace the workflow state tools; record durable progress with the stage tools above.",
     );
+    if (stage?.requiresProjectWrite) {
+      const limit = stage.maxProjectToolCallsBeforeWrite ?? DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE;
+      lines.push(
+        `This stage requires a successful structured project write through \`replaceInFile\` or \`writeFile\`. Pre-write exploration budget: ${limit} non-write project tool call(s). After that budget is exhausted, project tools reject and the worker pass is cancelled; write before the limit or block with a concrete reason.`,
+      );
+    }
   }
   return lines.join("\n");
 }

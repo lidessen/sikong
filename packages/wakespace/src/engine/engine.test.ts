@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -157,14 +157,16 @@ describe("WorkflowEngine wake cycle", () => {
     const chronicle = new MemoryChronicleStore(() => 1);
     let calls = 0;
     let commitRuntimeOptions: unknown;
+    let commitInputSchema: unknown;
     const loop: LoopFactory = () =>
       scriptLoop(async (input) => {
         calls++;
         if (calls === 1) {
-          await input.tools?.writeFile?.execute?.({ path: "marker.txt", content: "done\n" }, {});
+          await input.tools?.writeFile?.execute?.({ path: "created.txt", content: "done\n" }, {});
           return "Updated marker but forgot to commit wakespace state.";
         }
         commitRuntimeOptions = input.runtimeOptions;
+        commitInputSchema = input.tools?.commit_stage?.inputSchema;
         expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
         await input.tools?.commit_stage?.execute?.(
           { fields: { summary: "validated by worker commit pass" }, reason: "committed" },
@@ -191,6 +193,9 @@ describe("WorkflowEngine wake cycle", () => {
     expect(commitRuntimeOptions).toMatchObject({ activeTools: ["commit_stage", "block", "cancel"] });
     expect(commitRuntimeOptions).toMatchObject({
       providerOptions: { deepseek: { thinking: { type: "disabled" } } },
+    });
+    expect(commitInputSchema).toMatchObject({
+      properties: { fields: { properties: { summary: { type: "string" } } } },
     });
     const entries = await chronicle.recent({ taskId: "commit1", limit: 20 });
     const workerDiagnostics = entries.find(
@@ -309,6 +314,215 @@ describe("WorkflowEngine wake cycle", () => {
     expect(commit?.data).toMatchObject({
       fallbackPolicy: "project_write_required_without_write",
       projectWriteCalls: 0,
+    });
+  });
+
+  test("caps pre-write project exploration in stages that require project writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-prewrite-budget-"));
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let calls = 0;
+    let gatedError: unknown;
+    let postBudgetWriteError: unknown;
+    let system = "";
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (calls === 1) {
+          system = input.system ?? "";
+          try {
+            for (let i = 0; i < 9; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
+          } catch (err) {
+            gatedError = err;
+          }
+          try {
+            await input.tools?.writeFile?.execute?.({ path: "created-after-budget.txt", content: "late\n" }, {});
+          } catch (err) {
+            postBudgetWriteError = err;
+          }
+          return;
+        }
+        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
+        await input.tools?.block?.execute?.({ reason: "pre-write budget exhausted before an edit" }, {});
+      }, "ai-sdk");
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "prewrite-budget", fields: { request: "edit marker" } });
+    await engine.idle();
+
+    expect(gatedError).toBeInstanceOf(Error);
+    expect((gatedError as Error).message).toContain("Pre-write project tool budget exhausted");
+    expect(postBudgetWriteError).toBeInstanceOf(Error);
+    expect((postBudgetWriteError as Error).message).toContain("Pre-write project tool budget exhausted");
+    expect(system).toContain("Pre-write exploration budget: 8 non-write project tool call(s).");
+    expect((await engine.getTask("prewrite-budget"))?.status).toBe("blocked");
+    const workerDiagnostics = (
+      await chronicle.recent({ taskId: "prewrite-budget", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "worker");
+    expect(workerDiagnostics?.data).toMatchObject({
+      status: "completed",
+      projectToolCalls: 10,
+      projectWriteCalls: 0,
+      maxProjectToolCallsBeforeWrite: 8,
+      projectToolCallsBeforeWrite: 8,
+      projectToolCallsRejectedBeforeWrite: 2,
+      projectWriteBudgetExhausted: true,
+    });
+    const commit = (await chronicle.recent({ taskId: "prewrite-budget", type: "wake.commit", limit: 1 }))[0];
+    expect(commit?.data).toMatchObject({
+      reason: "project_write_budget_exhausted",
+      fallbackPolicy: "project_write_required_without_write",
+      allowedTools: ["block"],
+    });
+  });
+
+  test("refuses writeFile overwrites on existing files in project-write stages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-writefile-overwrite-"));
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    let overwrite: unknown;
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        overwrite = await input.tools?.writeFile?.execute?.({ path: "marker.txt", content: "clobbered\n" }, {});
+        await input.tools?.replaceInFile?.execute?.(
+          { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+          {},
+        );
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "edited safely" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
+      }, "ai-sdk");
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "writefile-overwrite", fields: { request: "edit marker" } });
+    await engine.idle();
+
+    expect(overwrite).toMatchObject({
+      error: expect.stringContaining("Refusing to overwrite existing project file"),
+      path: "marker.txt",
+    });
+    expect(await readFile(join(root, "marker.txt"), "utf8")).toBe("after\n");
+    expect((await engine.getTask("writefile-overwrite"))?.status).toBe("done");
+  });
+
+  test("commit_stage rejects fields with invalid workflow types before reducer rejection", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-commit-field-types-"));
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let calls = 0;
+    let invalidCommit: unknown;
+    const loop: LoopFactory = () =>
+      scriptLoop(async (input) => {
+        calls++;
+        if (calls === 1) {
+          await input.tools?.replaceInFile?.execute?.(
+            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
+            {},
+          );
+          return;
+        }
+        await input.tools?.block?.execute?.({ reason: "invalid commit payload" }, {});
+        invalidCommit = await input.tools?.commit_stage?.execute?.(
+          { fields: { summary: { bad: true } }, reason: "bad payload" },
+          {},
+        );
+      }, "ai-sdk");
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "commit-field-types", fields: { request: "edit marker" } });
+    await engine.idle();
+
+    expect(invalidCommit).toMatchObject({ error: 'field "summary" must be string' });
+    expect((await engine.getTask("commit-field-types"))?.status).toBe("blocked");
+    const entries = await chronicle.recent({ taskId: "commit-field-types", limit: 20 });
+    expect(entries.map((entry) => entry.type)).not.toContain("command.rejected");
+  });
+
+  test("development implement stages use a tighter pre-write exploration budget", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wakespace-dev-budget-"));
+    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+    const chronicle = new MemoryChronicleStore(() => 1);
+    let gatedError: unknown;
+    let system = "";
+    let implementCalls = 0;
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
+        if (ctx.stageId === "implement") {
+          implementCalls++;
+          if (implementCalls === 1) {
+            system = input.system ?? "";
+            try {
+              for (let i = 0; i < 5; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
+            } catch (err) {
+              gatedError = err;
+            }
+            return;
+          }
+          expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
+          await input.tools?.block?.execute?.({ reason: "budget checked" }, {});
+          return;
+        }
+      }, "ai-sdk");
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
+      registry,
+      chronicle,
+      loop,
+    });
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development",
+      taskId: "dev-budget",
+      fields: { request: "edit marker" },
+    });
+    await engine.idle();
+
+    expect(gatedError).toBeInstanceOf(Error);
+    expect((gatedError as Error).message).toContain("Pre-write project tool budget exhausted");
+    expect(system).toContain("Pre-write exploration budget: 4 non-write project tool call(s).");
+    expect((await engine.getTask("dev-budget"))?.status).toBe("blocked");
+    const workerDiagnostics = (
+      await chronicle.recent({ taskId: "dev-budget", type: "wake.diagnostics", limit: 20 })
+    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "implement");
+    expect(workerDiagnostics?.data).toMatchObject({
+      status: "completed",
+      maxProjectToolCallsBeforeWrite: 4,
+      projectToolCallsBeforeWrite: 4,
+      projectToolCallsRejectedBeforeWrite: 1,
+      projectWriteBudgetExhausted: true,
     });
   });
 

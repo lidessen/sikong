@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import {
   createProjectTools,
   defineTool,
@@ -16,9 +18,11 @@ import {
   stageById,
   tryAdvance,
 } from "../workflow/reducer";
+import { DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE } from "../workflow/types";
 import type {
   Command,
   EventSource,
+  FieldDef,
   Task,
   TaskStatus,
   WorkflowDef,
@@ -165,6 +169,67 @@ function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<
 
 function toolResultSucceeded(result: unknown): boolean {
   return !(isRecord(result) && typeof result.error === "string" && result.error.length > 0);
+}
+
+function isProjectWriteTool(name: string): boolean {
+  return PROJECT_WRITE_TOOL_NAMES.has(name);
+}
+
+async function existingProjectPath(root: string, args: unknown): Promise<string | null> {
+  if (!isRecord(args) || typeof args.path !== "string" || !args.path.trim()) return null;
+  const rawPath = args.path.trim();
+  const toolRelativePath = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
+  const target = resolve(root, toolRelativePath);
+  const rel = relative(root, target);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+  try {
+    await access(target);
+    return rel;
+  } catch {
+    return null;
+  }
+}
+
+function fieldJsonSchema(def: FieldDef | undefined): Record<string, unknown> {
+  switch (def?.type) {
+    case "string":
+    case "ref":
+      return { type: "string" };
+    case "number":
+      return { type: "number" };
+    case "boolean":
+      return { type: "boolean" };
+    case "enum":
+      return { type: "string", ...(def.enum ? { enum: [...def.enum] } : {}) };
+    case "json":
+    default:
+      return {};
+  }
+}
+
+function commitFieldValueValid(def: FieldDef | undefined, value: unknown): boolean {
+  switch (def?.type) {
+    case "string":
+    case "ref":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "enum":
+      return typeof value === "string" && !!def.enum?.includes(value);
+    case "json":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function projectWriteBudgetExhaustedError(maxProjectToolCallsBeforeWrite: number): Error {
+  return new Error(
+    `Pre-write project tool budget exhausted after ${maxProjectToolCallsBeforeWrite} non-write calls. ` +
+      "This worker pass is stopping; the next wake must use replaceInFile/writeFile earlier, or block with the concrete reason no edit should be made.",
+  );
 }
 
 function isStageCommitSignal(command: Command, stage: ReturnType<typeof stageById>): boolean {
@@ -489,6 +554,12 @@ export class WorkflowEngine {
     let projectToolCalls = 0;
     let projectWriteCalls = 0;
     const projectWriteRequired = stage?.requiresProjectWrite === true;
+    const maxProjectToolCallsBeforeWrite =
+      stage?.maxProjectToolCallsBeforeWrite ?? DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE;
+    let projectToolCallsBeforeWrite = 0;
+    let projectToolCallsRejectedBeforeWrite = 0;
+    let projectWriteBudgetExhausted = false;
+    let cancelWorkerPass: ((reason: string) => void) | undefined;
     const projectTools: ToolSet = {};
     for (const [name, tool] of Object.entries(rawProjectTools)) {
       projectTools[name] = tool.execute
@@ -496,8 +567,36 @@ export class WorkflowEngine {
             ...tool,
             execute: async (args, ctx) => {
               projectToolCalls++;
+              if (projectWriteRequired && projectWriteBudgetExhausted) {
+                projectToolCallsRejectedBeforeWrite++;
+                cancelWorkerPass?.("project write budget exhausted");
+                throw projectWriteBudgetExhaustedError(maxProjectToolCallsBeforeWrite);
+              }
+              if (projectWriteRequired && name === "writeFile") {
+                const existing = project?.root ? await existingProjectPath(project.root, args) : null;
+                if (existing) {
+                  return {
+                    error:
+                      `Refusing to overwrite existing project file "${existing}" with writeFile during a coding stage. ` +
+                      "Use replaceInFile for existing files, or writeFile only for new files and large rewrites that are explicitly required.",
+                    path: existing,
+                  };
+                }
+              }
+              if (
+                projectWriteRequired &&
+                projectWriteCalls === 0 &&
+                !isProjectWriteTool(name) &&
+                projectToolCallsBeforeWrite >= maxProjectToolCallsBeforeWrite
+              ) {
+                projectToolCallsRejectedBeforeWrite++;
+                projectWriteBudgetExhausted = true;
+                cancelWorkerPass?.("project write budget exhausted");
+                throw projectWriteBudgetExhaustedError(maxProjectToolCallsBeforeWrite);
+              }
               const out = await tool.execute!(args, ctx);
-              if (PROJECT_WRITE_TOOL_NAMES.has(name) && toolResultSucceeded(out)) projectWriteCalls++;
+              if (isProjectWriteTool(name) && toolResultSucceeded(out)) projectWriteCalls++;
+              else if (projectWriteRequired && projectWriteCalls === 0) projectToolCallsBeforeWrite++;
               return out;
             },
           }
@@ -524,6 +623,10 @@ export class WorkflowEngine {
       ...(this.o.maxStepsPerWake ? { maxSteps: this.o.maxStepsPerWake } : {}),
       ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),
     });
+    cancelWorkerPass = (reason: string) => {
+      controller.abort();
+      run.cancel(reason);
+    };
     const consumeRun = async (
       runHandle: ReturnType<AgentLoop["run"]>,
       diagnostics: RunDiagnostics,
@@ -550,6 +653,14 @@ export class WorkflowEngine {
       projectToolCalls,
       projectWriteCalls,
       projectWriteRequired,
+      ...(projectWriteRequired
+        ? {
+            maxProjectToolCallsBeforeWrite,
+            projectToolCallsBeforeWrite,
+            projectToolCallsRejectedBeforeWrite,
+            projectWriteBudgetExhausted,
+          }
+        : {}),
     };
     await this.chron({
       type: "wake.diagnostics",
@@ -560,7 +671,7 @@ export class WorkflowEngine {
     });
 
     const hasStageCommitSignal = commands.some((command) => isStageCommitSignal(command, stage));
-    if (!hasStageCommitSignal && result.status !== "error") {
+    if (!hasStageCommitSignal && (result.status !== "error" || projectWriteBudgetExhausted)) {
       const firstPassText = compactPreview(result.text || workerDiagnostics.textPreview);
       const firstPassCommands = commands;
       const commitCommands: Command[] = [];
@@ -589,7 +700,7 @@ export class WorkflowEngine {
             properties: {
               fields: {
                 type: "object",
-                properties: Object.fromEntries(allowedFields.map((field) => [field, {}])),
+                properties: Object.fromEntries(allowedFields.map((field) => [field, fieldJsonSchema(wf.fields[field])])),
                 ...(allowedFields.length ? { required: allowedFields } : {}),
                 additionalProperties: !stage?.outputFields?.length,
               },
@@ -600,6 +711,16 @@ export class WorkflowEngine {
           },
           execute: (args) => {
             const fields = isRecord(args.fields) ? args.fields : {};
+            for (const field of allowedFields) {
+              if (
+                Object.prototype.hasOwnProperty.call(fields, field) &&
+                !commitFieldValueValid(wf.fields[field], fields[field])
+              ) {
+                return {
+                  error: `field "${field}" must be ${wf.fields[field]?.type ?? "a valid workflow field value"}`,
+                };
+              }
+            }
             commitCommands.length = 0;
             stageCommitted = true;
             for (const field of allowedFields) {
@@ -650,7 +771,11 @@ export class WorkflowEngine {
         wakeId,
         summary: `worker produced no stage commit commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
         data: {
-          reason: firstPassCommands.length === 0 ? "no_state_commands" : "no_stage_commit_commands",
+          reason: projectWriteBudgetExhausted
+            ? "project_write_budget_exhausted"
+            : firstPassCommands.length === 0
+              ? "no_state_commands"
+              : "no_stage_commit_commands",
           fallbackPolicy: canCommitStageProgress ? "state_commit_allowed" : "project_write_required_without_write",
           stageId: task.stageId,
           firstPassCommands: firstPassCommands.map((command) => command.kind),
@@ -658,6 +783,14 @@ export class WorkflowEngine {
           projectToolCalls,
           projectWriteCalls,
           projectWriteRequired,
+          ...(projectWriteRequired
+            ? {
+                maxProjectToolCallsBeforeWrite,
+                projectToolCallsBeforeWrite,
+                projectToolCallsRejectedBeforeWrite,
+                projectWriteBudgetExhausted,
+              }
+            : {}),
           ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
           firstPassTextChars: firstPassText.chars,
           ...(firstPassText.preview ? { firstPassTextPreview: firstPassText.preview } : {}),

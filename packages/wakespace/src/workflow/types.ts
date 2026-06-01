@@ -1,3 +1,5 @@
+export const DEFAULT_MAX_PROJECT_TOOL_CALLS_BEFORE_WRITE = 8;
+
 /**
  * M0 — the workflow kernel data model.
  *
@@ -70,12 +72,18 @@ export interface StageDef {
   /** Stage guidance appended to the wake's system prompt. */
   instructions?: string;
   /**
-   * Require at least one project `writeFile` call before a no-state-command
+   * Require at least one successful structured project write before a no-state-command
    * fallback pass may record normal stage progress. Use this for stages whose
    * acceptance depends on project edits; leave unset for planning, design, and
    * verification stages that may only update workflow fields.
    */
   requiresProjectWrite?: boolean;
+  /**
+   * For `requiresProjectWrite` stages, cap non-write project tool calls before
+   * the first successful write. This keeps implementation wakes from spending
+   * the whole turn on inspection. Defaults to the engine policy when unset.
+   */
+  maxProjectToolCallsBeforeWrite?: number;
   /** Cron escalation hint: fire a staleness tick after this long (used at M5). */
   escalateAfterMs?: number;
 }
