@@ -21,6 +21,7 @@
  */
 import { unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   JsonProjectStore,
   JsonWorkerStore,
@@ -373,6 +374,16 @@ switch (cmd) {
       }
     } catch (err) {
       fail((err as Error).message, 1);
+    }
+    // Guardrail (ADR 0009 dogfood finding): a write-class workflow (one that staffs
+    // a coding team — i.e. declares a workerRole) run against the current directory
+    // means the team will edit files HERE. Warn so it's never a surprise.
+    const createdWf = ws.registry.get(task!.workflowId);
+    const createdProject = await ws.projects.get(projectId);
+    if (createdWf?.workerRole && resolve(createdProject?.root ?? ".") === resolve(process.cwd())) {
+      console.error(
+        `⚠ workflow "${task!.workflowId}" staffs a coding team that edits the project, and project "${projectId}" root is the current directory (${resolve(createdProject?.root ?? ".")}). Running this task will modify files here. To target a specific directory, \`project create <id> --root <path>\` then pass --project <id>.`,
+      );
     }
     const result = {
       ok: true,

@@ -97,8 +97,17 @@ Two follow-ups landed after the first live dogfood:
   during review (without setting `summary`); it is re-woken when they finish and
   reviews again, only closing out once every child — initial and follow-up — is
   terminal and a `summary` is set. Still task-level steering; no new mechanism.
-- **Discovered claude-code workers default to `permissionMode: "acceptEdits"`**
+- **Discovered claude-code workers default to `permissionMode: "bypassPermissions"`**
   (a refinement of ADR 0008's discovery). A claude-code worker runs headless,
-  jailed to the project root (cwd + allowedPaths); without an edit-permitting mode
-  it cannot change files, so a coding team can't actually code. `acceptEdits` lets
-  it edit within its sandbox without an interactive prompt it could never answer.
+  jailed to the project root (cwd + allowedPaths for file tools); it cannot answer
+  permission prompts, yet an autonomous dev worker must both edit files and run
+  project checks (typecheck/tests/build) during verify. (First tried `acceptEdits`,
+  which the live dogfood showed is enough to edit but would stall on the bash a
+  verify step needs.) Run teams against a project you're willing to let an agent
+  modify; pair with the guardrail below.
+- **Create-time guardrail.** A live dogfood that skipped `project create --root`
+  fell back to the builtin `default` project (root `"."`) and the worker edited the
+  *current directory*. `create` now warns when a write-class workflow (one with a
+  `workerRole`) targets the cwd, so a team isn't pointed at the wrong place by
+  accident. The behavior itself is correct — "run wakespace in your project" — the
+  warning just makes it explicit.

@@ -19,9 +19,15 @@ All notable changes to `wakespace` are documented here. This project adheres to
   The `review` stage also enables `create_subtask` and `done` is re-gated on
   `childrenDone`, so the lead can run another round (spawn follow-up subtasks,
   get re-woken when they finish, review again) before closing out.
-- Auto-discovered `claude-code` workers default to `permissionMode: "acceptEdits"`
-  so a headless coding team can actually edit files within its sandboxed project
-  root (cwd + allowedPaths), not just inspect.
+- Auto-discovered `claude-code` workers default to `permissionMode:
+  "bypassPermissions"` so a headless autonomous dev worker can both edit files and
+  run project checks (typecheck/tests/build) during verify — it cannot answer
+  permission prompts. File tools stay jailed to the project root (cwd +
+  allowedPaths); run teams against a project you're willing to let an agent modify.
+- **Create-time guardrail**: `create` warns when a write-class workflow (one that
+  staffs a coding team — i.e. declares a `workerRole`) targets the current
+  directory (the builtin `default` project root is `"."`), so a team isn't pointed
+  at the wrong place by accident. Use `project create <id> --root <path>` to scope.
 - **Wakespace now staffs tasks itself** (ADR 0008). The operator only provisions the
   workforce once — set a provider key (e.g. `DEEPSEEK_API_KEY`/`ANTHROPIC_API_KEY`)
   and/or install `claude`; wakespace auto-discovers the roster and hires per task.

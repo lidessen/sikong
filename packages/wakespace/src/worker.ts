@@ -85,10 +85,14 @@ export async function discoveredRoster(): Promise<Worker[]> {
         provider,
         model: DISCOVERY_MODEL[provider],
         roles: defaultRolesForRuntime(c.runtime),
-        // A claude-code worker runs headless, jailed to the project root (cwd +
-        // allowedPaths). Without an edit-permitting mode it cannot actually change
-        // files, so default discovered coding workers to acceptEdits.
-        ...(c.runtime === "claude-code" ? { permissionMode: "acceptEdits" as const } : {}),
+        // A claude-code worker runs headless and cannot answer permission prompts,
+        // yet an autonomous dev worker must both edit files AND run project checks
+        // (typecheck/tests/build) during verify. So default discovered claude-code
+        // workers to bypassPermissions. File tools are still jailed to the project
+        // root (cwd + allowedPaths); pair this with the create-time guardrail below
+        // so a write-class workflow isn't pointed at the wrong directory. Run teams
+        // against a project you're willing to let an agent modify.
+        ...(c.runtime === "claude-code" ? { permissionMode: "bypassPermissions" as const } : {}),
       });
     }
   }

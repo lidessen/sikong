@@ -165,4 +165,22 @@ describe("wakespace CLI", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("create warns when a write-class workflow targets the current directory", async () => {
+    const dir = await tmp();
+    try {
+      // development staffs a coding team (workerRole) and the builtin default
+      // project root is "." → the team would edit the cwd; create must warn.
+      const dev = Bun.spawnSync([process.execPath, cliPath, "create", "edit code", "--dir", dir, "--workflow", "development", "--id", "w1"]);
+      expect(dev.exitCode).toBe(0);
+      expect(new TextDecoder().decode(dev.stderr)).toContain("current directory");
+
+      // general is not write-class (no workerRole) → no warning.
+      const gen = Bun.spawnSync([process.execPath, cliPath, "create", "just research", "--dir", dir, "--workflow", "general", "--id", "w2"]);
+      expect(gen.exitCode).toBe(0);
+      expect(new TextDecoder().decode(gen.stderr)).not.toContain("current directory");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
