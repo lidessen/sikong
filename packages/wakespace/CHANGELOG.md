@@ -7,6 +7,17 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 ### Added
 
+- **Optional per-subtask isolation** (ADR 0010). `create_subtask` accepts a generic
+  `isolate: true`; for git projects the worker boundary runs that child in its own
+  git worktree (branch `wakespace/<id>`, under the wakespace home dir, not the
+  project checkout), so parallel children editing the same code don't clobber each
+  other. On terminal the worktree is committed to its branch and removed; a `run`
+  GC sweep reclaims any leftovers and deletes merged `wakespace/*` branches, so
+  worktrees never pile up. Non-git projects: a no-op. The lead merges the isolated
+  branches during review. The engine stays git-agnostic — it only forwards the
+  opaque `isolate` flag to worker-boundary hooks. (Isolation is for parallel-edit
+  safety, NOT a system sandbox — `bypassPermissions` bash is not jailed by a
+  worktree; OS-level sandboxing is deferred.)
 - **A lead task can build and coordinate a team** (ADR 0009). New built-in
   `development-lead` workflow: a 负责人 plans an effort, delegates the pieces to a
   team of child tasks (each auto-staffed by capability), is re-woken as they finish,

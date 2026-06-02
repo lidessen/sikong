@@ -114,6 +114,11 @@ export function buildCommandTools(
         properties: {
           workflowId: { type: "string", description: "a registered workflow id for the child" },
           input: { type: "string", description: "what the child should do" },
+          isolate: {
+            type: "boolean",
+            description:
+              "Run this child in an isolated workspace (its own git worktree, for git projects). Use it for parallel children that edit the same code; integrate their branches afterward.",
+          },
         },
         required: ["workflowId", "input"],
         additionalProperties: false,
@@ -124,6 +129,7 @@ export function buildCommandTools(
           childId: "", // the engine mints it before recording the event
           workflowId: String(args.workflowId),
           input: String(args.input),
+          ...(args.isolate === true ? { isolate: true } : {}),
         }),
     });
 

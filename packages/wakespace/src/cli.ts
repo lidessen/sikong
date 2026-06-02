@@ -30,7 +30,7 @@ import {
   JsonWorkspaceProjectionStore,
 } from "./store";
 import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
-import { acquireLock, getDefaultWorker, openWorkspace, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
+import { acquireLock, getDefaultWorker, openWorkspace, reconcileWorktrees, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
 import { parseDataFile } from "./config-file";
 import { isValidProjectId, type Project } from "./project";
 import { discoverWorkers, discoveredRoster, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
@@ -404,6 +404,7 @@ switch (cmd) {
       hooks: { onError: ({ taskId, error }) => errors.push(`${taskId}: ${error.message}`) },
     });
     await ws.engine.runPending(flag("--task"));
+    await reconcileWorktrees(ws, dir).catch(() => {}); // reclaim leftover isolation worktrees (ADR 0010)
     const view = await workspaceStatus(ws.projections, ws.chronicle);
     printView(view, renderStatus);
     if (errors.length) {

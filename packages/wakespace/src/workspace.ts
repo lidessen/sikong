@@ -15,6 +15,7 @@ import { DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } fro
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
 import { discoveredRoster, selectWorker, type Worker } from "./worker";
+import { ensureWorktree, gcWorktrees, isGitRepo, releaseWorktree } from "./worktree";
 import {
   JsonProjectStore,
   JsonWorkspaceChronicleStore,
@@ -158,11 +159,40 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
       workerLoop.id === "ai-sdk" && ctx.project?.root
         ? createProjectTools({ cwd: ctx.project.root, ...(ctx.project.env ? { env: ctx.project.env } : {}) })
         : {},
+    // Isolation (ADR 0010) lives entirely here, off git only. The engine forwards
+    // `isolate` tasks opaquely; we give them their own git worktree and reclaim it
+    // on terminal. Non-git projects are a no-op (the task just shares the root).
+    isolateWorkspace: async (ctx, project) => {
+      if (!project.root || !(await isGitRepo(project.root))) return project;
+      const wt = await ensureWorktree(dir, project.root, ctx.task.id);
+      return { ...project, root: wt };
+    },
+    releaseWorkspace: async (task, project) => {
+      if (!project.root || !(await isGitRepo(project.root))) return;
+      await releaseWorktree(dir, project.root, task.id, task.status);
+    },
     intakeLoop,
     ...(opts.hooks ? { hooks: opts.hooks } : {}),
     wakeTimeoutMs: opts.wakeTimeoutMs ?? 90_000,
   });
   return { engine, events, projections, chronicle, registry, projects, workers };
+}
+
+/**
+ * Reclaim leftover isolation worktrees/branches (ADR 0010) — a safety net beyond
+ * the per-task release on terminal, for runs that crashed mid-wake. Removes any
+ * worktree whose task is no longer live and deletes merged `wakespace/*` branches.
+ * Cheap; the CLI calls it after `run` settles.
+ */
+export async function reconcileWorktrees(ws: Workspace, dir: string): Promise<void> {
+  const tasks = await ws.projections.query();
+  const live = new Set(
+    tasks.filter((t) => t.status === "todo" || t.status === "in_progress" || t.status === "blocked").map((t) => t.id),
+  );
+  const roots = [
+    ...new Set((await ws.projects.list()).map((p) => p.root).filter((r): r is string => !!r && r !== ".")),
+  ];
+  await gcWorktrees(dir, roots, live);
 }
 
 /** Load valid workflow defs persisted under `dir/workflows/*.{yaml,yml,json}` (skips invalid). */

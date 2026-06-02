@@ -318,6 +318,17 @@ export type LoopFactory = (ctx: WakeContext) => AgentLoop;
  */
 export type WorkerToolsFactory = (ctx: WakeContext, loop: AgentLoop) => ToolSet | Promise<ToolSet>;
 
+/**
+ * Provide an isolated workspace for a task that requested it (`Task.isolate`, ADR
+ * 0010). Opaque to the engine — the worker boundary maps it to e.g. a git worktree
+ * (or a no-op off git). Returns the effective project the wake should use (e.g.
+ * rooted at the worktree), which then drives cwd/allowedPaths/tools.
+ */
+export type IsolateWorkspace = (ctx: WakeContext, project: Project) => Project | Promise<Project>;
+
+/** Release an isolated task's workspace when it terminates (commit + cleanup). Idempotent. */
+export type ReleaseWorkspace = (task: Task, project: Project) => void | Promise<void>;
+
 export interface EngineHooks {
   onWakeStart?(info: { taskId: string; wakeId: string; stageId: string }): void;
   onWakeEnd?(info: {
@@ -346,6 +357,10 @@ export interface WorkflowEngineOptions {
    * worker that carries its own interface (a coding-agent runtime) needs none.
    */
   workerTools?: WorkerToolsFactory;
+  /** Provide an isolated workspace for `isolate` tasks (ADR 0010); opaque to the engine. */
+  isolateWorkspace?: IsolateWorkspace;
+  /** Release an isolated task's workspace when it terminates (commit + cleanup). */
+  releaseWorkspace?: ReleaseWorkspace;
   /** Builds the intake-router loop (classifies a raw request → workflow). Optional. */
   intakeLoop?: () => AgentLoop;
   hooks?: EngineHooks;
@@ -381,6 +396,8 @@ export interface WorkflowEngineOptions {
 export class WorkflowEngine {
   private readonly state = new Map<string, { running: boolean; pending: boolean; wakes: number }>();
   private readonly inflight = new Set<Promise<void>>();
+  /** Isolated tasks whose workspace has already been released (fire releaseWorkspace once). */
+  private readonly released = new Set<string>();
 
   constructor(private readonly o: WorkflowEngineOptions) {}
 
@@ -400,6 +417,8 @@ export class WorkflowEngine {
     parentId?: string;
     /** The hired worker (model/runtime) for this task; falls back to project/workspace defaults. */
     workerId?: string;
+    /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary. */
+    isolate?: boolean;
     source?: EventSource;
     /** Default true; pass false to create without an initial wake. */
     wake?: boolean;
@@ -422,6 +441,7 @@ export class WorkflowEngine {
         ...(params.fields ? { fields: params.fields } : {}),
         ...(params.parentId ? { parentId: params.parentId } : {}),
         ...(params.workerId ? { workerId: params.workerId } : {}),
+        ...(params.isolate ? { isolate: true } : {}),
         source: params.source ?? "lead",
       }),
     );
@@ -600,7 +620,13 @@ export class WorkflowEngine {
     // (2) Run ONE bounded agent wake for the current stage.
     const wakeId = this.newId("wake");
     const stage = stageById(wf, task.stageId);
-    const project = this.o.projects ? ((await this.o.projects.get(task.projectId)) ?? undefined) : undefined;
+    let project = this.o.projects ? ((await this.o.projects.get(task.projectId)) ?? undefined) : undefined;
+    // Isolated tasks (ADR 0010) run in a workspace the worker boundary provides
+    // (e.g. a git worktree). The engine forwards opaquely and uses whatever project
+    // it gets back to scope cwd/allowedPaths/tools for this wake.
+    if (project && task.isolate && this.o.isolateWorkspace) {
+      project = await this.o.isolateWorkspace({ task, workflow: wf, stageId: task.stageId, project }, project);
+    }
     const ctx: WakeContext = { task, workflow: wf, stageId: task.stageId, ...(project ? { project } : {}) };
     const loop = this.o.loop(ctx);
     if (!loop.supports("tools"))
@@ -984,7 +1010,10 @@ export class WorkflowEngine {
   }
 
   /** Create a child task for a create_subtask command and return its minted id. */
-  private async spawnSubtask(parent: Task, command: { workflowId: string; input: string }): Promise<string> {
+  private async spawnSubtask(
+    parent: Task,
+    command: { workflowId: string; input: string; isolate?: boolean },
+  ): Promise<string> {
     const wf = this.o.registry.get(command.workflowId) ?? this.o.registry.get("general");
     if (!wf)
       throw new Error(`create_subtask: workflow "${command.workflowId}" not registered and no GENERAL fallback`);
@@ -994,6 +1023,7 @@ export class WorkflowEngine {
       workflowId: wf.id,
       ...(wf.fields.request ? { fields: { request: command.input } } : {}),
       ...(parent.workerId ? { workerId: parent.workerId } : {}),
+      ...(command.isolate ? { isolate: true } : {}),
       parentId: parent.id,
       taskId: childId,
       source: "engine",
@@ -1022,6 +1052,7 @@ export class WorkflowEngine {
               id: k.id,
               workflowId: k.workflowId,
               status: k.status,
+              ...(k.isolate ? { isolate: true } : {}),
               ...(typeof k.fields.summary === "string" && k.fields.summary ? { summary: k.fields.summary } : {}),
               ...(typeof k.fields.request === "string" && k.fields.request ? { request: k.fields.request } : {}),
             },
@@ -1044,8 +1075,27 @@ export class WorkflowEngine {
   private async persist(taskId: string, wf: WorkflowDef): Promise<Task> {
     const task = project(await this.o.events.load(taskId), wf);
     await this.o.projections.put(task);
-    // A finished child re-wakes its parent so a `childrenDone` gate re-evaluates.
-    if (isTerminal(task.status) && task.parentId) this.schedule(task.parentId);
+    if (isTerminal(task.status)) {
+      // Release an isolated task's workspace once it terminates (commit + cleanup),
+      // exactly once. The worker boundary owns the git/worktree details.
+      if (task.isolate && this.o.releaseWorkspace && !this.released.has(taskId)) {
+        this.released.add(taskId);
+        const proj = this.o.projects ? ((await this.o.projects.get(task.projectId)) ?? undefined) : undefined;
+        if (proj) {
+          try {
+            await this.o.releaseWorkspace(task, proj);
+          } catch (err) {
+            void this.chron({
+              type: "wake.error",
+              taskId,
+              summary: `releaseWorkspace failed: ${(err as Error).message}`,
+            });
+          }
+        }
+      }
+      // A finished child re-wakes its parent so a `childrenDone` gate re-evaluates.
+      if (task.parentId) this.schedule(task.parentId);
+    }
     return task;
   }
 }

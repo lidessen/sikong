@@ -198,6 +198,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     };
     if (typeof p.parentId === "string") base.parentId = p.parentId;
     if (typeof p.workerId === "string") base.workerId = p.workerId;
+    if (p.isolate === true) base.isolate = true;
     return base;
   }
 
@@ -326,6 +327,7 @@ export function initTask(params: {
   workflow: WorkflowDef;
   parentId?: string;
   workerId?: string;
+  isolate?: boolean;
   fields?: Record<string, unknown>;
   source?: EventSource;
 }): NewEvent[] {
@@ -342,6 +344,7 @@ export function initTask(params: {
   };
   if (params.parentId) payload.parentId = params.parentId;
   if (params.workerId) payload.workerId = params.workerId;
+  if (params.isolate) payload.isolate = true;
   return [{ taskId: params.taskId, source: params.source ?? "lead", type: "task.created", payload }];
 }
 

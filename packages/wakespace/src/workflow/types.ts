@@ -109,6 +109,8 @@ export interface Task {
   status: TaskStatus;
   /** The hired worker (model/runtime), set at creation; resolution falls back to project/workspace defaults. */
   workerId?: string;
+  /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary (git worktree), opaque to the engine. */
+  isolate?: boolean;
   parentId?: string;
   childIds: readonly string[];
   /** `seq` of the last event folded into this projection. */
@@ -164,6 +166,12 @@ export type Command =
       workflowId: string;
       input: string;
       blocksParent?: boolean;
+      /**
+       * Run this child in an isolated workspace (ADR 0010). Generic + opaque to the
+       * engine; the worker boundary maps it to a git worktree for git projects and
+       * ignores it otherwise. Use it for parallel children that edit the same code.
+       */
+      isolate?: boolean;
     }
   | { kind: "block"; reason: string }
   | { kind: "unblock" }

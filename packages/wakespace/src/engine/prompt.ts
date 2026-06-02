@@ -6,6 +6,8 @@ export interface TeamMember {
   id: string;
   workflowId: string;
   status: TaskStatus;
+  /** Ran in an isolated workspace (its work is on branch `wakespace/<id>` for git projects). */
+  isolate?: boolean;
   summary?: string;
   request?: string;
 }
@@ -78,6 +80,7 @@ export function buildSystem(
     lines.push("", "## Team (your subtasks)");
     for (const m of team) {
       const parts = [`- ${m.id} (${m.workflowId}) — ${m.status}`];
+      if (m.isolate) parts.push(`[isolated → branch wakespace/${m.id}]`);
       if (m.summary) parts.push(`summary: ${renderValue(m.summary)}`);
       else if (m.request) parts.push(`request: ${renderValue(m.request)}`);
       lines.push(parts.join("  "));

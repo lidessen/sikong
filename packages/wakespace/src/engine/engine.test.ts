@@ -978,6 +978,64 @@ describe("lead creates a team (ADR 0009)", () => {
     expect(task?.childIds.length).toBe(2); // initial team member + the follow-up
     for (const cid of task!.childIds) expect((await engine.getTask(cid))?.status).toBe("done");
   });
+
+  test("an isolated subtask marks the child and runs the worker-boundary hooks (ADR 0010)", async () => {
+    const isolated: string[] = [];
+    const released: string[] = [];
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === "simple-commit") {
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "isolated child done" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+          return;
+        }
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "one isolated piece" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "delegate") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part X", isolate: true }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "done" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "reviewed" }, {});
+      });
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+    registry.register(SIMPLE_COMMIT);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root: "/sandbox" }]),
+      registry,
+      loop,
+      isolateWorkspace: (ctx, project) => {
+        isolated.push(ctx.task.id);
+        return project;
+      },
+      releaseWorkspace: (task) => {
+        released.push(task.id);
+      },
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "development-lead", taskId: "iso-lead", fields: { request: "x" } });
+    await engine.idle();
+
+    const lead = await engine.getTask("iso-lead");
+    expect(lead?.status).toBe("done");
+    expect(lead?.childIds.length).toBe(1);
+    const childId = lead!.childIds[0]!;
+    const child = await engine.getTask(childId);
+    expect(child?.isolate).toBe(true); // the child carries the isolation flag
+    expect(child?.status).toBe("done");
+    // the worker boundary saw the isolated child on its wake, and released it on terminal
+    expect(isolated).toContain(childId);
+    expect(released).toContain(childId);
+    // the lead itself was never isolated
+    expect(isolated).not.toContain("iso-lead");
+  });
 });
 
 function eventRunHandle(events: LoopEvent[]): RunHandle {

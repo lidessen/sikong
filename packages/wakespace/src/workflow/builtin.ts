@@ -156,7 +156,7 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Create one subtask per planned piece of work with `create_subtask` (use the `development` workflow for code changes, or `general` otherwise); each runs independently and is auto-staffed. Delegate at least one, then request transition to wait for the team.",
+        "Create one subtask per planned piece of work with `create_subtask` (use the `development` workflow for code changes, or `general` otherwise); each runs independently and is auto-staffed. If two or more subtasks will edit the same files, create them with `isolate: true` so each gets its own git worktree and they don't clobber each other (you merge their branches in review). Delegate at least one, then request transition to wait for the team.",
     },
     {
       id: "review",
@@ -171,7 +171,7 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Read the Team section and review what each subtask returned. If the effort needs another round, create follow-up subtasks with `create_subtask` and request transition WITHOUT setting `summary` — you will be re-woken once they finish, then review again. When the effort is complete, set a one-line `summary` of the overall outcome and request transition. Block if it failed.",
+        "Read the Team section and review what each subtask returned. Any subtask shown as [isolated → branch wakespace/<id>] committed its work to that branch — before finishing, merge each isolated branch into the current branch with git (you have a shell), resolving conflicts. If the effort needs another round, create follow-up subtasks with `create_subtask` and request transition WITHOUT setting `summary` — you will be re-woken once they finish, then review again. When the effort is complete, set a one-line `summary` of the overall outcome and request transition. Block if it failed.",
     },
     {
       id: "done",
