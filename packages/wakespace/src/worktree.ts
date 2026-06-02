@@ -122,10 +122,12 @@ export async function releaseWorktree(
 }
 
 /**
- * Garbage-collect leftover worktrees (e.g. from a crashed run): remove any worktree
- * directory whose task is no longer live, prune git's admin refs, and delete
- * `wakespace/*` branches already merged into each project's HEAD. Safe to call any
- * time; bounds worktree/branch accumulation.
+ * Garbage-collect leftover worktrees AND branches: remove any worktree directory
+ * whose task is no longer live, prune git's admin refs, and delete every
+ * `wakespace/<id>` branch whose task is no longer live. Cleanup is keyed on the
+ * TASK LIFECYCLE, not on git's merged-detection — by the time GC runs the lead has
+ * already integrated (by merge or by re-applying), and a spent branch must not
+ * accumulate regardless of how the lead chose to integrate. Safe to call any time.
  */
 export async function gcWorktrees(
   dir: string,
@@ -144,10 +146,10 @@ export async function gcWorktrees(
   }
   for (const root of roots) {
     if (!(await isGitRepo(root))) continue;
-    await gitQuiet(root, ["worktree", "prune"]);
-    const merged = await git(root, ["branch", "--merged", "--format=%(refname:short)"]).catch(() => "");
-    for (const b of merged.split("\n").map((s) => s.trim())) {
-      if (b.startsWith("wakespace/")) await gitQuiet(root, ["branch", "-D", b]);
+    await gitQuiet(root, ["worktree", "prune"]); // drops admin refs for removed worktrees, so branches aren't "checked out"
+    const out = await git(root, ["branch", "--list", "wakespace/*", "--format=%(refname:short)"]).catch(() => "");
+    for (const b of out.split("\n").map((s) => s.trim()).filter(Boolean)) {
+      if (!liveTaskIds.has(b.slice("wakespace/".length))) await gitQuiet(root, ["branch", "-D", b]);
     }
   }
 }

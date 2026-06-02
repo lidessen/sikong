@@ -82,6 +82,17 @@ What this isolation IS and ISN'T (important, to avoid a false sense of safety):
 - tests: a real temp git repo exercises worktree create → child edits → terminal
   commit → branch present; engine test that `isolate` forwards through the hooks.
 
+## Update (2026-06-02, live dogfood)
+
+A development-lead run with two `isolate` children both editing one file confirmed
+the end-to-end flow (both edits integrated into main; worktrees cleaned). It also
+surfaced that the lead may **re-apply** the children's edits rather than `git
+merge` their branches — so the branches were never git-`--merged` and a
+merged-only GC would let them accumulate. Fix: `gcWorktrees` deletes
+`wakespace/<id>` branches keyed on **task liveness** (the task is no longer live),
+not on git-merge detection. By GC time the lead has integrated however it chose, so
+a spent branch is removed regardless; neither worktrees nor branches accumulate.
+
 ## Open / Deferred
 
 - Auto-merge at the boundary (vs lead-merge) — deferred; lead-merge keeps merges

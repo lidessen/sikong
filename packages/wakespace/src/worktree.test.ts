@@ -83,6 +83,9 @@ describe("worktree isolation (ADR 0010)", () => {
       await gcWorktrees(dir, [root], new Set(["task_live"]));
       expect(await exists(liveWt)).toBe(true); // kept (still live)
       expect(await exists(deadWt)).toBe(false); // reclaimed (not live)
+      // branches are cleaned by task liveness, not git-merge detection
+      expect((await git(root, ["branch", "--list", "wakespace/task_dead"])).stdout.trim()).toBe("");
+      expect((await git(root, ["branch", "--list", "wakespace/task_live"])).stdout).toContain("wakespace/task_live");
     } finally {
       await cleanup(root, dir);
     }

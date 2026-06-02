@@ -12,8 +12,10 @@ All notable changes to `wakespace` are documented here. This project adheres to
   git worktree (branch `wakespace/<id>`, under the wakespace home dir, not the
   project checkout), so parallel children editing the same code don't clobber each
   other. On terminal the worktree is committed to its branch and removed; a `run`
-  GC sweep reclaims any leftovers and deletes merged `wakespace/*` branches, so
-  worktrees never pile up. Non-git projects: a no-op. The lead merges the isolated
+  GC sweep reclaims any leftover worktrees and deletes `wakespace/*` branches whose
+  task has terminated (keyed on task lifecycle, not git-merge detection — a lead may
+  integrate by re-applying rather than `git merge`), so neither worktrees nor
+  branches pile up. Non-git projects: a no-op. The lead merges the isolated
   branches during review. The engine stays git-agnostic — it only forwards the
   opaque `isolate` flag to worker-boundary hooks. (Isolation is for parallel-edit
   safety, NOT a system sandbox — `bypassPermissions` bash is not jailed by a
