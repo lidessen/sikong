@@ -41,7 +41,7 @@ import { resolveWorkspaceDir } from "./workspace-layout";
 const VALUE_FLAGS = new Set([
   "--dir", "--project", "--workflow", "--id", "--task", "-n",
   "--root", "--name", "--model", "--worker", "--runtime", "--provider", "--desc",
-  "--permission", "--permission-mode",
+  "--permission", "--permission-mode", "--wake-timeout",
   "--after", "--timeout", "--poll",
   "--parent",
 ]);
@@ -400,8 +400,10 @@ switch (cmd) {
   }
   case "run": {
     const errors: string[] = [];
+    const wakeTimeoutFlag = flag("--wake-timeout"); // seconds; raise it for heavy real builds
     const ws = await openWorkspace(dir, {
       hooks: { onError: ({ taskId, error }) => errors.push(`${taskId}: ${error.message}`) },
+      ...(wakeTimeoutFlag ? { wakeTimeoutMs: Math.max(1, Number(wakeTimeoutFlag)) * 1000 } : {}),
     });
     await ws.engine.runPending(flag("--task"));
     await reconcileWorktrees(ws, dir).catch(() => {}); // reclaim leftover isolation worktrees (ADR 0010)
