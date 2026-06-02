@@ -111,8 +111,8 @@ tool-based exit commands (`task_complete`, `task_handoff`) and structured
 handoffs between rounds.
 
 This is useful for single-agent continuation over context pressure, but it is
-not the same as the `wakespace` task model. `runTask` owns one transient
-goal execution; `wakespace` owns durable workflow instances.
+not the same as the `sikong` task model. `runTask` owns one transient
+goal execution; `sikong` owns durable workflow instances.
 
 ## Non-goals
 

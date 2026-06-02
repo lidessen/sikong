@@ -6,7 +6,7 @@ Date: 2026-05-31
 
 ## Context
 
-`wakespace` models a task as a workflow instance with ordered stages,
+`sikong` models a task as a workflow instance with ordered stages,
 durable fields, an append-only event timeline, and deterministic guard-based
 advancement. The current workflow model already has `create_subtask`,
 `blocksParent`, `childIds`, and a `childrenDone` guard shape, but the stage-level
@@ -41,7 +41,7 @@ open.
 
 ## Implementation Notes
 
-This decision should be implemented in `packages/wakespace`.
+This decision should be implemented in `packages/sikong`.
 
 Expected changes:
 

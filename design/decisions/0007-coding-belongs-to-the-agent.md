@@ -1,4 +1,4 @@
-# ADR 0007: Coding Belongs to the Agent; Wakespace Stays Task-Agnostic Coordination
+# ADR 0007: Coding Belongs to the Agent; Sikong Stays Task-Agnostic Coordination
 
 Status: Accepted
 
@@ -10,7 +10,7 @@ Supersedes: [0006](0006-coding-agent-interface-guardrails.md)
 
 ADR 0006 reacted to a real dogfood failure — a low-cost AI SDK worker could plan
 and inspect but did not turn that into edits, and produced plausible-but-false
-verification. Its remedy was to treat wakespace development workers "as users of a
+verification. Its remedy was to treat sikong development workers "as users of a
 coding-specific Agent-Computer Interface" and to build that interface *into the
 coordination layer*: a host-side check runner (`runHostCheck`, with this repo's own
 build/test commands hardcoded into the library engine), project-write-evidence
@@ -19,7 +19,7 @@ gates, verify-stage shell-failure gates, raw-`bash` suppression, a
 
 That is the wrong layer. The design entrypoint already defines the boundary:
 `agent-loop` is the execution library (it owns runtimes, tools, skills,
-capabilities); `wakespace` is the coordination layer whose entire core is
+capabilities); `sikong` is the coordination layer whose entire core is
 `WorkflowDef -> Task timeline -> Wake -> Commands -> Events -> Projection` plus
 guard-driven advancement. README states the containment test plainly: anything that
 cannot say which event it records, which command it validates, which guard it
@@ -29,7 +29,7 @@ ADR 0006's guardrails fail that test.
 
 This project is an engineering system, and the cybernetics view (Qian Xuesen,
 *Engineering Cybernetics*) is the right lens: a machine-plus-human engineering
-system and an all-machine one are not essentially different. Wakespace is the
+system and an all-machine one are not essentially different. Sikong is the
 **controller** (a company coordinating a team); each agent is a **plant** — a black
 box with a transfer function. A controller acts on the plant's inputs and observed
 outputs and corrects through feedback; it does not reach inside the plant to rewire
@@ -41,14 +41,14 @@ agent inside the controller.
 
 ## Decision
 
-Coding capability lives **inside the agent**, never in the wakespace coordination
+Coding capability lives **inside the agent**, never in the sikong coordination
 layer.
 
-1. Wakespace is a task-agnostic coordination/control layer. Its vocabulary is
+1. Sikong is a task-agnostic coordination/control layer. Its vocabulary is
    workflows, stages, fields, guards, commands, events, projections, and wakes —
    and nothing about files, edits, shells, tests, or "verify" semantics.
 
-2. A worker is a black box. Wakespace assigns a task, supplies the field-state
+2. A worker is a black box. Sikong assigns a task, supplies the field-state
    context and a fixed menu of state-recording tools, observes the commands and
    events the worker emits, and advances by guards. It does not police *how* the
    work is done.
@@ -73,7 +73,7 @@ layer.
 
 ## Consequences
 
-- Wakespace returns to the small core the design docs already describe; a
+- Sikong returns to the small core the design docs already describe; a
   non-coding task is coordinated identically to a coding one.
 - Dogfood reliability for coding shifts to choosing a real coding-agent worker,
   which is where the cybernetics analysis says it belongs.
@@ -82,11 +82,11 @@ layer.
   the agent*, and is explicitly retained.
 - ADR 0006 and its guardrails (host-check runner, write/verify gates, overwrite
   refusal, bash suppression, coding prompt steering, the `requiresProjectWrite`
-  stage flag) are removed from wakespace.
+  stage flag) are removed from sikong.
 
 ## Implementation Notes
 
-- Remove from `packages/wakespace/src/engine/engine.ts`: the `runHostCheck` /
+- Remove from `packages/sikong/src/engine/engine.ts`: the `runHostCheck` /
   `HOST_CHECKS` machinery, `failedProjectCommand`, the project-write evidence gate
   and verify-failure gate (command rejection), `PROJECT_WRITE_TOOL_NAMES`, the
   `writeFile`-overwrite refusal, and the per-tool counting wrapper.
@@ -94,7 +94,7 @@ layer.
   `workerTools(ctx, loop)` engine resolver (mirroring `intakeLoop`) lets the worker
   layer supply the worker's tools; the engine merges them with command tools
   without knowing what they are.
-- `packages/wakespace/src/workspace.ts` owns the coding decision: it builds
+- `packages/sikong/src/workspace.ts` owns the coding decision: it builds
   `agent-loop` project tools for an ai-sdk worker and passes them via `workerTools`.
 - Drop `StageDef.requiresProjectWrite`; built-in workflow instructions describe the
   *deliverable* (which fields to set), not which edit tool to use.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A **bun-workspaces monorepo** (`wakespace-monorepo`, private). Two packages:
+A **bun-workspaces monorepo** (`sikong-monorepo`, private). Two packages:
 
 - **`packages/agent-loop`** — the unified agent-loop library over four backends —
   Claude Agent SDK, Codex app-server, Cursor Agent SDK, Vercel AI SDK — with
@@ -12,13 +12,13 @@ A **bun-workspaces monorepo** (`wakespace-monorepo`, private). Two packages:
   (provider) are orthogonal, so one credential can drive any runtime it's
   compatible with. One `loop.run(input)` = one full loop; `runTask` is the outer
   multi-run supervisor on top. This is where ~all the code is.
-- **`packages/wakespace`** — the coordination layer over `agent-loop`
+- **`packages/sikong`** — the coordination layer over `agent-loop`
   for CLI use: workflow tasks, wake engine, JSONL-backed durable stores,
   project/worktree isolation, worker permission modes, CLI, and live smokes.
 
 `agent-loop` ships `.ts` source (`package.json` `module`/`exports` point
-straight at `src/`). `wakespace` is CLI-only for publishing: `npm` gets the Bun
-single-file executable at `dist/wakespace`, with `agent-loop` bundled into that
+straight at `src/`). `sikong` is CLI-only for publishing: `npm` gets the Bun
+single-file executable at `dist/sikong`, with `agent-loop` bundled into that
 binary. Paths in the Architecture section below are relative to
 `packages/agent-loop/src/` unless noted.
 
@@ -26,7 +26,7 @@ binary. Paths in the Architecture section below are relative to
 
 ```sh
 bun install                         # at root — links workspaces
-bun run build                       # compile packages/wakespace/dist/wakespace
+bun run build                       # compile packages/sikong/dist/sikong
 
 # root fan-out (the CI gate) — runs the script in every package
 bun run typecheck                   # = bun run --filter '*' typecheck
@@ -44,9 +44,9 @@ bun scripts/smoke-provider.ts        # one DeepSeek key across runtimes
 bun scripts/smoke-run.ts [all|claude|codex|cursor|ai-sdk]
 bun scripts/repl.ts [runtime] [--provider deepseek|...] [--model ...]   # manual REPL
 
-# wakespace CLI executable
-bun run --filter wakespace build:cli
-packages/wakespace/dist/wakespace help
+# sikong CLI executable
+bun run --filter sikong build:cli
+packages/sikong/dist/sikong help
 ```
 
 ## Design docs

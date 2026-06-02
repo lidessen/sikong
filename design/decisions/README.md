@@ -32,12 +32,12 @@ Files use a monotonic four-digit prefix:
 | --- | --- | --- |
 | [0001](0001-stage-scoped-subtasks-block-advancement.md) | Proposed | Stage-scoped subtasks block stage advancement |
 | [0002](0002-project-markdown-memory.md) | Proposed | Project markdown memory |
-| [0003](0003-global-wakespace-home.md) | Accepted | Global wakespace home |
+| [0003](0003-global-sikong-home.md) | Accepted | Global sikong home |
 | [0004](0004-worker-cancel-requires-lead-approval.md) | Accepted | Worker cancel requires lead approval |
 | [0005](0005-builtin-development-workflow.md) | Accepted | Builtin development workflow |
 | [0006](0006-coding-agent-interface-guardrails.md) | Superseded | Coding agent interface guardrails |
-| [0007](0007-coding-belongs-to-the-agent.md) | Accepted | Coding belongs to the agent; wakespace stays task-agnostic coordination |
-| [0008](0008-wakespace-owns-staffing.md) | Accepted | Wakespace owns staffing; the client only states, accepts, supervises |
+| [0007](0007-coding-belongs-to-the-agent.md) | Accepted | Coding belongs to the agent; sikong stays task-agnostic coordination |
+| [0008](0008-sikong-owns-staffing.md) | Accepted | Sikong owns staffing; the client only states, accepts, supervises |
 | [0009](0009-lead-creates-team.md) | Accepted | A lead task creates and coordinates a team (via subtasks) |
 | [0010](0010-optional-subtask-isolation.md) | Accepted | Optional per-subtask isolation (git worktree) at the worker boundary |
 | [0011](0011-task-dependencies.md) | Accepted | Sibling task dependencies (dependsOn) |

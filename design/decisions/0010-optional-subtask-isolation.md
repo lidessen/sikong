@@ -5,7 +5,7 @@ Status: Accepted
 Date: 2026-06-02
 
 Builds on: [0007](0007-coding-belongs-to-the-agent.md) (domain capability lives
-outside core), [0008](0008-wakespace-owns-staffing.md) (worker boundary),
+outside core), [0008](0008-sikong-owns-staffing.md) (worker boundary),
 [0009](0009-lead-creates-team.md) (a lead delegates a team).
 
 ## Context
@@ -13,7 +13,7 @@ outside core), [0008](0008-wakespace-owns-staffing.md) (worker boundary),
 When a lead delegates several subtasks that edit the **same** repository in
 parallel, they conflict. The lead needs to run each in its own isolated working
 copy. Isolation is git/development-specific — not all projects use git, not all
-tasks need it — so it must NOT enter wakespace core (the ADR 0007 boundary). It is
+tasks need it — so it must NOT enter sikong core (the ADR 0007 boundary). It is
 an **opt-in capability the lead requests per subtask**, honored at the worker
 boundary.
 
@@ -38,8 +38,8 @@ What this isolation IS and ISN'T (important, to avoid a false sense of safety):
 2. **Isolation implemented at the worker boundary (workspace.ts), git only.**
    - `isolateWorkspace(ctx, project) -> Project`: for an isolated task whose
      project root is a git repo, create (or reuse) a worktree at
-     `<root>/.wakespace/worktrees/<taskId>` on a per-child branch
-     `wakespace/<taskId>` off the project's current HEAD, and return a project
+     `<root>/.sikong/worktrees/<taskId>` on a per-child branch
+     `sikong/<taskId>` off the project's current HEAD, and return a project
      rooted at the worktree (so the wake's cwd + allowedPaths + tools are scoped
      there). Non-git projects: return the project unchanged (no-op).
    - `releaseWorkspace(task, project)`: when an isolated task reaches a terminal
@@ -63,7 +63,7 @@ What this isolation IS and ISN'T (important, to avoid a false sense of safety):
 
 - Parallel coding teams can edit one repo without clobbering each other; the lead
   integrates. Non-git or non-isolated work is completely unaffected.
-- wakespace core gains only a generic boolean; all git lives in workspace.ts and
+- sikong core gains only a generic boolean; all git lives in workspace.ts and
   the development-lead workflow text.
 - New responsibility for the lead: merge + conflict resolution during review.
 
@@ -89,7 +89,7 @@ the end-to-end flow (both edits integrated into main; worktrees cleaned). It als
 surfaced that the lead may **re-apply** the children's edits rather than `git
 merge` their branches — so the branches were never git-`--merged` and a
 merged-only GC would let them accumulate. Fix: `gcWorktrees` deletes
-`wakespace/<id>` branches keyed on **task liveness** (the task is no longer live),
+`sikong/<id>` branches keyed on **task liveness** (the task is no longer live),
 not on git-merge detection. By GC time the lead has integrated however it chose, so
 a spent branch is removed regardless; neither worktrees nor branches accumulate.
 

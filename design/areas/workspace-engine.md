@@ -1,6 +1,6 @@
 # Workspace Engine Design
 
-`wakespace` is the coordination layer over `agent-loop`. Its job is to
+`sikong` is the coordination layer over `agent-loop`. Its job is to
 turn work into deterministic workflow state changes while still letting agents
 perform the flexible parts of a stage.
 
@@ -177,7 +177,7 @@ Production stores should preserve these boundaries but add:
 - Rich routing or model selection policy.
 - Full subtask orchestration and parent/child settlement semantics.
 - **Task-specific agent tooling / a coding (or any domain) Agent-Computer
-  Interface.** Wakespace coordinates a worker as a black box; it never teaches a
+  Interface.** Sikong coordinates a worker as a black box; it never teaches a
   worker *how* to do the work. File viewers, structured editors, host/test
   runners, edit policies, and "verify" semantics belong inside the agent
   (`agent-loop` tools, or a coding-agent runtime that carries its own interface),

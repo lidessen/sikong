@@ -5,7 +5,7 @@ Status: Accepted
 Date: 2026-06-02
 
 Builds on: [0001](0001-stage-scoped-subtasks-block-advancement.md) (subtasks block
-advancement — partially realized here), [0008](0008-wakespace-owns-staffing.md)
+advancement — partially realized here), [0008](0008-sikong-owns-staffing.md)
 (auto-staffing). Borrows orchestration principles from Claude Code's dynamic
 multi-agent workflow.
 
@@ -24,7 +24,7 @@ reasoning (what each worker does); the lead decides *who/when*, the worker decid
 *how*; on each tick the lead reads the live state and re-plans by spawning or
 cancelling — never by reaching into a running worker.
 
-Wakespace already has the machinery: `create_subtask` (engine-minted child ids),
+Sikong already has the machinery: `create_subtask` (engine-minted child ids),
 parent/child links, `childrenDone`/`childrenSucceeded` guards, parent re-wake when
 a child reaches a terminal state, and capability-matched staffing. The only thing
 missing is that a lead's wake cannot *see* its team, so it cannot review or re-plan.
@@ -109,5 +109,5 @@ Two follow-ups landed after the first live dogfood:
   fell back to the builtin `default` project (root `"."`) and the worker edited the
   *current directory*. `create` now warns when a write-class workflow (one with a
   `workerRole`) targets the cwd, so a team isn't pointed at the wrong place by
-  accident. The behavior itself is correct — "run wakespace in your project" — the
+  accident. The behavior itself is correct — "run sikong in your project" — the
   warning just makes it explicit.

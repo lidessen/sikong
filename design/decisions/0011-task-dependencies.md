@@ -13,10 +13,10 @@ The agent-proxy drill showed a lead fanning out a layered effort (proxy → capt
 control API → CLI → rules) as a flat set of **parallel** subtasks. Layers that
 depend on each other ran concurrently from the same empty base and collided (two
 subtasks both created `cmd/*/main.go` → merge conflict). The work is a
-**dependency DAG**, not a parallel fan-out, and wakespace had no way to express
+**dependency DAG**, not a parallel fan-out, and sikong had no way to express
 ordering **between sibling tasks**.
 
-wakespace already has the parent→child relation (`childrenDone` gates the parent's
+sikong already has the parent→child relation (`childrenDone` gates the parent's
 stage until its children are terminal). It lacks the sibling relation: "task B must
 not start until task A is done."
 

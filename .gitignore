@@ -1,12 +1,12 @@
 node_modules/
 dist/
-packages/wakespace/npm/
+packages/sikong/npm/
 *.log
 .DS_Store
 .env
 .env.*
 !.env.example
-.wakespace/
+.sikong/
 coverage/
 *.tsbuildinfo
 .vitest/

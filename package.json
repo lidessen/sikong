@@ -1,14 +1,14 @@
 {
-  "name": "wakespace-monorepo",
+  "name": "sikong-monorepo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.9",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "bun run --filter wakespace build",
-    "build:cli": "bun run --filter wakespace build:cli",
-    "release:check": "bun run typecheck && bun run test && bun run build && git diff --check && cd packages/wakespace && npm publish --dry-run",
+    "build": "bun run --filter sikong build",
+    "build:cli": "bun run --filter sikong build:cli",
+    "release:check": "bun run typecheck && bun run test && bun run build && git diff --check && cd packages/sikong && npm publish --dry-run",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun run --filter '*' test"
   },

@@ -6,7 +6,7 @@ Date: 2026-06-01
 
 ## Context
 
-`wakespace` projects currently persist only structured project configuration in
+`sikong` projects currently persist only structured project configuration in
 `projects/<id>.yaml`. Dogfood use needs a lightweight place to keep project
 operating notes, conventions, and local decisions that should be visible to
 workers without becoming task timeline state.

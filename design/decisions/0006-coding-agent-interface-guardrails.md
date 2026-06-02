@@ -5,8 +5,8 @@ Status: Superseded by [0007](0007-coding-belongs-to-the-agent.md)
 Date: 2026-06-01
 
 > Superseded 2026-06-02. This ADR moved a coding-specific Agent-Computer Interface
-> into the wakespace coordination layer; ADR 0007 reverses that direction (coding
-> belongs to the agent; wakespace stays task-agnostic coordination). Kept for
+> into the sikong coordination layer; ADR 0007 reverses that direction (coding
+> belongs to the agent; sikong stays task-agnostic coordination). Kept for
 > history — do not implement new work against it.
 
 ## Context
@@ -33,19 +33,19 @@ prompt wording. Mature systems describe the same shape:
 - Aider uses a repository map to give the model compact structural context
   before it reads full files.
 
-Wakespace currently has workflows and durable task state, but its coding
+Sikong currently has workflows and durable task state, but its coding
 surface is still too close to generic project tools. That makes failures look
 like model behavior when they are often interface design failures.
 
 ## Decision
 
-Treat wakespace development workers as users of a coding-specific
+Treat sikong development workers as users of a coding-specific
 Agent-Computer Interface.
 
 Near-term guardrails:
 
 1. Stages requiring project writes must produce successful structured write
-   evidence before normal stage progress can be committed. Wakespace must not
+   evidence before normal stage progress can be committed. Sikong must not
    enforce that with fixed tool-call or step-count budgets; the worker's real
    budget is its model/context window and the quality of the ACI context it is
    given.
@@ -83,7 +83,7 @@ hooks, and role separation.
 ## Implementation Notes
 
 - Do not add count-based pre-write caps to stage definitions or prompts.
-- Do not pass wakespace worker step caps as a budget policy; worker limits
+- Do not pass sikong worker step caps as a budget policy; worker limits
   should come from the model/context window and wall-clock timeout handling.
 - Keep normalized project tool and write counts in `wake.diagnostics` and
   `wake.commit` as facts for PM review, not as policy gates.
