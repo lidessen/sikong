@@ -103,7 +103,10 @@ export function apply(
       return [mk("task.unblocked", {})];
     case "cancel":
       return [
-        source === "lead"
+        // Lead approves cancellation; the engine itself terminally fails a wedged
+        // task (staleness circuit-breaker, ADR 0010). A worker `cancel` is only a
+        // request until a lead/engine approves it.
+        source === "lead" || source === "engine"
           ? mk("task.cancelled", command.reason ? { reason: command.reason } : {})
           : mk("cancellation.requested", command.reason ? { reason: command.reason } : {}),
       ];

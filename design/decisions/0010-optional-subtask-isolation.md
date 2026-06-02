@@ -93,6 +93,24 @@ merged-only GC would let them accumulate. Fix: `gcWorktrees` deletes
 not on git-merge detection. By GC time the lead has integrated however it chose, so
 a spent branch is removed regardless; neither worktrees nor branches accumulate.
 
+## Update (2026-06-02, agent-proxy drill)
+
+A real greenfield drill (a `development-lead` building agent-proxy from DESIGN.md)
+exposed two correctness gaps, now fixed:
+
+- **GC must retain a child's branch/worktree until its PARENT effort terminates,
+  not just until the child is done.** A child can finish before the lead has merged
+  its branch; reclaiming on child-terminal alone destroyed branches the lead still
+  needed. `reconcileWorktrees` now retains `live tasks ∪ tasks whose parent is live`
+  (`retainedTaskIds`).
+- **A stuck child must not wedge the lead.** A wake that itself fails (timeout / run
+  error) on a CHILD is now retried `maxWakeRetries` times (default 1) and then
+  terminally failed by the engine (an engine-sourced `cancel` → terminal, so the
+  reducer now treats `source:"engine"` cancel as terminal), letting the parent's
+  `childrenDone` resolve and the lead re-decide. Root tasks keep the plain behaviour
+  (error reported, left in_progress for re-run). The `--wake-timeout` CLI flag lets
+  heavy real builds have a larger per-wake budget.
+
 ## Open / Deferred
 
 - Auto-merge at the boundary (vs lead-merge) — deferred; lead-merge keeps merges

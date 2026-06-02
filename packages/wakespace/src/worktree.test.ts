@@ -4,7 +4,7 @@ import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { ensureWorktree, gcWorktrees, isGitRepo, releaseWorktree } from "./worktree";
+import { ensureWorktree, gcWorktrees, isGitRepo, releaseWorktree, retainedTaskIds } from "./worktree";
 
 const exec = promisify(execFile);
 const git = (cwd: string, args: string[]) => exec("git", args, { cwd });
@@ -27,6 +27,31 @@ async function initRepo(): Promise<string> {
   return root;
 }
 const cleanup = (...paths: string[]) => Promise.all(paths.map((p) => rm(p, { recursive: true, force: true })));
+
+describe("retainedTaskIds (ADR 0010 fix #4)", () => {
+  test("keeps a finished child's artifacts until its parent effort terminates", () => {
+    // lead live, one child done, one child in_progress, plus an orphan done task
+    const retain = retainedTaskIds([
+      { id: "lead", status: "in_progress" },
+      { id: "childDone", status: "done", parentId: "lead" },
+      { id: "childRunning", status: "in_progress", parentId: "lead" },
+      { id: "orphanDone", status: "done" },
+    ]);
+    expect(retain.has("lead")).toBe(true); // live
+    expect(retain.has("childRunning")).toBe(true); // live
+    expect(retain.has("childDone")).toBe(true); // done BUT parent still live → keep its branch for the lead to merge
+    expect(retain.has("orphanDone")).toBe(false); // terminal, no live parent → reclaimable
+  });
+
+  test("reclaims a finished child once its parent is also terminal", () => {
+    const retain = retainedTaskIds([
+      { id: "lead", status: "done" },
+      { id: "child", status: "done", parentId: "lead" },
+    ]);
+    expect(retain.has("child")).toBe(false); // both terminal → reclaim
+    expect(retain.has("lead")).toBe(false);
+  });
+});
 
 describe("worktree isolation (ADR 0010)", () => {
   test("isGitRepo distinguishes git from non-git", async () => {

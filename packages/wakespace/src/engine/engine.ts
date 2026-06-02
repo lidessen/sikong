@@ -378,6 +378,12 @@ export interface WorkflowEngineOptions {
   wakeTimeoutMs?: number;
   /** Max wakes per task per engine session (runaway backstop). Default 50. */
   maxWakesPerTask?: number;
+  /**
+   * How many times a task whose wake itself FAILED (timeout / run error) is retried
+   * before the engine terminally fails it (staleness circuit-breaker, ADR 0010), so
+   * a stuck task can't wedge a parent's `childrenDone` forever. Default 1 (one retry).
+   */
+  maxWakeRetries?: number;
 }
 
 /**
@@ -394,7 +400,7 @@ export interface WorkflowEngineOptions {
  * about coding, files, or shells — a worker's own tools arrive via workerTools.
  */
 export class WorkflowEngine {
-  private readonly state = new Map<string, { running: boolean; pending: boolean; wakes: number }>();
+  private readonly state = new Map<string, { running: boolean; pending: boolean; wakes: number; errors: number }>();
   private readonly inflight = new Set<Promise<void>>();
   /** Isolated tasks whose workspace has already been released (fire releaseWorkspace once). */
   private readonly released = new Set<string>();
@@ -568,7 +574,7 @@ export class WorkflowEngine {
   // ---- mailbox: single-writer + coalescing per task ------------------------
 
   private schedule(taskId: string): void {
-    const st = this.state.get(taskId) ?? { running: false, pending: false, wakes: 0 };
+    const st = this.state.get(taskId) ?? { running: false, pending: false, wakes: 0, errors: 0 };
     st.pending = true;
     this.state.set(taskId, st);
     if (!st.running) this.kick(taskId);
@@ -583,7 +589,9 @@ export class WorkflowEngine {
     if (st.wakes >= cap) {
       st.pending = false;
       this.o.hooks?.onError?.({ taskId, error: new Error(`wake budget exceeded for ${taskId} (${cap})`) });
-      void this.chron({ type: "wake.error", taskId, summary: `wake budget exceeded (${cap}); stopping to prevent a runaway` });
+      // Terminally fail it (not just stop) so a parent's childrenDone can resolve.
+      void this.chron({ type: "wake.error", taskId, summary: `wake budget exceeded (${cap}); failing the task` });
+      void this.failTask(taskId, `wake budget exceeded (${cap})`).catch(() => {});
       return;
     }
     st.wakes++;
@@ -927,9 +935,41 @@ export class WorkflowEngine {
       },
     });
 
+    // Staleness circuit-breaker (ADR 0010): a CHILD whose wake itself FAILED (timeout
+    // / run error) must not stay stuck forever wedging its parent's childrenDone.
+    // Retry a bounded number of times, then terminally fail it so the parent unblocks
+    // and can re-decide (the failed child shows as cancelled with the reason). Root
+    // tasks keep the plain behaviour (error reported, left in_progress for re-run) —
+    // nothing waits on them.
+    const wakeState = this.state.get(taskId);
+    if (result.status === "error" && task.parentId && !isTerminal(task.status) && task.status !== "blocked") {
+      const errs = wakeState ? (wakeState.errors += 1) : 1;
+      if (errs <= (this.o.maxWakeRetries ?? 1)) this.schedule(taskId);
+      else await this.failTask(taskId, `auto-failed after ${errs} errored wakes: ${error?.message ?? "wake error"}`, wakeId);
+      return;
+    }
+    if (wakeState) wakeState.errors = 0;
+
     // A new, non-terminal stage BEYOND the one the agent ran on means new work.
     // (In-stage iterative progress is by design left for an external nudge in M1.)
     if (task.stageId !== stageAgentRanOn && !isTerminal(task.status)) this.schedule(taskId);
+  }
+
+  /**
+   * Terminally fail a wedged task (engine-sourced cancel → terminal task.cancelled),
+   * so dependents (e.g. a parent's childrenDone) can resolve and re-decide. Idempotent.
+   */
+  private async failTask(taskId: string, reason: string, wakeId?: string): Promise<void> {
+    const { task: live, wf } = await this.loadPinned(taskId);
+    if (isTerminal(live.status)) return;
+    const events = reduceCommands(live, wf, [{ kind: "cancel", reason }], {
+      source: "engine",
+      ...(wakeId ? { wakeId } : {}),
+    });
+    if (!events.length) return;
+    await this.o.events.append(taskId, events);
+    await this.persist(taskId, wf);
+    await this.chron({ type: "wake.error", taskId, ...(wakeId ? { wakeId } : {}), summary: `task auto-failed: ${reason}` });
   }
 
   /**

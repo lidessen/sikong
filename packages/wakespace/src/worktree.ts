@@ -122,17 +122,35 @@ export async function releaseWorktree(
 }
 
 /**
+/**
+ * Which tasks' isolation artifacts (worktree + branch) must be RETAINED: every
+ * live task, PLUS every task whose parent is still live. The second clause is
+ * essential (ADR 0010 fix): a child may finish before its parent (the lead) has
+ * integrated its branch — reclaiming on child-terminal alone would destroy the
+ * branch the lead still needs to merge. Keep it until the parent effort is done.
+ */
+export function retainedTaskIds(
+  tasks: readonly { id: string; status: string; parentId?: string }[],
+): Set<string> {
+  const isLive = (s: string) => s === "todo" || s === "in_progress" || s === "blocked";
+  const live = new Set<string>();
+  for (const t of tasks) if (isLive(t.status)) live.add(t.id);
+  const retain = new Set(live);
+  for (const t of tasks) if (t.parentId && live.has(t.parentId)) retain.add(t.id);
+  return retain;
+}
+
+/**
  * Garbage-collect leftover worktrees AND branches: remove any worktree directory
- * whose task is no longer live, prune git's admin refs, and delete every
- * `wakespace/<id>` branch whose task is no longer live. Cleanup is keyed on the
- * TASK LIFECYCLE, not on git's merged-detection — by the time GC runs the lead has
- * already integrated (by merge or by re-applying), and a spent branch must not
- * accumulate regardless of how the lead chose to integrate. Safe to call any time.
+ * and `wakespace/<id>` branch whose task id is NOT in `retainTaskIds` (see
+ * retainedTaskIds), prune git's admin refs. Cleanup is keyed on task lifecycle —
+ * not git's merged-detection — and preserves a child's branch until its parent
+ * effort terminates. Safe to call any time; bounds worktree/branch accumulation.
  */
 export async function gcWorktrees(
   dir: string,
   roots: readonly string[],
-  liveTaskIds: ReadonlySet<string>,
+  retainTaskIds: ReadonlySet<string>,
 ): Promise<void> {
   const base = worktreeBase(dir);
   let names: string[] = [];
@@ -142,14 +160,14 @@ export async function gcWorktrees(
     /* no worktrees dir yet — nothing to GC except branch prune below */
   }
   for (const name of names) {
-    if (!liveTaskIds.has(name)) await rm(join(base, name), { recursive: true, force: true }).catch(() => {});
+    if (!retainTaskIds.has(name)) await rm(join(base, name), { recursive: true, force: true }).catch(() => {});
   }
   for (const root of roots) {
     if (!(await isGitRepo(root))) continue;
     await gitQuiet(root, ["worktree", "prune"]); // drops admin refs for removed worktrees, so branches aren't "checked out"
     const out = await git(root, ["branch", "--list", "wakespace/*", "--format=%(refname:short)"]).catch(() => "");
     for (const b of out.split("\n").map((s) => s.trim()).filter(Boolean)) {
-      if (!liveTaskIds.has(b.slice("wakespace/".length))) await gitQuiet(root, ["branch", "-D", b]);
+      if (!retainTaskIds.has(b.slice("wakespace/".length))) await gitQuiet(root, ["branch", "-D", b]);
     }
   }
 }

@@ -15,7 +15,7 @@ import { DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } fro
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
 import { discoveredRoster, selectWorker, type Worker } from "./worker";
-import { ensureWorktree, gcWorktrees, isGitRepo, releaseWorktree } from "./worktree";
+import { ensureWorktree, gcWorktrees, isGitRepo, releaseWorktree, retainedTaskIds } from "./worktree";
 import {
   JsonProjectStore,
   JsonWorkspaceChronicleStore,
@@ -186,13 +186,11 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
  */
 export async function reconcileWorktrees(ws: Workspace, dir: string): Promise<void> {
   const tasks = await ws.projections.query();
-  const live = new Set(
-    tasks.filter((t) => t.status === "todo" || t.status === "in_progress" || t.status === "blocked").map((t) => t.id),
-  );
+  const retain = retainedTaskIds(tasks);
   const roots = [
     ...new Set((await ws.projects.list()).map((p) => p.root).filter((r): r is string => !!r && r !== ".")),
   ];
-  await gcWorktrees(dir, roots, live);
+  await gcWorktrees(dir, roots, retain);
 }
 
 /** Load valid workflow defs persisted under `dir/workflows/*.{yaml,yml,json}` (skips invalid). */

@@ -1036,6 +1036,52 @@ describe("lead creates a team (ADR 0009)", () => {
     // the lead itself was never isolated
     expect(isolated).not.toContain("iso-lead");
   });
+
+  test("a child whose wakes keep failing is auto-failed so the lead unblocks (ADR 0010 #2)", async () => {
+    let childWakes = 0;
+    const loop: LoopFactory = (ctx) => {
+      if (ctx.workflow.id === "simple-commit") {
+        // a stuck/failing child: its wake errors every time (e.g. a build that times out)
+        return scriptLoop(async () => {
+          childWakes++;
+          throw new Error("simulated build failure");
+        }, "ai-sdk");
+      }
+      return scriptLoop(async (input) => {
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "one piece" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "delegate") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "do x" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "child failed; effort closed" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+      });
+    };
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+    registry.register(SIMPLE_COMMIT);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry,
+      loop,
+      maxWakeRetries: 1, // one retry, then terminal-fail
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "development-lead", taskId: "fail-lead", fields: { request: "x" } });
+    await engine.idle();
+
+    const lead = await engine.getTask("fail-lead");
+    expect(childWakes).toBeGreaterThanOrEqual(2); // initial + one retry before auto-fail
+    const childId = lead!.childIds[0]!;
+    expect((await engine.getTask(childId))?.status).toBe("cancelled"); // auto-failed → terminal
+    expect(lead?.status).toBe("done"); // childrenDone resolved — the lead was NOT wedged
+  });
 });
 
 function eventRunHandle(events: LoopEvent[]): RunHandle {
@@ -1089,14 +1135,28 @@ function scriptLoop(body: (input: RunInput) => Promise<string | void>, id = "scr
     capabilities,
     supports: (c: Capability) => capabilities.includes(c),
     run(input: RunInput): RunHandle {
-      const work = body(input);
-      const result = work.then((text) => ({
-        events: [] as LoopEvent[],
-        usage: emptyUsage(),
-        durationMs: 0,
-        status: "completed" as const,
-        text: text ?? "",
-      }));
+      // Mirror the real RunHandle contract: result NEVER rejects — a body that
+      // throws surfaces as status:"error" (so text/usage don't leak unhandled
+      // rejections, and the engine's circuit-breaker sees an errored wake).
+      const result = Promise.resolve()
+        .then(() => body(input))
+        .then(
+          (text) => ({
+            events: [] as LoopEvent[],
+            usage: emptyUsage(),
+            durationMs: 0,
+            status: "completed" as const,
+            text: text ?? "",
+          }),
+          (err: unknown) => ({
+            events: [] as LoopEvent[],
+            usage: emptyUsage(),
+            durationMs: 0,
+            status: "error" as const,
+            error: err instanceof Error ? err : new Error(String(err)),
+            text: "",
+          }),
+        );
       const none = async function* (): AsyncGenerator<never> {};
       return {
         [Symbol.asyncIterator]: () => none(),

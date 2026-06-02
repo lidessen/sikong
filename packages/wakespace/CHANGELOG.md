@@ -12,14 +12,20 @@ All notable changes to `wakespace` are documented here. This project adheres to
   git worktree (branch `wakespace/<id>`, under the wakespace home dir, not the
   project checkout), so parallel children editing the same code don't clobber each
   other. On terminal the worktree is committed to its branch and removed; a `run`
-  GC sweep reclaims any leftover worktrees and deletes `wakespace/*` branches whose
-  task has terminated (keyed on task lifecycle, not git-merge detection — a lead may
-  integrate by re-applying rather than `git merge`), so neither worktrees nor
-  branches pile up. Non-git projects: a no-op. The lead merges the isolated
+  GC sweep reclaims leftover worktrees and `wakespace/*` branches, keyed on task
+  lifecycle (not git-merge detection — a lead may integrate by re-applying rather
+  than `git merge`), and **retains a child's branch until its parent effort
+  terminates** so the lead's integration window isn't destroyed; neither worktrees
+  nor branches pile up. Non-git projects: a no-op. The lead merges the isolated
   branches during review. The engine stays git-agnostic — it only forwards the
   opaque `isolate` flag to worker-boundary hooks. (Isolation is for parallel-edit
   safety, NOT a system sandbox — `bypassPermissions` bash is not jailed by a
   worktree; OS-level sandboxing is deferred.)
+- **Staleness circuit-breaker**: a child task whose wake keeps failing (timeout /
+  run error) is retried `maxWakeRetries` times (default 1) then terminally failed by
+  the engine, so a stuck child can't wedge its parent's `childrenDone` — the parent
+  unblocks and re-decides. Root tasks keep the plain behaviour. New `run
+  --wake-timeout <seconds>` raises the per-wake budget for heavy real builds.
 - **A lead task can build and coordinate a team** (ADR 0009). New built-in
   `development-lead` workflow: a 负责人 plans an effort, delegates the pieces to a
   team of child tasks (each auto-staffed by capability), is re-woken as they finish,
