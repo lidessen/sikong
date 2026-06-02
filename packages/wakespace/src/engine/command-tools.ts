@@ -119,6 +119,16 @@ export function buildCommandTools(
             description:
               "Run this child in an isolated workspace (its own git worktree, for git projects). Use it for parallel children that edit the same code; integrate their branches afterward.",
           },
+          key: {
+            type: "string",
+            description: "A short logical handle for this subtask (e.g. \"capture\"), referenced by other subtasks' dependsOn.",
+          },
+          dependsOn: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Keys of subtasks (created in this same pass) that must finish before this one starts. Use it to order a layered effort instead of running everything in parallel.",
+          },
         },
         required: ["workflowId", "input"],
         additionalProperties: false,
@@ -130,6 +140,10 @@ export function buildCommandTools(
           workflowId: String(args.workflowId),
           input: String(args.input),
           ...(args.isolate === true ? { isolate: true } : {}),
+          ...(typeof args.key === "string" && args.key ? { key: args.key } : {}),
+          ...(Array.isArray(args.dependsOn) && args.dependsOn.length
+            ? { dependsOn: args.dependsOn.map(String) }
+            : {}),
         }),
     });
 

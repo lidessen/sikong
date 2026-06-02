@@ -425,6 +425,8 @@ export class WorkflowEngine {
     workerId?: string;
     /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary. */
     isolate?: boolean;
+    /** Task ids this task must wait for before it runs (ADR 0011). */
+    dependsOn?: readonly string[];
     source?: EventSource;
     /** Default true; pass false to create without an initial wake. */
     wake?: boolean;
@@ -448,6 +450,7 @@ export class WorkflowEngine {
         ...(params.parentId ? { parentId: params.parentId } : {}),
         ...(params.workerId ? { workerId: params.workerId } : {}),
         ...(params.isolate ? { isolate: true } : {}),
+        ...(params.dependsOn && params.dependsOn.length ? { dependsOn: params.dependsOn } : {}),
         source: params.source ?? "lead",
       }),
     );
@@ -618,6 +621,16 @@ export class WorkflowEngine {
   private async runWake(taskId: string): Promise<void> {
     const { wf, task: loaded } = await this.loadPinned(taskId);
     const stageAtStart = loaded.stageId;
+
+    // (0) Dependency gate (ADR 0011): don't run until every dependency is terminal.
+    // A dependent is normally only scheduled once ready, but `run`/`nudge` can
+    // schedule everything — defer here, and don't charge the wake budget for a
+    // wake that never ran. scheduleReadyDependents re-schedules it when deps finish.
+    if (!isTerminal(loaded.status) && loaded.dependsOn?.length && !(await this.depsTerminal(loaded.dependsOn))) {
+      const st = this.state.get(taskId);
+      if (st) st.wakes = Math.max(0, st.wakes - 1);
+      return;
+    }
 
     // (1) Pre-advance: external state (a lead's field-set) may already admit the
     // next stage — advance before spending an agent turn.
@@ -874,18 +887,40 @@ export class WorkflowEngine {
       // before the reducer records the subtask.created links. Tolerate a failing
       // spawn per-command — drop it, like reduceCommands' onReject — so one bad
       // subtask can't crash the wake or orphan the children that did spawn.
+      // Mint ALL child ids first so siblings' `dependsOn` keys can resolve to ids
+      // within this batch (ADR 0011), then create each child in declared order.
       const dropped = new Set<Command>();
-      for (const command of commands)
-        if (command.kind === "create_subtask") {
-          try {
-            command.childId = await this.spawnSubtask(live, command);
-          } catch (err) {
-            dropped.add(command);
-            const e = err instanceof Error ? err : new Error(String(err));
-            this.o.hooks?.onReject?.({ taskId, wakeId, command, reason: e.message });
-            void this.chron({ type: "command.rejected", taskId, wakeId, summary: `create_subtask failed: ${e.message}` });
-          }
+      const subtaskCmds = commands.filter((c): c is Extract<Command, { kind: "create_subtask" }> => c.kind === "create_subtask");
+      // Idempotency by (parent, key): re-running the delegate stage (the lead is
+      // re-woken on each child completion while childrenDone is unmet) must NOT
+      // re-spawn. Seed key→id from already-spawned children so a keyed subtask is
+      // created once, and a later subtask's dependsOn can resolve a prior sibling.
+      const keyToId = new Map<string, string>();
+      for (const e of await this.o.events.load(taskId)) {
+        if (e.type === "subtask.created" && typeof e.payload.key === "string" && typeof e.payload.childId === "string")
+          keyToId.set(e.payload.key, e.payload.childId);
+      }
+      for (const c of subtaskCmds) if (c.key && keyToId.has(c.key)) dropped.add(c); // already spawned → no-op
+      for (const c of subtaskCmds) {
+        if (dropped.has(c)) continue;
+        c.childId = this.newId("task");
+        if (c.key) keyToId.set(c.key, c.childId);
+      }
+      for (const command of subtaskCmds) {
+        if (dropped.has(command)) continue;
+        const deps = (command.dependsOn ?? []).flatMap((k) => {
+          const id = keyToId.get(k);
+          return id ? [id] : []; // unknown/forward keys are ignored, not a hard error
+        });
+        try {
+          await this.spawnSubtask(live, command, deps);
+        } catch (err) {
+          dropped.add(command);
+          const e = err instanceof Error ? err : new Error(String(err));
+          this.o.hooks?.onReject?.({ taskId, wakeId, command, reason: e.message });
+          void this.chron({ type: "command.rejected", taskId, wakeId, summary: `create_subtask failed: ${e.message}` });
         }
+      }
       const toApply = dropped.size ? commands.filter((c) => !dropped.has(c)) : commands;
       const events = reduceCommands(live, wf, toApply, { source: "worker", wakeId }, (command, err) => {
         this.o.hooks?.onReject?.({ taskId, wakeId, command, reason: err.message });
@@ -1052,23 +1087,26 @@ export class WorkflowEngine {
   /** Create a child task for a create_subtask command and return its minted id. */
   private async spawnSubtask(
     parent: Task,
-    command: { workflowId: string; input: string; isolate?: boolean },
-  ): Promise<string> {
+    command: { childId: string; workflowId: string; input: string; isolate?: boolean },
+    deps: readonly string[],
+  ): Promise<void> {
     const wf = this.o.registry.get(command.workflowId) ?? this.o.registry.get("general");
     if (!wf)
       throw new Error(`create_subtask: workflow "${command.workflowId}" not registered and no GENERAL fallback`);
-    const childId = this.newId("task");
     await this.createTask({
       projectId: parent.projectId,
       workflowId: wf.id,
+      taskId: command.childId, // pre-minted by the batch so siblings' dependsOn could resolve
       ...(wf.fields.request ? { fields: { request: command.input } } : {}),
       ...(parent.workerId ? { workerId: parent.workerId } : {}),
       ...(command.isolate ? { isolate: true } : {}),
+      ...(deps.length ? { dependsOn: deps } : {}),
       parentId: parent.id,
-      taskId: childId,
+      // A child with unmet dependencies is created un-scheduled (ADR 0011); it is
+      // scheduled when its last dependency terminates (scheduleReadyDependents).
+      ...(deps.length ? { wake: false } : {}),
       source: "engine",
     });
-    return childId;
   }
 
   private async resolveChildren(task: Task): Promise<TaskStatus[]> {
@@ -1135,7 +1173,27 @@ export class WorkflowEngine {
       }
       // A finished child re-wakes its parent so a `childrenDone` gate re-evaluates.
       if (task.parentId) this.schedule(task.parentId);
+      // …and re-wakes any task that was waiting on this one (ADR 0011), once all of
+      // that dependent's dependencies are terminal. Same completion path as above.
+      await this.scheduleReadyDependents(taskId);
     }
     return task;
+  }
+
+  /** True once every dependency task is terminal (a missing dep is treated as satisfied). */
+  private async depsTerminal(depIds: readonly string[]): Promise<boolean> {
+    for (const id of depIds) {
+      const dep = await this.o.projections.get(id);
+      if (dep && !isTerminal(dep.status)) return false;
+    }
+    return true;
+  }
+
+  /** Schedule tasks waiting on `doneId` whose dependencies are now all terminal (ADR 0011). */
+  private async scheduleReadyDependents(doneId: string): Promise<void> {
+    for (const t of await this.o.projections.query()) {
+      if (!t.dependsOn?.includes(doneId) || isTerminal(t.status)) continue;
+      if (await this.depsTerminal(t.dependsOn)) this.schedule(t.id);
+    }
   }
 }

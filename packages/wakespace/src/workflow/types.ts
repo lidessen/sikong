@@ -111,6 +111,8 @@ export interface Task {
   workerId?: string;
   /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary (git worktree), opaque to the engine. */
   isolate?: boolean;
+  /** Task ids this task must wait for before it runs (ADR 0011); the engine defers its wakes until all are terminal. */
+  dependsOn?: readonly string[];
   parentId?: string;
   childIds: readonly string[];
   /** `seq` of the last event folded into this projection. */
@@ -172,6 +174,10 @@ export type Command =
        * ignores it otherwise. Use it for parallel children that edit the same code.
        */
       isolate?: boolean;
+      /** A logical handle for this subtask, referenced by siblings' `dependsOn` (ADR 0011). */
+      key?: string;
+      /** Keys of sibling subtasks (same delegate pass) this one must wait for before it runs. */
+      dependsOn?: readonly string[];
     }
   | { kind: "block"; reason: string }
   | { kind: "unblock" }

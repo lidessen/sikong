@@ -39,3 +39,5 @@ Files use a monotonic four-digit prefix:
 | [0007](0007-coding-belongs-to-the-agent.md) | Accepted | Coding belongs to the agent; wakespace stays task-agnostic coordination |
 | [0008](0008-wakespace-owns-staffing.md) | Accepted | Wakespace owns staffing; the client only states, accepts, supervises |
 | [0009](0009-lead-creates-team.md) | Accepted | A lead task creates and coordinates a team (via subtasks) |
+| [0010](0010-optional-subtask-isolation.md) | Accepted | Optional per-subtask isolation (git worktree) at the worker boundary |
+| [0011](0011-task-dependencies.md) | Accepted | Sibling task dependencies (dependsOn) |

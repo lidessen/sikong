@@ -1082,6 +1082,54 @@ describe("lead creates a team (ADR 0009)", () => {
     expect((await engine.getTask(childId))?.status).toBe("cancelled"); // auto-failed → terminal
     expect(lead?.status).toBe("done"); // childrenDone resolved — the lead was NOT wedged
   });
+
+  test("the lead can order subtasks with dependsOn — a dependent runs only after its prerequisite (ADR 0011)", async () => {
+    const order: string[] = [];
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === "general") {
+          order.push(String(ctx.task.fields.request)); // record run order
+          await input.tools?.set_field?.execute?.({ field: "summary", value: `did ${ctx.task.fields.request}` }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+          return;
+        }
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "A then B" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "delegate") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "A", key: "a" }, {});
+          await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "B", key: "b", dependsOn: ["a"] }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "both layers done" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+      });
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry,
+      loop,
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "development-lead", taskId: "dag-lead", fields: { request: "x" } });
+    await engine.idle();
+
+    const lead = await engine.getTask("dag-lead");
+    expect(order).toEqual(["A", "B"]); // B waited for A (dependency respected), not parallel
+    expect(lead?.status).toBe("done");
+    expect(lead?.childIds.length).toBe(2);
+    for (const c of lead!.childIds) expect((await engine.getTask(c))?.status).toBe("done");
+    // the dependent carries the resolved prerequisite id
+    const tasks = await Promise.all(lead!.childIds.map((c) => engine.getTask(c)));
+    const b = tasks.find((t) => t?.fields.request === "B");
+    const a = tasks.find((t) => t?.fields.request === "A");
+    expect(b?.dependsOn).toEqual([a?.id]);
+  });
 });
 
 function eventRunHandle(events: LoopEvent[]): RunHandle {

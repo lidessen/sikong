@@ -7,6 +7,15 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 ### Added
 
+- **Sibling task dependencies** (ADR 0011): `create_subtask` accepts `key` and
+  `dependsOn` (sibling keys); the engine runs a dependent only after all its
+  prerequisites are terminal (resolving keys→ids within the delegate pass, and
+  across re-wakes). A lead can delegate a layered effort as an **ordered DAG**
+  (proxy → capture → API → CLI → rules) instead of a colliding parallel fan-out.
+  `create_subtask` is now **idempotent per (parent, key)** — re-running the
+  `delegate` stage (the lead is re-woken on each child completion) no longer
+  re-spawns the team.
+
 - **Optional per-subtask isolation** (ADR 0010). `create_subtask` accepts a generic
   `isolate: true`; for git projects the worker boundary runs that child in its own
   git worktree (branch `wakespace/<id>`, under the wakespace home dir, not the

@@ -156,7 +156,7 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Create one subtask per planned piece of work with `create_subtask` (use the `development` workflow for code changes, or `general` otherwise); each runs independently and is auto-staffed. If two or more subtasks will edit the same files, create them with `isolate: true` so each gets its own git worktree and they don't clobber each other (you merge their branches in review). Delegate at least one, then request transition to wait for the team.",
+        "Break the work into layers and create one subtask per layer with `create_subtask` (use the `development` workflow for code changes, or `general` otherwise); each is auto-staffed. ORDER them with dependencies: give each subtask a short `key` and list its prerequisite keys in `dependsOn`, so a later layer (e.g. the CLI) starts only after the layers it builds on (e.g. the control API) finish. Do NOT fan independent-looking layers out in parallel from an empty base — they will collide. Use `isolate: true` only for subtasks that genuinely edit the same files concurrently. Delegate the layers, then request transition to wait for the team.",
     },
     {
       id: "review",

@@ -93,6 +93,7 @@ export function apply(
           workflowId: command.workflowId,
           input: command.input,
           blocksParent: command.blocksParent ?? false,
+          ...(command.key ? { key: command.key } : {}),
         }),
       ];
     case "block":
@@ -202,6 +203,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     if (typeof p.parentId === "string") base.parentId = p.parentId;
     if (typeof p.workerId === "string") base.workerId = p.workerId;
     if (p.isolate === true) base.isolate = true;
+    if (Array.isArray(p.dependsOn) && p.dependsOn.length) base.dependsOn = p.dependsOn.map(String);
     return base;
   }
 
@@ -331,6 +333,7 @@ export function initTask(params: {
   parentId?: string;
   workerId?: string;
   isolate?: boolean;
+  dependsOn?: readonly string[];
   fields?: Record<string, unknown>;
   source?: EventSource;
 }): NewEvent[] {
@@ -348,6 +351,7 @@ export function initTask(params: {
   if (params.parentId) payload.parentId = params.parentId;
   if (params.workerId) payload.workerId = params.workerId;
   if (params.isolate) payload.isolate = true;
+  if (params.dependsOn && params.dependsOn.length) payload.dependsOn = [...params.dependsOn];
   return [{ taskId: params.taskId, source: params.source ?? "lead", type: "task.created", payload }];
 }
 
