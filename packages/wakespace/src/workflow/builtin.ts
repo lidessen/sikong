@@ -20,7 +20,6 @@ export const GENERAL_WORKFLOW: WorkflowDef = {
       id: "open",
       category: "in_progress",
       entry: { op: "always" },
-      requiresProjectWrite: true,
       outputFields: ["summary"],
       instructions:
         "Do whatever the task needs. Record a one-line `summary` of the outcome, then request a transition to close it.",
@@ -39,6 +38,9 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
   version: "1",
   name: "Development",
   description: "Plan, design, implement, and verify a project code or documentation change.",
+  // Staff coding work to a coding-capable worker (a real coding agent) when one is
+  // available; falls back to any worker otherwise. See ADR 0008.
+  workerRole: "coding",
   fields: {
     request: { type: "string", description: "The original development request." },
     plan: { type: "string", description: "Bounded implementation plan and acceptance criteria." },
@@ -74,7 +76,6 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
     {
       id: "implement",
       category: "in_progress",
-      requiresProjectWrite: true,
       outputFields: ["implementation", "changedFiles"],
       entry: {
         op: "and",
@@ -84,7 +85,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Implement the designed change with project tools. Prefer replaceInFile for localized source edits (safer than writeFile); fall back to writeFile only for new files or large rewrites. Do not use writeFile to overwrite existing source files; use replaceInFile instead. Gather the context needed for a correct edit, then make a structured project write. Do not end the implementation wake after inspection only: either make the smallest valid structured edit, or call `block` with the concrete reason no edit should be made. Set `implementation`, set `changedFiles` to a JSON array of changed project paths, then request transition.",
+        "Implement the designed change. Record `implementation` (what you changed) and set `changedFiles` to a JSON array of the changed project file paths, then request transition. Block with a concrete reason if the change cannot be made.",
     },
     {
       id: "verify",
@@ -99,7 +100,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
       },
       outputFields: ["verification", "summary"],
       instructions:
-        "Verify the implementation with focused checks. Set `verification` with commands and results, set `summary`, then request transition. Block if verification fails or cannot run.",
+        "Verify the implementation with appropriate checks. Record `verification` (what you checked and the results) and `summary`, then request transition. Block if verification fails or cannot run.",
     },
     {
       id: "done",

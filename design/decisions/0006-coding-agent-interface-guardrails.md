@@ -1,8 +1,13 @@
 # ADR 0006: Coding Agent Interface Guardrails
 
-Status: Accepted
+Status: Superseded by [0007](0007-coding-belongs-to-the-agent.md)
 
 Date: 2026-06-01
+
+> Superseded 2026-06-02. This ADR moved a coding-specific Agent-Computer Interface
+> into the wakespace coordination layer; ADR 0007 reverses that direction (coding
+> belongs to the agent; wakespace stays task-agnostic coordination). Kept for
+> history — do not implement new work against it.
 
 ## Context
 
@@ -45,8 +50,8 @@ Near-term guardrails:
    budget is its model/context window and the quality of the ACI context it is
    given.
 2. Existing files should be edited through structured edit tools such as
-   `replaceInFile`; `writeFile` is for new files or explicit large rewrites, not
-   blind overwrites.
+   `replaceInFile` and `insertInFile`; `writeFile` is for new files or explicit
+   large rewrites, not blind overwrites.
 3. Workflow-state commit tools must expose field-type schemas and reject invalid
    payloads before reducer application.
 4. Chronicle diagnostics must record policy facts so the PM can see whether a
@@ -94,6 +99,9 @@ hooks, and role separation.
   can run real project checks such as typecheck, tests, build, focused tests,
   and `git diff --check` without relying on the sandboxed project shell. Redact
   the project root from captured command output before storing chronicle facts.
+- Do not expose raw sandboxed `bash` in verify stages when project tools are
+  available; use `runHostCheck` for deterministic commands and structured
+  project tools for inspection.
 - Stop the current agent run after terminal workflow intent is recorded through
   `request_transition`, `block`, `cancel`, or commit fallback's `commit_stage`;
   this is lifecycle control, not a budget.
@@ -102,6 +110,9 @@ hooks, and role separation.
   successful structured project write has been observed.
 - Provide a line-window file viewer so workers can inspect targeted code with
   line numbers instead of repeatedly dumping whole files.
+- Provide line-number anchored insertion for small documentation/test additions
+  so workers can convert a viewed line window directly into a guarded
+  structured edit without constructing a larger replacement.
 - Do not expose raw `bash` in project-write implementation stages when
   structured project tools are available; keep shell access for non-write stages
   such as verification.

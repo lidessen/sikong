@@ -4,6 +4,7 @@ import {
   aiSdkLoop,
   anthropic,
   claudeCodeLoop,
+  createProjectTools,
   deepseek,
   openai,
   type AgentLoop,
@@ -13,7 +14,7 @@ import { WorkflowEngine, type EngineHooks, type LoopFactory, type WakeContext } 
 import { DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./workflow/builtin";
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
-import type { Worker } from "./worker";
+import { discoveredRoster, selectWorker, type Worker } from "./worker";
 import {
   JsonProjectStore,
   JsonWorkspaceChronicleStore,
@@ -117,26 +118,27 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   registry.register(DEVELOPMENT_WORKFLOW); // builtin development workflow wins over persisted definitions
   registry.register(GENERAL_WORKFLOW); // builtin fallback always wins over a persisted "general"
 
-  // Resolve the hired worker per wake: task override → project default → workspace
-  // default. Still creds-lazy: resolveWorkerLoop builds the provider (and resolves
-  // its key) only when invoked at wake time, so read/submit/register need no creds.
-  const roster = new Map((await workers.list()).map((w) => [w.id, w] as const));
+  // Wakespace staffs each task itself (ADR 0008): the operator only provisions the
+  // workforce (provider keys / an installed runtime); per-task hiring is internal.
+  // The roster is the explicitly-created workers, or — when none exist — the
+  // environment-discovered workers. selectWorker honours an explicit pin (task /
+  // project / workspace default) and otherwise matches the workflow's `workerRole`.
+  // Still creds-lazy: resolveWorkerLoop builds the provider only at wake time.
+  const explicit = await workers.list();
+  const roster = explicit.length ? explicit : await discoveredRoster();
   const defaultWorkerId = (await readConfig(dir)).defaultWorkerId;
-  const hire = (workerId: string | undefined, taskId: string): Worker => {
-    const id = workerId ?? defaultWorkerId;
-    if (!id)
-      throw new Error(
-        `no worker hired for task ${taskId}: run \`worker discover\`, \`worker create …\`, then \`worker default <id>\` (or pass --worker)`,
-      );
-    const w = roster.get(id);
-    if (!w) throw new Error(`worker "${id}" is not in the roster (create it with \`worker create\`)`);
-    return w;
-  };
   const defaultLoop: LoopFactory = (ctx) =>
-    resolveWorkerLoop(hire(ctx.task.workerId ?? ctx.project?.defaultWorker, ctx.task.id), {
-      ...(ctx.project ? { project: ctx.project } : {}),
-    });
-  const defaultIntakeLoop = () => resolveWorkerLoop(hire(undefined, "intake"));
+    resolveWorkerLoop(
+      selectWorker(roster, {
+        ...(ctx.task.workerId ? { workerId: ctx.task.workerId } : {}),
+        ...(ctx.project?.defaultWorker ? { projectDefault: ctx.project.defaultWorker } : {}),
+        ...(defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}),
+        ...(ctx.workflow.workerRole ? { workerRole: ctx.workflow.workerRole } : {}),
+      }),
+      { ...(ctx.project ? { project: ctx.project } : {}) },
+    );
+  const defaultIntakeLoop = () =>
+    resolveWorkerLoop(selectWorker(roster, defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}));
   const loop: LoopFactory = opts.loop ?? defaultLoop;
   const intakeLoop = opts.intakeLoop ?? defaultIntakeLoop;
 
@@ -147,6 +149,13 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     chronicle,
     projects,
     loop,
+    // The worker boundary: a bare ai-sdk worker gets generic file/shell tools from
+    // agent-loop (the agent's interior). A coding-agent runtime carries its own
+    // interface, so it needs none. The engine never references coding tools.
+    workerTools: (ctx: WakeContext, workerLoop: AgentLoop) =>
+      workerLoop.id === "ai-sdk" && ctx.project?.root
+        ? createProjectTools({ cwd: ctx.project.root, ...(ctx.project.env ? { env: ctx.project.env } : {}) })
+        : {},
     intakeLoop,
     ...(opts.hooks ? { hooks: opts.hooks } : {}),
     wakeTimeoutMs: opts.wakeTimeoutMs ?? 90_000,

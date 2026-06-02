@@ -69,13 +69,6 @@ export interface StageDef {
   outputFields?: readonly string[];
   /** Stage guidance appended to the wake's system prompt. */
   instructions?: string;
-  /**
-   * Require at least one successful structured project write before a no-state-command
-   * fallback pass may record normal stage progress. Use this for stages whose
-   * acceptance depends on project edits; leave unset for planning, design, and
-   * verification stages that may only update workflow fields.
-   */
-  requiresProjectWrite?: boolean;
   /** Cron escalation hint: fire a staleness tick after this long (used at M5). */
   escalateAfterMs?: number;
 }
@@ -87,6 +80,12 @@ export interface WorkflowDef {
   name: string;
   /** Used by the intake router to match a requirement (M3). */
   description: string;
+  /**
+   * Capability a task on this workflow needs, matched against worker `roles` when
+   * wakespace staffs the task (ADR 0008). Data only — the engine never reads it;
+   * assignment happens in the management layer. Unset ⇒ any available worker.
+   */
+  workerRole?: string;
   fields: FieldsSchema;
   /** Ordered; `stages[0]` is the initial stage entered at creation. */
   stages: readonly StageDef[];

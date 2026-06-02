@@ -32,7 +32,7 @@ import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOv
 import { acquireLock, getDefaultWorker, openWorkspace, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
 import { parseDataFile } from "./config-file";
 import { isValidProjectId, type Project } from "./project";
-import { discoverWorkers, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
+import { discoverWorkers, discoveredRoster, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
 import type { WorkerPermissionMode } from "./worker";
 import type { Command } from "./workflow";
 import { resolveWorkspaceDir } from "./workspace-layout";
@@ -129,17 +129,13 @@ function chronicleDataSuffix(e: { type: string; data?: Record<string, unknown> }
     const parts = [
       `phase=${String(data.phase ?? "")}`,
       `stateCommands=${String(data.stateCommands ?? 0)}`,
-      `projectTools=${String(data.projectToolCalls ?? 0)}`,
-      `projectWrites=${String(data.projectWriteCalls ?? 0)}`,
       `tools=${toolStarts(data.toolCallStarts) || "none"}`,
     ];
     return ` [${parts.join(" ")}]`;
   }
   if (e.type === "wake.commit") {
     const parts = [
-      `fallback=${String(data.fallbackPolicy ?? "")}`,
-      `projectTools=${String(data.projectToolCalls ?? 0)}`,
-      `projectWrites=${String(data.projectWriteCalls ?? 0)}`,
+      `reason=${String(data.reason ?? "")}`,
       `allowed=${csv(data.allowedTools) || "none"}`,
     ];
     const outputFields = csv(data.outputFields);
@@ -522,15 +518,26 @@ switch (cmd) {
       break;
     }
     if (sub === "list") {
-      const list = await new JsonWorkerStore(dir).list();
+      // The effective roster wakespace hires from: explicit workers, or — when none
+      // are registered — the environment-discovered ones (ADR 0008).
+      const explicit = await new JsonWorkerStore(dir).list();
+      const auto = explicit.length === 0;
+      const list = auto ? await discoveredRoster() : explicit;
       if (!text) {
-        printJson(list);
+        printJson({ source: auto ? "discovered" : "registered", workers: list });
         break;
       }
       const def = await getDefaultWorker(dir);
-      if (list.length === 0) console.log("  (no workers — run `worker discover`)");
+      if (list.length === 0)
+        console.log(
+          "  (no hireable worker — set a provider key like DEEPSEEK_API_KEY/ANTHROPIC_API_KEY or install `claude`, then re-run; or `worker create` one)",
+        );
+      else if (auto)
+        console.log("  (auto-discovered from the environment — wakespace hires from these; `worker create` to pin explicit ones)");
       for (const w of list)
-        console.log(`  ${w.id}${w.id === def ? " *" : ""}  ${w.runtime}·${w.provider}·${w.model}  — ${w.description}`);
+        console.log(
+          `  ${w.id}${w.id === def ? " *" : ""}  ${w.runtime}·${w.provider}·${w.model}  roles=${(w.roles ?? []).join("|") || "(runtime default)"}  — ${w.description}`,
+        );
       break;
     }
     if (sub === "create") {

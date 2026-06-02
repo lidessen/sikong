@@ -3,7 +3,14 @@ import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockLoop } from "agent-loop";
-import { discoverWorkers, isValidWorkerId, type Worker } from "./worker";
+import {
+  defaultRolesForRuntime,
+  discoverWorkers,
+  isValidWorkerId,
+  selectWorker,
+  workerHasRole,
+  type Worker,
+} from "./worker";
 import {
   JsonWorkerStore,
   MemoryEventStore,
@@ -100,17 +107,87 @@ describe("workers", () => {
     expect(t.workerId).toBe("flash");
   });
 
-  test("a wake with no worker in the roster fails clearly", async () => {
+  test("a wake with no hireable worker fails clearly", async () => {
     const errors: string[] = [];
     const dir = await tmp();
+    // Clear provider keys so the auto-discovered roster is deterministically empty
+    // (ADR 0008): no explicit workers + no creds → the default loop must fail clearly.
+    const keys = ["DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY"];
+    const saved: Record<string, string | undefined> = {};
+    for (const k of keys) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
     try {
-      // No injected loop + no workers → the default loop must report "no worker hired".
       const ws = await openWorkspace(dir, { hooks: { onError: ({ error }) => errors.push(error.message) } });
       await ws.engine.createTask({ projectId: "default", workflowId: "general", taskId: "t1" });
       await ws.engine.idle();
-      expect(errors.some((m) => /no worker hired/.test(m))).toBe(true);
+      expect(errors.some((m) => /no worker available to hire/.test(m))).toBe(true);
     } finally {
+      for (const k of keys) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("staffing (ADR 0008)", () => {
+  const CODER: Worker = {
+    id: "coder",
+    name: "Coder",
+    description: "coding agent",
+    runtime: "claude-code",
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+  };
+  const GEN: Worker = {
+    id: "gen",
+    name: "Gen",
+    description: "general worker",
+    runtime: "ai-sdk",
+    provider: "deepseek",
+    model: "deepseek-chat",
+  };
+
+  test("default roles are inferred from runtime", () => {
+    expect(defaultRolesForRuntime("claude-code")).toEqual(["coding", "general"]);
+    expect(defaultRolesForRuntime("ai-sdk")).toEqual(["general"]);
+    expect(workerHasRole(CODER, "coding")).toBe(true);
+    expect(workerHasRole(GEN, "coding")).toBe(false);
+    expect(workerHasRole(GEN, "general")).toBe(true);
+    // explicit roles override the runtime default
+    expect(workerHasRole({ ...GEN, roles: ["coding"] }, "coding")).toBe(true);
+  });
+
+  test("workerRole match prefers a capable worker over roster order", () => {
+    // GEN is first, but a coding task is staffed to the coding-capable worker.
+    expect(selectWorker([GEN, CODER], { workerRole: "coding" }).id).toBe("coder");
+  });
+
+  test("falls back to the first worker when no role matches", () => {
+    expect(selectWorker([GEN], { workerRole: "coding" }).id).toBe("gen");
+  });
+
+  test("no workerRole picks the first roster entry", () => {
+    expect(selectWorker([GEN, CODER], {}).id).toBe("gen");
+  });
+
+  test("an explicit pin wins over capability matching", () => {
+    expect(selectWorker([GEN, CODER], { workerId: "gen", workerRole: "coding" }).id).toBe("gen");
+  });
+
+  test("pin precedence: workerId > projectDefault > workspaceDefault", () => {
+    expect(selectWorker([GEN, CODER], { projectDefault: "coder", workspaceDefault: "gen" }).id).toBe("coder");
+    expect(selectWorker([GEN, CODER], { workerId: "gen", projectDefault: "coder" }).id).toBe("gen");
+  });
+
+  test("an unknown pin throws", () => {
+    expect(() => selectWorker([GEN, CODER], { workerId: "nope" })).toThrow(/not in the roster/);
+  });
+
+  test("an empty roster throws clearly", () => {
+    expect(() => selectWorker([], { workerRole: "coding" })).toThrow(/no worker available to hire/);
   });
 });

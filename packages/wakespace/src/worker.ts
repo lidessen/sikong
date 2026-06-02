@@ -29,11 +29,93 @@ export interface Worker {
   provider: WorkerProvider;
   model: string;
   permissionMode?: WorkerPermissionMode;
+  /**
+   * Capability tags used by wakespace to staff a task (e.g. "coding", "general").
+   * Staffing metadata only — matched generically against a workflow's `workerRole`;
+   * it never tells a worker HOW to work. Unset ⇒ inferred from the runtime.
+   */
+  roles?: readonly string[];
   // skills?/mcp? — a worker's "specialty" — deferred until skill injection lands.
 }
 
 export function isValidWorkerId(id: string): boolean {
   return !!id && id !== "." && id !== ".." && /^[A-Za-z0-9._-]+$/.test(id);
+}
+
+// ---- staffing: capability roles + assignment policy (ADR 0008) -------------
+
+/**
+ * Default capability tags for a runtime when a worker declares none. A
+ * `claude-code` worker carries its own coding interface, so it is coding-capable;
+ * a bare `ai-sdk` worker is general-purpose. This is staffing metadata, not
+ * coding logic — the engine never reads it.
+ */
+export function defaultRolesForRuntime(runtime: WorkerRuntime): readonly string[] {
+  return runtime === "claude-code" ? ["coding", "general"] : ["general"];
+}
+
+export function workerHasRole(worker: Worker, role: string): boolean {
+  return (worker.roles ?? defaultRolesForRuntime(worker.runtime)).includes(role);
+}
+
+/** Provider default models used for auto-discovered workers (operators override via `worker create`). */
+const DISCOVERY_MODEL: Record<WorkerProvider, string> = {
+  deepseek: "deepseek-chat",
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-5.1",
+};
+
+/**
+ * Build wakespace's roster from the environment (the operator only sets provider
+ * keys / installs a runtime). One worker per usable runtime × configured provider,
+ * ordered coding-capable first so coding tasks staff to a coding agent when present.
+ */
+export async function discoveredRoster(): Promise<Worker[]> {
+  const d = await discoverWorkers();
+  const configured = new Set(d.providers);
+  const out: Worker[] = [];
+  for (const c of d.compatibility) {
+    for (const provider of c.providers) {
+      if (!configured.has(provider)) continue;
+      out.push({
+        id: `${c.runtime}-${provider}`,
+        name: `${c.runtime} · ${provider}`,
+        description: `auto-discovered ${c.runtime} worker on ${provider}`,
+        runtime: c.runtime,
+        provider,
+        model: DISCOVERY_MODEL[provider],
+        roles: defaultRolesForRuntime(c.runtime),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Pick the worker for a task (ADR 0008). An explicit pin (supervisor override,
+ * project default, or workspace default) always wins; otherwise prefer a worker
+ * whose roles include the workflow's `workerRole`, falling back to any available
+ * worker. Deterministic over roster order. Throws when no worker can be hired.
+ */
+export function selectWorker(
+  roster: readonly Worker[],
+  req: { workerId?: string; projectDefault?: string; workspaceDefault?: string; workerRole?: string } = {},
+): Worker {
+  const pinnedId = req.workerId ?? req.projectDefault ?? req.workspaceDefault;
+  if (pinnedId) {
+    const w = roster.find((x) => x.id === pinnedId);
+    if (!w)
+      throw new Error(
+        `worker "${pinnedId}" is not in the roster (create it with \`worker create\`, or drop the pin to auto-assign)`,
+      );
+    return w;
+  }
+  if (roster.length === 0)
+    throw new Error(
+      "no worker available to hire: set a provider key (e.g. DEEPSEEK_API_KEY or ANTHROPIC_API_KEY) and/or install `claude`, then retry (or `worker create` an explicit one)",
+    );
+  const matched = req.workerRole ? roster.filter((w) => workerHasRole(w, req.workerRole!)) : [];
+  return (matched[0] ?? roster[0])!;
 }
 
 // ---- discovery: inspect the environment + suggest workers -----------------

@@ -33,6 +33,7 @@ describe("project tools", () => {
         "viewFile",
         "writeFile",
         "replaceInFile",
+        "insertInFile",
         "rg",
         "grep",
         "web_fetch",
@@ -110,6 +111,44 @@ describe("project tools", () => {
         replace: "x",
       }),
     ).resolves.toMatchObject({ error: expect.stringContaining("Search text not found") });
+  });
+
+  test("inserts line blocks with an optional viewed-line guard", async () => {
+    const root = await tempProject();
+    const tools = await createProjectTools({ cwd: root });
+
+    await expect(
+      execute(tools.insertInFile, {
+        path: "src/a.txt",
+        line: 1,
+        position: "after",
+        expected_line: "needle",
+        text: "inserted\nblock",
+      }),
+    ).resolves.toMatchObject({ path: "src/a.txt", position: "after", line: 1, insertedLines: 2 });
+    await expect(readFile(join(root, "src", "a.txt"), "utf8")).resolves.toBe("needle\ninserted\nblock\nother\n");
+
+    await expect(
+      execute(tools.insertInFile, {
+        path: "src/a.txt",
+        line: 1,
+        position: "before",
+        expected_line: "not needle",
+        text: "should not write",
+      }),
+    ).resolves.toMatchObject({ error: expect.stringContaining("Expected line 1") });
+    await expect(readFile(join(root, "src", "a.txt"), "utf8")).resolves.toBe("needle\ninserted\nblock\nother\n");
+
+    await expect(
+      execute(tools.insertInFile, {
+        path: "src/a.txt",
+        position: "end",
+        text: "tail",
+      }),
+    ).resolves.toMatchObject({ path: "src/a.txt", position: "end", insertedLines: 1 });
+    await expect(readFile(join(root, "src", "a.txt"), "utf8")).resolves.toBe(
+      "needle\ninserted\nblock\nother\ntail\n",
+    );
   });
 
   test("searches with ripgrep and rejects paths outside the project root", async () => {

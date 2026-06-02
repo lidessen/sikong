@@ -126,9 +126,7 @@ describe("wakespace CLI", () => {
         data: {
           phase: "worker",
           stateCommands: 0,
-          projectToolCalls: 3,
-          projectWriteCalls: 1,
-          toolCallStarts: { readFile: 2, replaceInFile: 1 },
+          toolCallStarts: { readFile: 2, rg: 1 },
         },
       });
       await store.append({
@@ -137,9 +135,7 @@ describe("wakespace CLI", () => {
         wakeId: "w1",
         summary: "commit fallback",
         data: {
-          fallbackPolicy: "state_commit_allowed",
-          projectToolCalls: 3,
-          projectWriteCalls: 1,
+          reason: "no_state_commands",
           allowedTools: ["commit_stage", "block"],
           outputFields: ["summary"],
         },
@@ -160,10 +156,10 @@ describe("wakespace CLI", () => {
       expect(out.exitCode).toBe(0);
       const text = new TextDecoder().decode(out.stdout);
       expect(text).toContain(
-        "wake.diagnostics t1 — worker pass [phase=worker stateCommands=0 projectTools=3 projectWrites=1 tools=readFile:2,replaceInFile:1]",
+        "wake.diagnostics t1 — worker pass [phase=worker stateCommands=0 tools=readFile:2,rg:1]",
       );
       expect(text).toContain(
-        "wake.commit t1 — commit fallback [fallback=state_commit_allowed projectTools=3 projectWrites=1 allowed=commit_stage,block outputFields=summary]",
+        "wake.commit t1 — commit fallback [reason=no_state_commands allowed=commit_stage,block outputFields=summary]",
       );
     } finally {
       await rm(dir, { recursive: true, force: true });

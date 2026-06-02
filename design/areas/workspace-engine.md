@@ -94,6 +94,30 @@ next wake.
 This is an in-process guarantee. Durable production use still needs storage
 level compare-and-set or expected-sequence semantics.
 
+### Continuously steerable (task-level, bounded lag, no preemption)
+
+The client can steer the system at any time, but steering is at the **task** level
+— never by editing a running task's content. A task is a stable unit of work (a
+fixed setpoint); a worker runs its current task to completion or the task is
+cancelled. New input is **not** injected into a running worker — that would mutate
+the task's scope mid-flight. Instead the client (or, later, the PM) either:
+
+- **enqueues a new task** — it runs at the next tick, after or alongside current
+  work (`createTask`/`intake` + the pending queue); or
+- **interrupts** — cancels (or supersedes) the current task, then starts a new one
+  (a lead `cancel`).
+
+External input (`submitCommand`, `intake`, `nudge`) is accepted whenever and lands
+in the event timeline. Because each task is a single-writer with a coalescing
+mailbox and every wake re-projects from the live log — re-loading the live task
+before applying worker commands — a `cancel` that races an in-flight wake is
+respected at the next tick (the wake's discarded work is simply not committed).
+
+The wake is the control tick, so the settling lag is at most one wake. We do
+**not** preempt an in-flight wake; bounded lag is the deliberate, simpler choice.
+(Hard-aborting the in-flight run on a lead `cancel` — to save the discarded wake's
+tokens — is an optional later optimization, not needed for correctness.)
+
 ## Stage-scoped Subtasks
 
 Decision
@@ -152,6 +176,16 @@ Production stores should preserve these boundaries but add:
 - External side-effect orchestration.
 - Rich routing or model selection policy.
 - Full subtask orchestration and parent/child settlement semantics.
+- **Task-specific agent tooling / a coding (or any domain) Agent-Computer
+  Interface.** Wakespace coordinates a worker as a black box; it never teaches a
+  worker *how* to do the work. File viewers, structured editors, host/test
+  runners, edit policies, and "verify" semantics belong inside the agent
+  (`agent-loop` tools, or a coding-agent runtime that carries its own interface),
+  never in the engine, prompts, or workflow definitions. See decision
+  [`0007-coding-belongs-to-the-agent`](../decisions/0007-coding-belongs-to-the-agent.md)
+  (which supersedes the coding-ACI direction of `0006`). A worker's tools are
+  supplied at the worker boundary; the engine merges them without knowing what
+  they are.
 
 Those can be added later, but they should compile into task events, commands,
 guards, stores, wake scheduling, or projections rather than becoming a second

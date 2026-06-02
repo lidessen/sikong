@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   mockLoop,
+  defineTool,
   emptyUsage,
   type AgentLoop,
   type Capability,
@@ -11,6 +12,7 @@ import {
   type LoopEvent,
   type RunHandle,
   type RunInput,
+  type ToolSet,
 } from "agent-loop";
 import { WorkflowEngine, type LoopFactory } from "./engine";
 import { DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "../workflow/builtin";
@@ -203,7 +205,6 @@ describe("WorkflowEngine wake cycle", () => {
       scriptLoop(async (input) => {
         calls++;
         if (calls === 1) {
-          await input.tools?.writeFile?.execute?.({ path: "created.txt", content: "done\n" }, {});
           return "Updated marker but forgot to commit wakespace state.";
         }
         commitRuntimeOptions = input.runtimeOptions;
@@ -245,17 +246,12 @@ describe("WorkflowEngine wake cycle", () => {
     expect(workerDiagnostics?.data).toMatchObject({
       status: "completed",
       stateCommands: 0,
-      projectToolCalls: 1,
-      projectWriteCalls: 1,
       textPreview: "Updated marker but forgot to commit wakespace state.",
     });
     const fallback = entries.find((entry) => entry.type === "wake.commit");
     expect(fallback?.data).toMatchObject({
       reason: "no_state_commands",
-      fallbackPolicy: "state_commit_allowed",
       allowedTools: ["commit_stage", "block", "cancel"],
-      projectToolCalls: 1,
-      projectWriteCalls: 1,
       firstPassTextPreview: "Updated marker but forgot to commit wakespace state.",
     });
     const commitDiagnostics = entries.find(
@@ -268,172 +264,6 @@ describe("WorkflowEngine wake cycle", () => {
     });
   });
 
-  test("forces commit when a worker writes project files but only appends a note", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-note-only-"));
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let calls = 0;
-    const loop: LoopFactory = () =>
-      scriptLoop(async (input) => {
-        calls++;
-        if (calls === 1) {
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-            {},
-          );
-          await input.tools?.append_note?.execute?.({ text: "edited marker" }, {});
-          return;
-        }
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
-        await input.tools?.commit_stage?.execute?.(
-          { fields: { summary: "marker edited with replaceInFile" }, reason: "committed" },
-          {},
-        );
-      }, "ai-sdk");
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({ projectId: "p", taskId: "note-only-commit", fields: { request: "edit marker" } });
-    await engine.idle();
-
-    const task = await engine.getTask("note-only-commit");
-    expect(calls).toBe(2);
-    expect(task?.status).toBe("done");
-    expect(task?.fields.summary).toBe("marker edited with replaceInFile");
-    const commit = (await chronicle.recent({ taskId: "note-only-commit", type: "wake.commit", limit: 1 }))[0];
-    expect(commit?.data).toMatchObject({
-      reason: "no_stage_commit_commands",
-      firstPassCommands: ["append_note"],
-      projectWriteCalls: 1,
-    });
-  });
-
-  test("does not count a failed project edit as write evidence", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-failed-edit-"));
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let calls = 0;
-    const loop: LoopFactory = () =>
-      scriptLoop(async (input) => {
-        calls++;
-        if (calls === 1) {
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "marker.txt", search: "missing", replace: "after" },
-            {},
-          );
-          await input.tools?.append_note?.execute?.({ text: "attempted edit" }, {});
-          return;
-        }
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
-        await input.tools?.block?.execute?.({ reason: "edit did not apply" }, {});
-      }, "ai-sdk");
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({ projectId: "p", taskId: "failed-edit", fields: { request: "edit marker" } });
-    await engine.idle();
-
-    expect(calls).toBe(2);
-    expect((await engine.getTask("failed-edit"))?.status).toBe("blocked");
-    const workerDiagnostics = (
-      await chronicle.recent({ taskId: "failed-edit", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "worker");
-    expect(workerDiagnostics?.data).toMatchObject({ projectToolCalls: 1, projectWriteCalls: 0 });
-    const commit = (await chronicle.recent({ taskId: "failed-edit", type: "wake.commit", limit: 1 }))[0];
-    expect(commit?.data).toMatchObject({
-      fallbackPolicy: "project_write_required_without_write",
-      projectWriteCalls: 0,
-    });
-  });
-
-  test("does not cap project exploration before the first required write", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-no-prewrite-budget-"));
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let system = "";
-    const loop: LoopFactory = () =>
-      scriptLoop(async (input) => {
-        system = input.system ?? "";
-        for (let i = 0; i < 9; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
-        await input.tools?.replaceInFile?.execute?.(
-          { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-          {},
-        );
-        await input.tools?.set_field?.execute?.({ field: "summary", value: "edited after context gathering" }, {});
-        await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
-      }, "ai-sdk");
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({ projectId: "p", taskId: "no-prewrite-budget", fields: { request: "edit marker" } });
-    await engine.idle();
-
-    expect(system).not.toContain("Pre-write exploration budget");
-    expect(system).toContain("do not end the wake after inspection only");
-    expect(await readFile(join(root, "marker.txt"), "utf8")).toBe("after\n");
-    expect((await engine.getTask("no-prewrite-budget"))?.status).toBe("done");
-    const workerDiagnostics = (
-      await chronicle.recent({ taskId: "no-prewrite-budget", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "worker");
-    expect(workerDiagnostics?.data).toMatchObject({
-      status: "completed",
-      projectToolCalls: 10,
-      projectWriteCalls: 1,
-    });
-    expect(workerDiagnostics?.data).not.toHaveProperty("maxProjectToolCallsBeforeWrite");
-  });
-
-  test("refuses writeFile overwrites on existing files in project-write stages", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-writefile-overwrite-"));
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    let overwrite: unknown;
-    const loop: LoopFactory = () =>
-      scriptLoop(async (input) => {
-        overwrite = await input.tools?.writeFile?.execute?.({ path: "marker.txt", content: "clobbered\n" }, {});
-        await input.tools?.replaceInFile?.execute?.(
-          { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-          {},
-        );
-        await input.tools?.set_field?.execute?.({ field: "summary", value: "edited safely" }, {});
-        await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
-      }, "ai-sdk");
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      loop,
-    });
-
-    await engine.createTask({ projectId: "p", taskId: "writefile-overwrite", fields: { request: "edit marker" } });
-    await engine.idle();
-
-    expect(overwrite).toMatchObject({
-      error: expect.stringContaining("Refusing to overwrite existing project file"),
-      path: "marker.txt",
-    });
-    expect(await readFile(join(root, "marker.txt"), "utf8")).toBe("after\n");
-    expect((await engine.getTask("writefile-overwrite"))?.status).toBe("done");
-  });
-
   test("commit_stage rejects fields with invalid workflow types before reducer rejection", async () => {
     const root = await mkdtemp(join(tmpdir(), "wakespace-commit-field-types-"));
     await writeFile(join(root, "marker.txt"), "before\n", "utf8");
@@ -443,13 +273,7 @@ describe("WorkflowEngine wake cycle", () => {
     const loop: LoopFactory = () =>
       scriptLoop(async (input) => {
         calls++;
-        if (calls === 1) {
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-            {},
-          );
-          return;
-        }
+        if (calls === 1) return;
         await input.tools?.block?.execute?.({ reason: "invalid commit payload" }, {});
         invalidCommit = await input.tools?.commit_stage?.execute?.(
           { fields: { summary: { bad: true } }, reason: "bad payload" },
@@ -472,395 +296,6 @@ describe("WorkflowEngine wake cycle", () => {
     expect((await engine.getTask("commit-field-types"))?.status).toBe("blocked");
     const entries = await chronicle.recent({ taskId: "commit-field-types", limit: 20 });
     expect(entries.map((entry) => entry.type)).not.toContain("command.rejected");
-  });
-
-  test("development implement stages require write evidence without a tool-count cap", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-dev-no-budget-"));
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let system = "";
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.stageId === "plan") {
-          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
-          return;
-        }
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
-          return;
-        }
-        if (ctx.stageId === "implement") {
-          system = input.system ?? "";
-          for (let i = 0; i < 6; i++) await input.tools?.readFile?.execute?.({ path: "marker.txt" }, {});
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-            {},
-          );
-          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
-          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
-          return;
-        }
-        if (ctx.stageId === "verify") {
-          await input.tools?.set_field?.execute?.({ field: "verification", value: "Checked marker." }, {});
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "Development completed." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
-          return;
-        }
-      }, "ai-sdk");
-    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_WORKFLOW);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry,
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({
-      projectId: "p",
-      workflowId: "development",
-      taskId: "dev-no-budget",
-      fields: { request: "edit marker" },
-    });
-    await engine.idle();
-
-    expect(system).not.toContain("Pre-write exploration budget");
-    expect(await readFile(join(root, "marker.txt"), "utf8")).toBe("after\n");
-    expect((await engine.getTask("dev-no-budget"))?.status).toBe("done");
-    const workerDiagnostics = (
-      await chronicle.recent({ taskId: "dev-no-budget", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "implement");
-    expect(workerDiagnostics?.data).toMatchObject({
-      status: "completed",
-      projectToolCalls: 7,
-      projectWriteCalls: 1,
-    });
-    expect(workerDiagnostics?.data).not.toHaveProperty("maxProjectToolCallsBeforeWrite");
-  });
-
-  test("verify stages block when project shell verification commands fail", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-verify-failed-command-"));
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    const chronicle = new MemoryChronicleStore(() => 1);
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.stageId === "plan") {
-          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
-          return;
-        }
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
-          return;
-        }
-        if (ctx.stageId === "implement") {
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-            {},
-          );
-          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
-          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
-          return;
-        }
-        if (ctx.stageId === "verify") {
-          if (input.tools?.block && !input.tools?.set_field) {
-            await input.tools.block.execute?.({ reason: "verification command failed" }, {});
-            return;
-          }
-          await input.tools?.bash?.execute?.({ command: "false | true" }, {});
-          await input.tools?.set_field?.execute?.({ field: "verification", value: "Claimed green." }, {});
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "Done." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
-        }
-      }, "ai-sdk");
-    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_WORKFLOW);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry,
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({
-      projectId: "p",
-      workflowId: "development",
-      taskId: "verify-failed-command",
-      fields: { request: "edit marker" },
-    });
-    await engine.idle();
-
-    const task = await engine.getTask("verify-failed-command");
-    expect(task?.status).toBe("blocked");
-    expect(task?.stageId).toBe("verify");
-    expect(task?.fields.verification).toBeUndefined();
-    expect(task?.fields.summary).toBeUndefined();
-    const workerDiagnostics = (
-      await chronicle.recent({ taskId: "verify-failed-command", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "verify");
-    expect(workerDiagnostics?.data).toMatchObject({
-      failedProjectCommandCalls: 1,
-      rejectedStateCommands: 3,
-    });
-    const wakeCommit = (await chronicle.recent({ taskId: "verify-failed-command", type: "wake.commit", limit: 20 }))[0];
-    expect(wakeCommit?.data).toMatchObject({
-      fallbackPolicy: "verification_command_failed",
-      allowedTools: ["block"],
-    });
-  });
-
-  test("verify stages expose a host check tool for real project commands", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-host-check-success-"));
-    await writeFile(join(root, "package.json"), JSON.stringify({ scripts: { typecheck: "pwd" } }), "utf8");
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let sawHostCheckInImplement = false;
-    let sawHostCheckInVerify = false;
-    let verifySystem = "";
-    let hostCheckResult: unknown;
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.stageId === "plan") {
-          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
-          return;
-        }
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
-          return;
-        }
-        if (ctx.stageId === "implement") {
-          sawHostCheckInImplement = Boolean(input.tools?.runHostCheck);
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-            {},
-          );
-          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
-          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
-          return;
-        }
-        if (ctx.stageId === "verify") {
-          sawHostCheckInVerify = Boolean(input.tools?.runHostCheck);
-          verifySystem = input.system ?? "";
-          hostCheckResult = await input.tools?.runHostCheck?.execute?.({ check: "typecheck" }, {});
-          await input.tools?.set_field?.execute?.({ field: "verification", value: "runHostCheck typecheck passed." }, {});
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "Development completed." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
-        }
-      }, "ai-sdk");
-    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_WORKFLOW);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry,
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({
-      projectId: "p",
-      workflowId: "development",
-      taskId: "verify-host-check",
-      fields: { request: "edit marker" },
-    });
-    await engine.idle();
-
-    expect(sawHostCheckInImplement).toBe(false);
-    expect(sawHostCheckInVerify).toBe(true);
-    expect(verifySystem).toContain("prefer `runHostCheck`");
-    expect(hostCheckResult).toMatchObject({
-      check: "typecheck",
-      command: "bun run typecheck",
-      cwd: "project root",
-      exitCode: 0,
-      timedOut: false,
-    });
-    expect(JSON.stringify(hostCheckResult)).not.toContain(root);
-    expect(hostCheckResult).toMatchObject({ stdout: expect.stringContaining("[project-root]") });
-    expect((await engine.getTask("verify-host-check"))?.status).toBe("done");
-    const workerDiagnostics = (
-      await chronicle.recent({ taskId: "verify-host-check", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "verify");
-    expect(workerDiagnostics?.data).toMatchObject({
-      projectToolCalls: 1,
-      failedProjectCommandCalls: 0,
-    });
-  });
-
-  test("verify stages block when host project checks fail", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-host-check-failure-"));
-    await writeFile(join(root, "package.json"), JSON.stringify({ scripts: { typecheck: "exit 7" } }), "utf8");
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
-    const chronicle = new MemoryChronicleStore(() => 1);
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.stageId === "plan") {
-          await input.tools?.set_field?.execute?.({ field: "plan", value: "Edit marker." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
-          return;
-        }
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "Replace before with after." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
-          return;
-        }
-        if (ctx.stageId === "implement") {
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "marker.txt", search: "before", replace: "after", expected_replacements: 1 },
-            {},
-          );
-          await input.tools?.set_field?.execute?.({ field: "implementation", value: "Edited marker." }, {});
-          await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "implemented" }, {});
-          return;
-        }
-        if (ctx.stageId === "verify") {
-          if (input.tools?.block && !input.tools?.set_field) {
-            await input.tools.block.execute?.({ reason: "host typecheck failed" }, {});
-            return;
-          }
-          await input.tools?.runHostCheck?.execute?.({ check: "typecheck" }, {});
-          await input.tools?.set_field?.execute?.({ field: "verification", value: "Claimed green." }, {});
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "Done." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
-        }
-      }, "ai-sdk");
-    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_WORKFLOW);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
-      registry,
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({
-      projectId: "p",
-      workflowId: "development",
-      taskId: "verify-host-check-failed",
-      fields: { request: "edit marker" },
-    });
-    await engine.idle();
-
-    const task = await engine.getTask("verify-host-check-failed");
-    expect(task?.status).toBe("blocked");
-    expect(task?.stageId).toBe("verify");
-    expect(task?.fields.verification).toBeUndefined();
-    expect(task?.fields.summary).toBeUndefined();
-    const workerDiagnostics = (
-      await chronicle.recent({ taskId: "verify-host-check-failed", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "worker" && entry.data?.stageId === "verify");
-    expect(workerDiagnostics?.data).toMatchObject({
-      failedProjectCommandCalls: 1,
-      rejectedStateCommands: 3,
-    });
-    const wakeCommit = (await chronicle.recent({ taskId: "verify-host-check-failed", type: "wake.commit", limit: 20 }))[0];
-    expect(wakeCommit?.data).toMatchObject({
-      fallbackPolicy: "verification_command_failed",
-      allowedTools: ["block"],
-    });
-  });
-
-  test("blocks an ungrounded forced commit pass when no project write ran", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-commit-ungrounded-"));
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let calls = 0;
-    let blockAttempts = 0;
-    const loop: LoopFactory = () =>
-      cancellableScriptLoop(async (input, isCancelled) => {
-        calls++;
-        if (calls === 1) return;
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
-        for (let i = 0; i < 20 && !isCancelled(); i++) {
-          blockAttempts++;
-          await input.tools?.block?.execute?.({ reason: `no project writeFile evidence ${i}` }, {});
-        }
-      }, "ai-sdk");
-    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      registry,
-      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({ projectId: "p", taskId: "commit-ungrounded", fields: { request: "validate" } });
-    await engine.idle();
-
-    const task = await engine.getTask("commit-ungrounded");
-    expect(calls).toBe(2);
-    expect(blockAttempts).toBe(1);
-    expect(task?.status).toBe("blocked");
-    const entries = await chronicle.recent({ taskId: "commit-ungrounded", limit: 20 });
-    expect(entries.map((entry) => entry.type)).not.toContain("command.rejected");
-    const commitDiagnostics = entries.find(
-      (entry) => entry.type === "wake.diagnostics" && entry.data?.phase === "commit",
-    );
-    expect(commitDiagnostics?.data).toMatchObject({ stateCommands: 1, allowedTools: ["block"] });
-  });
-
-  test("rejects implementation progress commands without project write evidence", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-ungrounded-progress-"));
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let calls = 0;
-    let blockAttempts = 0;
-    const loop: LoopFactory = () =>
-      cancellableScriptLoop(async (input, isCancelled) => {
-        calls++;
-        if (calls === 1) {
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "claimed without edit" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "claimed done" }, {});
-          return;
-        }
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block"]);
-        for (let i = 0; i < 20 && !isCancelled(); i++) {
-          blockAttempts++;
-          await input.tools?.block?.execute?.({ reason: `missing project write evidence ${i}` }, {});
-        }
-      }, "ai-sdk");
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({ projectId: "p", taskId: "ungrounded-progress", fields: { request: "claim done" } });
-    await engine.idle();
-
-    const task = await engine.getTask("ungrounded-progress");
-    expect(calls).toBe(2);
-    expect(blockAttempts).toBe(1);
-    expect(task?.status).toBe("blocked");
-    expect(task?.fields.summary).toBeUndefined();
-    const rejections = await chronicle.recent({ taskId: "ungrounded-progress", type: "command.rejected", limit: 10 });
-    expect(rejections.map((entry) => entry.summary).sort()).toEqual([
-      "rejected request_transition: project write evidence is required before recording implementation progress",
-      "rejected set_field: project write evidence is required before recording implementation progress",
-    ]);
-    const workerDiagnostics = (
-      await chronicle.recent({ taskId: "ungrounded-progress", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "worker");
-    expect(workerDiagnostics?.data).toMatchObject({ stateCommands: 0, rejectedStateCommands: 2 });
   });
 
   test("stops the commit fallback after a successful commit_stage", async () => {
@@ -1208,54 +643,50 @@ describe("WorkflowEngine wake cycle", () => {
     expect(t?.status).toBe("in_progress");
   });
 
-  test("injects project tools for ai-sdk wakes scoped to the task project", async () => {
-    const root = await mkdtemp(join(tmpdir(), "wakespace-project-tools-"));
-    await mkdir(join(root, "src"), { recursive: true });
-    await writeFile(join(root, "src", "a.txt"), "needle\n", "utf8");
-    let sawRg = false;
-    let sawBash = true;
-    let sawViewFile = false;
-    let sawProjectPrompt = false;
+  test("merges worker-supplied tools into the wake and lists them in the prompt", async () => {
+    // The worker boundary: the engine is coding-agnostic. A worker's own tools
+    // arrive via the workerTools resolver and are merged with the command tools;
+    // the engine never references project/coding tools itself.
+    let sawWorkerTool = false;
+    let sawWorkerToolsPrompt = false;
+    let workerToolExecuted = false;
     let runtimeOptions: unknown;
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
       registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      workerTools: (_ctx, loop): ToolSet =>
+        loop.id === "ai-sdk"
+          ? {
+              inspect_thing: defineTool({
+                description: "inspect the project",
+                inputSchema: { type: "object", properties: {}, additionalProperties: false },
+                execute: () => {
+                  workerToolExecuted = true;
+                  return { ok: true };
+                },
+              }),
+            }
+          : {},
       loop: () =>
         scriptLoop(async (input) => {
-          sawRg = Boolean(input.tools?.rg);
-          sawBash = Boolean(input.tools?.bash);
-          sawViewFile = Boolean(input.tools?.viewFile);
-          sawProjectPrompt = Boolean(input.system?.includes("Project tools"));
+          sawWorkerTool = Boolean(input.tools?.inspect_thing);
+          sawWorkerToolsPrompt =
+            Boolean(input.system?.includes("Worker tools")) && Boolean(input.system?.includes("inspect_thing"));
           runtimeOptions = input.runtimeOptions;
-          const result = (await input.tools?.rg?.execute?.(
-            { pattern: "needle", path: "src" },
-            {},
-          )) as { matches?: string[] } | undefined;
-          expect(result?.matches).toEqual(["src/a.txt:1:needle"]);
-          const viewed = (await input.tools?.viewFile?.execute?.(
-            { path: "src/a.txt", start_line: 1, max_lines: 1 },
-            {},
-          )) as { content?: string } | undefined;
-          expect(viewed?.content).toBe("1 | needle");
-          await input.tools?.replaceInFile?.execute?.(
-            { path: "src/a.txt", search: "needle", replace: "found", expected_replacements: 1 },
-            {},
-          );
+          await input.tools?.inspect_thing?.execute?.({}, {});
           await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
         }, "ai-sdk"),
     });
 
-    await engine.createTask({ projectId: "p", taskId: "ai-tools", fields: { request: "search" } });
+    await engine.createTask({ projectId: "p", taskId: "worker-tools", fields: { request: "inspect" } });
     await engine.idle();
 
-    expect(sawRg).toBe(true);
-    expect(sawBash).toBe(false);
-    expect(sawViewFile).toBe(true);
-    expect(sawProjectPrompt).toBe(true);
+    expect(sawWorkerTool).toBe(true);
+    expect(workerToolExecuted).toBe(true);
+    expect(sawWorkerToolsPrompt).toBe(true);
     expect(runtimeOptions).toMatchObject({ toolChoice: "required" });
-    expect((await engine.getTask("ai-tools"))?.status).toBe("done");
+    expect((await engine.getTask("worker-tools"))?.status).toBe("done");
   });
 
   test("a worker spawns a subtask and the parent advances on childrenDone (DAG)", async () => {

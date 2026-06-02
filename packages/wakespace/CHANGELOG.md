@@ -5,36 +5,55 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 ## Unreleased
 
+### Added
+
+- **Wakespace now staffs tasks itself** (ADR 0008). The operator only provisions the
+  workforce once — set a provider key (e.g. `DEEPSEEK_API_KEY`/`ANTHROPIC_API_KEY`)
+  and/or install `claude`; wakespace auto-discovers the roster and hires per task.
+  The everyday path needs no worker management: `create "<requirement>"` → `run`.
+- Capability-matched assignment: a worker carries `roles` (e.g. `coding`,
+  `general`; inferred from runtime when unset — `claude-code` is coding-capable), a
+  workflow carries an optional `workerRole`, and wakespace prefers a worker whose
+  roles match. The `development` workflow declares `workerRole: "coding"`, so coding
+  work is staffed to a coding-agent worker when one is available.
+- `--worker`, `worker default`, and `worker create` remain as an optional supervisor
+  override, no longer a prerequisite. `worker list` shows the effective roster
+  (registered, or auto-discovered) so you can see who will be hired.
+
 ### Changed
 
-- Project tools now expose `viewFile`, a line-numbered file-window reader for
-  targeted code inspection. Wakespace prompts steer coding workers toward
-  `rg` plus `viewFile` before structured edits.
-- Project-write implementation stages no longer expose raw `bash` when
-  structured project tools are available, so coding workers use the ACI before
-  recording implementation progress.
-- Wake diagnostics now keep compact, sanitized tool argument/result previews and
-  pass them into commit fallback, giving PM review factual command/output
-  evidence for verification and blocked-task decisions.
-- Project `bash` commands now run with `pipefail` enabled so verification
-  pipelines do not hide failing commands behind a successful final pipe segment.
-- Verify stages now reject passing verification fields/transitions when project
-  shell commands fail, forcing the task to block with failed command evidence
-  instead of accepting a green summary.
-- Verify stages now expose `runHostCheck`, an allowlisted host-side check tool
-  for real project `typecheck`, `test`, `build`, focused tests, and
-  `git diff --check` execution outside the sandboxed project shell. The tool
-  redacts the project root from captured stdout/stderr previews.
-- Terminal workflow state tools now stop the current agent run after recording
-  durable intent. This prevents commit fallback loops such as repeated
-  `commit_stage` or `block` calls without reintroducing fixed tool-call or step
-  budgets.
-- Implementation-stage progress fields and transitions are rejected until a
-  successful structured project write is observed, preventing no-edit worker
-  turns from recording fake implementation progress.
-- Development implementation prompts now explicitly require either a smallest
-  valid structured edit or an immediate `block`, reducing read-only dogfood
-  implementation wakes.
+- **Coding capability now lives inside the agent, not in the wakespace
+  coordination layer** (ADR 0007 supersedes ADR 0006). Wakespace is again a
+  task-agnostic coordinator: it assigns a task, supplies field state plus the
+  workflow's state tools, observes the worker's commands, and advances by guards.
+  It no longer knows about files, edits, shells, tests, or "verify" semantics.
+- A worker's own tools now arrive at the worker boundary via a generic
+  `workerTools` engine resolver and are merged with the command tools without the
+  engine knowing what they are. A bare ai-sdk worker is given `agent-loop`'s
+  generic project tools; a coding-agent runtime (claude-code) carries its own
+  interface and needs none. For coding work, hire a coding-capable worker —
+  worker quality is a selection decision, not something wakespace patches over.
+- The built-in `general` and `development` workflows no longer demand project
+  writes; their stage instructions describe the deliverable (which fields to
+  set), not which edit tool to use.
+
+### Removed
+
+- The coding-specific Agent-Computer Interface guardrails from ADR 0006: the
+  host-side `runHostCheck` runner (with hardcoded repo build/test commands),
+  project-write-evidence gates, verify-stage shell-failure gates, raw-`bash`
+  suppression, the `writeFile`-overwrite refusal, the `StageDef.requiresProjectWrite`
+  flag, the per-tool write counting, and the editor-tool/`runHostCheck`/
+  "smallest-edit-or-block" prompt steering.
+
+### Kept (task-agnostic coordination)
+
+- Stop-the-run once a terminal command (`request_transition`/`block`/`cancel`) is
+  recorded; the no-state-command commit fallback (now with no coding-evidence
+  gating); `commit_stage` field-type validation; the wake timeout; and sanitized
+  run diagnostics.
+- `agent-loop`'s generic `viewFile`, `insertInFile`, and pipefail `bash` remain
+  as reusable agent tools — coding *inside the agent*.
 
 ## 0.1.6 — 2026-06-01
 

@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
 import {
-  createProjectTools,
   defineTool,
   emptyUsage,
   type AgentLoop,
@@ -48,7 +44,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-const PROJECT_WRITE_TOOL_NAMES = new Set(["writeFile", "replaceInFile"]);
 const DIAGNOSTIC_TEXT_LIMIT = 800;
 const TOOL_FACT_LIMIT = 40;
 const TOOL_PREVIEW_LIMIT = 600;
@@ -236,194 +231,6 @@ function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<
   }
 }
 
-function toolResultSucceeded(result: unknown): boolean {
-  return !(isRecord(result) && typeof result.error === "string" && result.error.length > 0);
-}
-
-type HostCheckName = keyof typeof HOST_CHECKS;
-
-const HOST_CHECKS = {
-  typecheck: { command: "bun", args: ["run", "typecheck"] },
-  test: { command: "bun", args: ["run", "test"] },
-  build: { command: "bun", args: ["run", "build"] },
-  diff_check: { command: "git", args: ["diff", "--check"] },
-  wakespace_engine_test: {
-    command: "bunx",
-    args: ["--bun", "vitest", "run", "packages/wakespace/src/engine/engine.test.ts"],
-  },
-  project_tools_test: {
-    command: "bunx",
-    args: ["--bun", "vitest", "run", "packages/agent-loop/src/test/project-tools.test.ts"],
-  },
-} as const;
-
-const HOST_CHECK_NAMES = Object.keys(HOST_CHECKS) as HostCheckName[];
-const DEFAULT_HOST_CHECK_TIMEOUT_MS = 120_000;
-const MAX_HOST_CHECK_TIMEOUT_MS = 300_000;
-const DEFAULT_HOST_CHECK_OUTPUT_CHARS = 12_000;
-const MAX_HOST_CHECK_OUTPUT_CHARS = 50_000;
-
-function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.min(Math.max(Math.trunc(value), min), max) : fallback;
-}
-
-function truncateText(text: string, limit: number): { text: string; truncated: boolean } {
-  return text.length > limit ? { text: text.slice(0, limit), truncated: true } : { text, truncated: false };
-}
-
-function sanitizeHostOutput(text: string, cwd: string): string {
-  return text.split(cwd).join("[project-root]");
-}
-
-function parseHostCheckArgs(rawArgs: unknown):
-  | { ok: true; check: HostCheckName; timeoutMs: number; maxOutputChars: number }
-  | { ok: false; error: string } {
-  if (!isRecord(rawArgs)) return { ok: false, error: "runHostCheck expects an object input." };
-  if (typeof rawArgs.check !== "string" || !(rawArgs.check in HOST_CHECKS)) {
-    return {
-      ok: false,
-      error: `check must be one of: ${HOST_CHECK_NAMES.join(", ")}`,
-    };
-  }
-  return {
-    ok: true,
-    check: rawArgs.check as HostCheckName,
-    timeoutMs: clampNumber(rawArgs.timeout_ms, DEFAULT_HOST_CHECK_TIMEOUT_MS, 1_000, MAX_HOST_CHECK_TIMEOUT_MS),
-    maxOutputChars: clampNumber(
-      rawArgs.max_output_chars,
-      DEFAULT_HOST_CHECK_OUTPUT_CHARS,
-      1_000,
-      MAX_HOST_CHECK_OUTPUT_CHARS,
-    ),
-  };
-}
-
-function createHostCheckTool(opts: { cwd: string; env?: Record<string, string> }): ToolSet[string] {
-  return defineTool({
-    description:
-      "Run an approved deterministic verification command on the real host project checkout. Use this in verify stages instead of the sandboxed bash tool when checking typecheck, tests, build, or git diff cleanliness.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        check: {
-          type: "string",
-          enum: HOST_CHECK_NAMES,
-          description: "Approved host-side check to run from the project root.",
-        },
-        timeout_ms: {
-          type: "number",
-          description: `Optional timeout in milliseconds. Defaults to ${DEFAULT_HOST_CHECK_TIMEOUT_MS}; max ${MAX_HOST_CHECK_TIMEOUT_MS}.`,
-        },
-        max_output_chars: {
-          type: "number",
-          description: `Maximum stdout/stderr characters to return per stream. Defaults to ${DEFAULT_HOST_CHECK_OUTPUT_CHARS}.`,
-        },
-      },
-      required: ["check"],
-      additionalProperties: false,
-    },
-    execute: async (rawArgs, ctx) => {
-      const parsed = parseHostCheckArgs(rawArgs);
-      if (!parsed.ok) return { error: parsed.error };
-      const spec = HOST_CHECKS[parsed.check];
-      const startedAt = Date.now();
-      let stdout = "";
-      let stderr = "";
-      let timedOut = false;
-      let signalAborted = false;
-      const child = spawn(spec.command, spec.args, {
-        cwd: opts.cwd,
-        env: { ...process.env, ...(opts.env ?? {}) },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const stop = () => {
-        signalAborted = true;
-        child.kill("SIGTERM");
-      };
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill("SIGTERM");
-      }, parsed.timeoutMs);
-      ctx.signal?.addEventListener("abort", stop, { once: true });
-      child.stdout?.setEncoding("utf8");
-      child.stderr?.setEncoding("utf8");
-      child.stdout?.on("data", (chunk) => {
-        stdout += String(chunk);
-      });
-      child.stderr?.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-
-      const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>((resolveRun, rejectRun) => {
-        child.once("error", rejectRun);
-        child.once("close", (exitCode, signal) => resolveRun({ exitCode, signal }));
-      }).catch((err) => ({ error: `failed to start host check: ${(err as Error).message}` }));
-
-      clearTimeout(timer);
-      ctx.signal?.removeEventListener("abort", stop);
-      const durationMs = Date.now() - startedAt;
-      const stdoutPreview = truncateText(sanitizeHostOutput(stdout, opts.cwd), parsed.maxOutputChars);
-      const stderrPreview = truncateText(sanitizeHostOutput(stderr, opts.cwd), parsed.maxOutputChars);
-      if ("error" in result) {
-        return {
-          check: parsed.check,
-          command: [spec.command, ...spec.args].join(" "),
-          cwd: "project root",
-          exitCode: 127,
-          timedOut,
-          aborted: signalAborted,
-          durationMs,
-          error: result.error,
-        };
-      }
-      return {
-        check: parsed.check,
-        command: [spec.command, ...spec.args].join(" "),
-        cwd: "project root",
-        exitCode: timedOut ? 124 : result.exitCode,
-        ...(result.signal ? { signal: result.signal } : {}),
-        timedOut,
-        aborted: signalAborted,
-        durationMs,
-        stdout: stdoutPreview.text,
-        stderr: stderrPreview.text,
-        stdoutTruncated: stdoutPreview.truncated,
-        stderrTruncated: stderrPreview.truncated,
-      };
-    },
-  });
-}
-
-function failedProjectCommand(name: string, result: unknown): boolean {
-  if (!isRecord(result)) return false;
-  if (name === "bash" && typeof result.exitCode === "number" && result.exitCode !== 0) return true;
-  if (
-    name === "runHostCheck" &&
-    ((typeof result.exitCode === "number" && result.exitCode !== 0) || result.timedOut === true)
-  )
-    return true;
-  return false;
-}
-
-function isProjectWriteTool(name: string): boolean {
-  return PROJECT_WRITE_TOOL_NAMES.has(name);
-}
-
-async function existingProjectPath(root: string, args: unknown): Promise<string | null> {
-  if (!isRecord(args) || typeof args.path !== "string" || !args.path.trim()) return null;
-  const rawPath = args.path.trim();
-  const toolRelativePath = rawPath.startsWith("/") ? rawPath.slice(1) : rawPath;
-  const target = resolve(root, toolRelativePath);
-  const rel = relative(root, target);
-  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
-  try {
-    await access(target);
-    return rel;
-  } catch {
-    return null;
-  }
-}
-
 function fieldJsonSchema(def: FieldDef | undefined): Record<string, unknown> {
   switch (def?.type) {
     case "string":
@@ -484,17 +291,6 @@ function closesCurrentRun(command: Command): boolean {
   }
 }
 
-function requiresProjectWriteEvidence(command: Command, stage: ReturnType<typeof stageById>): boolean {
-  switch (command.kind) {
-    case "request_transition":
-      return true;
-    case "set_field":
-      return stage?.outputFields?.includes(command.field) ?? false;
-    default:
-      return false;
-  }
-}
-
 /** Task ids become filenames in the durable stores — keep them collision- and traversal-safe. */
 function assertValidTaskId(id: string): void {
   if (!id || id === "." || id === ".." || !/^[A-Za-z0-9._-]+$/.test(id))
@@ -512,6 +308,15 @@ export interface WakeContext {
 
 /** Builds the worker loop for a wake. Lets each wake choose runtime/provider. */
 export type LoopFactory = (ctx: WakeContext) => AgentLoop;
+
+/**
+ * Resolves the worker's own tools (its "hands") for a wake. This is the worker
+ * boundary: coding/file/shell tooling belongs to the agent, not the coordination
+ * engine. The engine merges whatever this returns with the wake's command tools
+ * without knowing what the tools are. Unset ⇒ the worker runs with command tools
+ * only (e.g. a coding-agent runtime that carries its own interface natively).
+ */
+export type WorkerToolsFactory = (ctx: WakeContext, loop: AgentLoop) => ToolSet | Promise<ToolSet>;
 
 export interface EngineHooks {
   onWakeStart?(info: { taskId: string; wakeId: string; stageId: string }): void;
@@ -536,6 +341,11 @@ export interface WorkflowEngineOptions {
   registry: WorkflowRegistry;
   /** Builds the worker loop per wake (e.g. deepseek-v4-flash over claude-code/ai-sdk). */
   loop: LoopFactory;
+  /**
+   * Supplies the worker's own tools per wake (the worker boundary). Optional: a
+   * worker that carries its own interface (a coding-agent runtime) needs none.
+   */
+  workerTools?: WorkerToolsFactory;
   /** Builds the intake-router loop (classifies a raw request → workflow). Optional. */
   intakeLoop?: () => AgentLoop;
   hooks?: EngineHooks;
@@ -563,6 +373,10 @@ export interface WorkflowEngineOptions {
  * current stage (with that stage's command tools + the projection as context),
  * applies the agent's commands through the reducer, then post-advances. A wake
  * that moves the task into a new (non-terminal) stage self-schedules the next.
+ *
+ * The engine is task-agnostic: it coordinates a worker as a black box (assign
+ * context + state tools, observe commands, advance by guards). It knows nothing
+ * about coding, files, or shells — a worker's own tools arrive via workerTools.
  */
 export class WorkflowEngine {
   private readonly state = new Map<string, { running: boolean; pending: boolean; wakes: number }>();
@@ -787,7 +601,8 @@ export class WorkflowEngine {
     const wakeId = this.newId("wake");
     const stage = stageById(wf, task.stageId);
     const project = this.o.projects ? ((await this.o.projects.get(task.projectId)) ?? undefined) : undefined;
-    const loop = this.o.loop({ task, workflow: wf, stageId: task.stageId, ...(project ? { project } : {}) });
+    const ctx: WakeContext = { task, workflow: wf, stageId: task.stageId, ...(project ? { project } : {}) };
+    const loop = this.o.loop(ctx);
     if (!loop.supports("tools"))
       throw new Error(
         `task ${taskId}: worker runtime "${loop.id}" lacks the "tools" capability that command tools require (use claude-code or ai-sdk, not codex/cursor)`,
@@ -808,50 +623,11 @@ export class WorkflowEngine {
         if (closesCurrentRun(command)) stopWorkerRun(`wakespace ${command.kind} recorded`);
       },
     });
-    const baseProjectTools =
-      loop.id === "ai-sdk" && project?.root
-        ? await createProjectTools({ cwd: project.root, ...(project.env ? { env: project.env } : {}) })
-        : {};
-    const rawProjectTools =
-      loop.id === "ai-sdk" && project?.root && stage?.id === "verify"
-        ? {
-            ...baseProjectTools,
-            runHostCheck: createHostCheckTool({ cwd: project.root, ...(project.env ? { env: project.env } : {}) }),
-          }
-        : baseProjectTools;
-    let projectToolCalls = 0;
-    let projectWriteCalls = 0;
-    let failedProjectCommandCalls = 0;
-    const projectWriteRequired = stage?.requiresProjectWrite === true;
-    const projectTools: ToolSet = {};
-    for (const [name, tool] of Object.entries(rawProjectTools)) {
-      if (projectWriteRequired && name === "bash") continue;
-      projectTools[name] = tool.execute
-        ? {
-            ...tool,
-            execute: async (args, ctx) => {
-              projectToolCalls++;
-              if (projectWriteRequired && name === "writeFile") {
-                const existing = project?.root ? await existingProjectPath(project.root, args) : null;
-                if (existing) {
-                  return {
-                    error:
-                      `Refusing to overwrite existing project file "${existing}" with writeFile during a coding stage. ` +
-                      "Use replaceInFile for existing files, or writeFile only for new files and large rewrites that are explicitly required.",
-                    path: existing,
-                  };
-                }
-              }
-              const out = await tool.execute!(args, ctx);
-              if (failedProjectCommand(name, out)) failedProjectCommandCalls++;
-              if (isProjectWriteTool(name) && toolResultSucceeded(out)) projectWriteCalls++;
-              return out;
-            },
-          }
-        : tool;
-    }
-    const tools = { ...projectTools, ...commandTools };
-    const projectWriteGateActive = projectWriteRequired && Object.keys(projectTools).length > 0;
+    // The worker brings its own tools (its "hands") from the worker boundary; the
+    // engine merges them with the command tools without knowing what they are.
+    const workerTools = (await this.o.workerTools?.(ctx, loop)) ?? {};
+    const workerToolNames = Object.keys(workerTools);
+    const tools = { ...workerTools, ...commandTools };
     this.o.hooks?.onWakeStart?.({ taskId, wakeId, stageId: task.stageId });
     await this.chron({ type: "wake.start", taskId, wakeId, summary: `wake @ "${task.stageId}"` });
 
@@ -864,7 +640,7 @@ export class WorkflowEngine {
           }
         : undefined;
     const run = loop.run({
-      system: buildSystem(task, wf, stage, Object.keys(projectTools), project?.memory),
+      system: buildSystem(task, wf, stage, workerToolNames, project?.memory),
       prompt: buildPrompt(task, wf, stage),
       tools,
       signal: controller.signal,
@@ -891,54 +667,23 @@ export class WorkflowEngine {
       run.cancel("wake timeout");
     });
     let commands = drain();
-    const rejectedProjectProgress =
-      projectWriteGateActive && projectWriteCalls === 0
-        ? commands.filter((command) => requiresProjectWriteEvidence(command, stage))
-        : [];
-    const rejectedVerificationProgress =
-      stage?.id === "verify" && failedProjectCommandCalls > 0
-        ? commands.filter((command) => isStageCommitSignal(command, stage))
-        : [];
-    if (rejectedProjectProgress.length) {
-      const reason = "project write evidence is required before recording implementation progress";
-      for (const command of rejectedProjectProgress) {
-        this.o.hooks?.onReject?.({ taskId, wakeId, command, reason });
-        await this.chron({ type: "command.rejected", taskId, wakeId, summary: `rejected ${command.kind}: ${reason}` });
-      }
-      const rejected = new Set(rejectedProjectProgress);
-      commands = commands.filter((command) => !rejected.has(command));
-    }
-    if (rejectedVerificationProgress.length) {
-      const reason = "verification command failed; block instead of recording passing verification";
-      for (const command of rejectedVerificationProgress) {
-        this.o.hooks?.onReject?.({ taskId, wakeId, command, reason });
-        await this.chron({ type: "command.rejected", taskId, wakeId, summary: `rejected ${command.kind}: ${reason}` });
-      }
-      const rejected = new Set(rejectedVerificationProgress);
-      commands = commands.filter((command) => !rejected.has(command));
-    }
-    const workerDiagnosticData = {
-      ...finalizeRunDiagnostics(workerDiagnostics, result),
-      stageId: task.stageId,
-      stateCommands: commands.length,
-      ...(rejectedProjectProgress.length || rejectedVerificationProgress.length
-        ? { rejectedStateCommands: rejectedProjectProgress.length + rejectedVerificationProgress.length }
-        : {}),
-      projectToolCalls,
-      projectWriteCalls,
-      failedProjectCommandCalls,
-      projectWriteRequired: projectWriteGateActive,
-    };
     await this.chron({
       type: "wake.diagnostics",
       taskId,
       wakeId,
-      summary: `worker pass: status=${result.status} stateCommands=${commands.length} projectTools=${projectToolCalls} projectWrites=${projectWriteCalls} toolStarts=${toolCountsSummary(workerDiagnostics.toolCallStarts)}`,
-      data: workerDiagnosticData,
+      summary: `worker pass: status=${result.status} stateCommands=${commands.length} toolStarts=${toolCountsSummary(workerDiagnostics.toolCallStarts)}`,
+      data: {
+        ...finalizeRunDiagnostics(workerDiagnostics, result),
+        stageId: task.stageId,
+        stateCommands: commands.length,
+      },
     });
 
     const hasStageCommitSignal = commands.some((command) => isStageCommitSignal(command, stage));
     if (!hasStageCommitSignal && result.status !== "error") {
+      // Commit fallback: the worker pass recorded no durable state (it answered in
+      // plain text or only inspected). Re-drive it with a constrained set of state
+      // tools so the turn produces an outcome — record stage progress, or block.
       const firstPassText = compactPreview(result.text || workerDiagnostics.textPreview);
       const firstPassCommands = commands;
       const commitCommands: Command[] = [];
@@ -965,86 +710,71 @@ export class WorkflowEngine {
         if (closesCurrentRun(command)) stopCommitRun(`wakespace ${command.kind} recorded`);
         return { acknowledged: true };
       };
-      const verificationCommandFailed = stage?.id === "verify" && failedProjectCommandCalls > 0;
-      const canCommitStageProgress = (!projectWriteGateActive || projectWriteCalls > 0) && !verificationCommandFailed;
+      const allowedFields = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
+        (name) => wf.fields[name],
+      );
       const commitTools: ToolSet = {};
-      if (canCommitStageProgress) {
-        const allowedFields = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
-          (name) => wf.fields[name],
-        );
-        commitTools.commit_stage = defineTool({
-          description:
-            "Atomically commit this stage's durable workflow fields and request transition if the stage is complete.",
-          inputSchema: {
-            type: "object",
-            properties: {
-              fields: {
-                type: "object",
-                properties: Object.fromEntries(allowedFields.map((field) => [field, fieldJsonSchema(wf.fields[field])])),
-                ...(allowedFields.length ? { required: allowedFields } : {}),
-                additionalProperties: !stage?.outputFields?.length,
-              },
-              reason: { type: "string" },
+      commitTools.commit_stage = defineTool({
+        description:
+          "Atomically commit this stage's durable workflow fields and request transition if the stage is complete.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fields: {
+              type: "object",
+              properties: Object.fromEntries(allowedFields.map((field) => [field, fieldJsonSchema(wf.fields[field])])),
+              ...(allowedFields.length ? { required: allowedFields } : {}),
+              additionalProperties: !stage?.outputFields?.length,
             },
-            required: ["fields"],
-            additionalProperties: false,
+            reason: { type: "string" },
           },
-          execute: (args) => {
-            const fields = isRecord(args.fields) ? args.fields : {};
-            for (const field of allowedFields) {
-              if (
-                Object.prototype.hasOwnProperty.call(fields, field) &&
-                !commitFieldValueValid(wf.fields[field], fields[field])
-              ) {
-                return {
-                  error: `field "${field}" must be ${wf.fields[field]?.type ?? "a valid workflow field value"}`,
-                };
-              }
+          required: ["fields"],
+          additionalProperties: false,
+        },
+        execute: (args) => {
+          const fields = isRecord(args.fields) ? args.fields : {};
+          for (const field of allowedFields) {
+            if (
+              Object.prototype.hasOwnProperty.call(fields, field) &&
+              !commitFieldValueValid(wf.fields[field], fields[field])
+            ) {
+              return {
+                error: `field "${field}" must be ${wf.fields[field]?.type ?? "a valid workflow field value"}`,
+              };
             }
-            commitCommands.length = 0;
-            stageCommitted = true;
-            for (const field of allowedFields) {
-              if (Object.prototype.hasOwnProperty.call(fields, field))
-                pushCommit({ kind: "set_field", field, value: fields[field] });
-            }
-            return pushCommit({
-              kind: "request_transition",
-              reason: args.reason ? String(args.reason) : "stage committed",
-            });
-          },
-        });
-        commitTools.block = defineTool({
-          description: "Block the task when it cannot be completed. State the concrete reason.",
-          inputSchema: {
-            type: "object",
-            properties: { reason: { type: "string" } },
-            required: ["reason"],
-            additionalProperties: false,
-          },
-          execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
-        });
-        commitTools.cancel = defineTool({
-          description:
-            "Request cancellation when this task should not be completed at all. Worker requests are audit-only until a lead approves cancellation.",
-          inputSchema: {
-            type: "object",
-            properties: { reason: { type: "string" } },
-            additionalProperties: false,
-          },
-          execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
-        });
-      } else {
-        commitTools.block = defineTool({
-          description: "Block the task when it cannot be completed. State the concrete reason.",
-          inputSchema: {
-            type: "object",
-            properties: { reason: { type: "string" } },
-            required: ["reason"],
-            additionalProperties: false,
-          },
-          execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
-        });
-      }
+          }
+          commitCommands.length = 0;
+          stageCommitted = true;
+          for (const field of allowedFields) {
+            if (Object.prototype.hasOwnProperty.call(fields, field))
+              pushCommit({ kind: "set_field", field, value: fields[field] });
+          }
+          return pushCommit({
+            kind: "request_transition",
+            reason: args.reason ? String(args.reason) : "stage committed",
+          });
+        },
+      });
+      commitTools.block = defineTool({
+        description: "Block the task when it cannot be completed. State the concrete reason.",
+        inputSchema: {
+          type: "object",
+          properties: { reason: { type: "string" } },
+          required: ["reason"],
+          additionalProperties: false,
+        },
+        execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
+      });
+      commitTools.cancel = defineTool({
+        description:
+          "Request cancellation when this task should not be completed at all. Worker requests are audit-only until a lead approves cancellation.",
+        inputSchema: {
+          type: "object",
+          properties: { reason: { type: "string" } },
+          additionalProperties: false,
+        },
+        execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
+      });
       await this.chron({
         type: "wake.commit",
         taskId,
@@ -1052,18 +782,9 @@ export class WorkflowEngine {
         summary: `worker produced no stage commit commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
         data: {
           reason: firstPassCommands.length === 0 ? "no_state_commands" : "no_stage_commit_commands",
-          fallbackPolicy: canCommitStageProgress
-            ? "state_commit_allowed"
-            : verificationCommandFailed
-              ? "verification_command_failed"
-              : "project_write_required_without_write",
           stageId: task.stageId,
           firstPassCommands: firstPassCommands.map((command) => command.kind),
           allowedTools: Object.keys(commitTools),
-          projectToolCalls,
-          projectWriteCalls,
-          failedProjectCommandCalls,
-          projectWriteRequired: projectWriteGateActive,
           ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
           ...(workerDiagnostics.toolCallFacts.length ? { toolCallFacts: workerDiagnostics.toolCallFacts } : {}),
           firstPassTextChars: firstPassText.chars,
@@ -1071,20 +792,12 @@ export class WorkflowEngine {
           firstPassTextTruncated: firstPassText.truncated,
         },
       });
-      const commitPrompt = canCommitStageProgress
-        ? "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete. Block only if progress is impossible. Do not answer in plain text."
-        : verificationCommandFailed
-          ? "Commit durable wakespace progress now. Verification observed failed project commands, so call `block` with the concrete failed command evidence. Do not answer in plain text."
-          : "Commit durable wakespace progress now. This stage requires project write evidence, but no successful project write tool call was observed, so call `block` with a concrete reason. Do not answer in plain text.";
       commitRun = loop.run({
         system: buildCommitSystem(task, wf, stage, result.text, {
-          projectToolCalls,
-          projectWriteCalls,
-          projectWriteRequired: projectWriteGateActive,
-          failedProjectCommandCalls,
           toolCallFacts: workerDiagnostics.toolCallFacts,
         }),
-        prompt: commitPrompt,
+        prompt:
+          "Commit durable wakespace progress now. Call `commit_stage` with this stage's output fields if the stage is complete, or `block` with a concrete reason if it cannot be done. Do not answer in plain text.",
         tools: commitTools,
         signal: commitController.signal,
         runtimeOptions:

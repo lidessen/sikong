@@ -72,6 +72,25 @@ const replaceInFileSchema = z.object({
     .describe("Require exactly this many replacements; if it differs, no file is written."),
 });
 
+const insertInFileSchema = z.object({
+  path: z.string().min(1).describe("Existing file to edit, relative to the project root."),
+  text: z.string().min(1).describe("Line block to insert."),
+  position: z
+    .enum(["before", "after", "end"])
+    .optional()
+    .describe("Where to insert the text relative to `line`. Defaults to after when `line` is set, otherwise end."),
+  line: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("1-based anchor line for before/after insertion. Not required for position=end."),
+  expected_line: z
+    .string()
+    .optional()
+    .describe("Optional exact content of the anchor line, without line number or newline. If it differs, no file is written."),
+});
+
 const viewFileSchema = z.object({
   path: z.string().min(1).describe("File to inspect, relative to the project root."),
   start_line: z.number().int().min(1).optional().describe("1-based first line to show. Defaults to 1."),
@@ -107,6 +126,7 @@ export async function createProjectTools(options: ProjectToolOptions): Promise<T
   };
   out.viewFile = createViewFileTool({ cwd });
   out.replaceInFile = createReplaceInFileTool({ cwd });
+  out.insertInFile = createInsertInFileTool({ cwd });
 
   const rg = createRipgrepTool({ cwd });
   out.rg = rg;
@@ -192,6 +212,20 @@ function splitLines(text: string): string[] {
   const lines = text.split(/\r\n|\n|\r/);
   if (text.endsWith("\n") || text.endsWith("\r")) lines.pop();
   return lines;
+}
+
+function detectNewline(text: string): string {
+  return text.includes("\r\n") ? "\r\n" : "\n";
+}
+
+function normalizeInsertedLines(text: string): string[] {
+  const lines = text.split(/\r\n|\n|\r/);
+  if (text.endsWith("\n") || text.endsWith("\r")) lines.pop();
+  return lines;
+}
+
+function hasFinalNewline(text: string): boolean {
+  return text.endsWith("\n") || text.endsWith("\r");
 }
 
 function createRipgrepTool(opts: { cwd: string }): ToolDefinition {
@@ -280,6 +314,67 @@ function createReplaceInFileTool(opts: { cwd: string }): ToolDefinition {
         return { error: `Could not write "${pathResult.rgPath}": ${(err as Error).message}` };
       }
       return { path: pathResult.rgPath, replacements, bytes: new TextEncoder().encode(after).byteLength };
+    },
+  });
+}
+
+function createInsertInFileTool(opts: { cwd: string }): ToolDefinition {
+  return defineTool({
+    description:
+      "Insert a line block into an existing project file using 1-based line numbers from viewFile. Use expected_line after viewing the anchor line so the edit fails safely if the file changed.",
+    inputSchema: insertInFileSchema,
+    execute: async (rawArgs) => {
+      const args = insertInFileSchema.parse(rawArgs);
+      const position = args.position ?? (args.line === undefined ? "end" : "after");
+      if (position !== "end" && args.line === undefined) {
+        return { error: "`line` is required when position is before or after." };
+      }
+      const pathResult = await resolveProjectPath(opts.cwd, args.path);
+      if (!pathResult.ok) return { error: pathResult.error };
+      const filePath = resolve(opts.cwd, pathResult.rgPath);
+      let before: string;
+      try {
+        before = await readFile(filePath, "utf8");
+      } catch (err) {
+        return { error: `Could not read "${pathResult.rgPath}": ${(err as Error).message}` };
+      }
+
+      const lines = splitLines(before);
+      const insertLines = normalizeInsertedLines(args.text);
+      if (insertLines.length === 0) return { error: "Insert text must contain at least one line." };
+      let index = lines.length;
+      if (position !== "end") {
+        const line = args.line!;
+        if (line > lines.length) {
+          return { error: `Line ${line} is outside "${pathResult.rgPath}" (${lines.length} lines).` };
+        }
+        const actualLine = lines[line - 1] ?? "";
+        if (args.expected_line !== undefined && actualLine !== args.expected_line) {
+          return {
+            error: `Expected line ${line} in "${pathResult.rgPath}" to be ${JSON.stringify(args.expected_line)}, found ${JSON.stringify(actualLine)}. No file was written.`,
+            line,
+            actualLine,
+          };
+        }
+        index = position === "before" ? line - 1 : line;
+      }
+
+      const afterLines = [...lines];
+      afterLines.splice(index, 0, ...insertLines);
+      const newline = detectNewline(before);
+      const after = afterLines.join(newline) + (hasFinalNewline(before) || position === "end" ? newline : "");
+      try {
+        await writeFile(filePath, after, "utf8");
+      } catch (err) {
+        return { error: `Could not write "${pathResult.rgPath}": ${(err as Error).message}` };
+      }
+      return {
+        path: pathResult.rgPath,
+        position,
+        ...(position !== "end" ? { line: args.line } : {}),
+        insertedLines: insertLines.length,
+        bytes: new TextEncoder().encode(after).byteLength,
+      };
     },
   });
 }

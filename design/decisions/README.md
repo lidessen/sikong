@@ -35,3 +35,6 @@ Files use a monotonic four-digit prefix:
 | [0003](0003-global-wakespace-home.md) | Accepted | Global wakespace home |
 | [0004](0004-worker-cancel-requires-lead-approval.md) | Accepted | Worker cancel requires lead approval |
 | [0005](0005-builtin-development-workflow.md) | Accepted | Builtin development workflow |
+| [0006](0006-coding-agent-interface-guardrails.md) | Superseded | Coding agent interface guardrails |
+| [0007](0007-coding-belongs-to-the-agent.md) | Accepted | Coding belongs to the agent; wakespace stays task-agnostic coordination |
+| [0008](0008-wakespace-owns-staffing.md) | Accepted | Wakespace owns staffing; the client only states, accepts, supervises |
