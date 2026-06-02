@@ -16,6 +16,12 @@ All notable changes to `wakespace` are documented here. This project adheres to
   and re-plan; re-planning stays task-level (spawn/cancel), never mid-task injection.
   `create_subtask` remains opt-in per stage (enabled only on the lead's delegate
   stage). Select it with `create "<req>" --workflow development-lead [--worker <id>]`.
+  The `review` stage also enables `create_subtask` and `done` is re-gated on
+  `childrenDone`, so the lead can run another round (spawn follow-up subtasks,
+  get re-woken when they finish, review again) before closing out.
+- Auto-discovered `claude-code` workers default to `permissionMode: "acceptEdits"`
+  so a headless coding team can actually edit files within its sandboxed project
+  root (cwd + allowedPaths), not just inspect.
 - **Wakespace now staffs tasks itself** (ADR 0008). The operator only provisions the
   workforce once — set a provider key (e.g. `DEEPSEEK_API_KEY`/`ANTHROPIC_API_KEY`)
   and/or install `claude`; wakespace auto-discovers the roster and hires per task.

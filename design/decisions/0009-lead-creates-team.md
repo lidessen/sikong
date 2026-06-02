@@ -87,3 +87,18 @@ reduce → guard → re-wake loop.
   routing, no cross-worker consensus, no parent→child staffing inheritance (children
   target a workflow that already carries its own `workerRole`).
 - A distinct `"lead"` capability role is deferred; the lead reuses `"coding"`.
+
+## Update (2026-06-02, same session)
+
+Two follow-ups landed after the first live dogfood:
+
+- **Multi-round review.** The `review` stage now enables `create_subtask`, and
+  `done` is re-gated on `childrenDone`, so a lead may spawn follow-up subtasks
+  during review (without setting `summary`); it is re-woken when they finish and
+  reviews again, only closing out once every child — initial and follow-up — is
+  terminal and a `summary` is set. Still task-level steering; no new mechanism.
+- **Discovered claude-code workers default to `permissionMode: "acceptEdits"`**
+  (a refinement of ADR 0008's discovery). A claude-code worker runs headless,
+  jailed to the project root (cwd + allowedPaths); without an edit-permitting mode
+  it cannot change files, so a coding team can't actually code. `acceptEdits` lets
+  it edit within its sandbox without an interactive prompt it could never answer.

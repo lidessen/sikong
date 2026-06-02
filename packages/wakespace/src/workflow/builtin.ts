@@ -161,6 +161,7 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
     {
       id: "review",
       category: "in_progress",
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
       outputFields: ["summary"],
       entry: {
         op: "and",
@@ -170,14 +171,17 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Read the Team section and review what each subtask returned. Synthesize a one-line `summary` of the overall outcome and request transition. If the effort failed or needs another round of work, call `block` with the concrete reason so the lead can be re-directed.",
+        "Read the Team section and review what each subtask returned. If the effort needs another round, create follow-up subtasks with `create_subtask` and request transition WITHOUT setting `summary` — you will be re-woken once they finish, then review again. When the effort is complete, set a one-line `summary` of the overall outcome and request transition. Block if it failed.",
     },
     {
       id: "done",
       category: "done",
+      // Re-gated on childrenDone so follow-up subtasks spawned during review must
+      // also finish before the lead can close out (ADR 0009 multi-round review).
       entry: {
         op: "and",
         all: [
+          { op: "childrenDone" },
           { op: "field", field: "summary", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
         ],

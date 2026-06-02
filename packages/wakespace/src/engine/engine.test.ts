@@ -930,6 +930,54 @@ describe("lead creates a team (ADR 0009)", () => {
     expect(leadReviewSystem).toContain(childId);
     expect(leadReviewSystem).toContain("child handled part 1");
   });
+
+  test("a lead can run another round in review before finishing (multi-round)", async () => {
+    let reviewPasses = 0;
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === "simple-commit") {
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "child finished" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "child done" }, {});
+          return;
+        }
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "Part A first, then maybe a follow-up." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "delegate") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part A" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        // review
+        reviewPasses++;
+        if (reviewPasses === 1) {
+          // need another round: spawn a follow-up, do NOT set summary yet
+          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part B" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "another round" }, {});
+          return;
+        }
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "All rounds complete." }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "complete" }, {});
+      });
+    const engine = newEngine(loop, [DEVELOPMENT_LEAD_WORKFLOW, SIMPLE_COMMIT]);
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development-lead",
+      taskId: "lead-multi",
+      fields: { request: "two-round effort" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("lead-multi");
+    expect(reviewPasses).toBe(2); // re-woken for a second review round after the follow-up finished
+    expect(task?.status).toBe("done");
+    expect(task?.fields.summary).toBe("All rounds complete.");
+    expect(task?.childIds.length).toBe(2); // initial team member + the follow-up
+    for (const cid of task!.childIds) expect((await engine.getTask(cid))?.status).toBe("done");
+  });
 });
 
 function eventRunHandle(events: LoopEvent[]): RunHandle {

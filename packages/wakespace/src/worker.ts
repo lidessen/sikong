@@ -85,6 +85,10 @@ export async function discoveredRoster(): Promise<Worker[]> {
         provider,
         model: DISCOVERY_MODEL[provider],
         roles: defaultRolesForRuntime(c.runtime),
+        // A claude-code worker runs headless, jailed to the project root (cwd +
+        // allowedPaths). Without an edit-permitting mode it cannot actually change
+        // files, so default discovered coding workers to acceptEdits.
+        ...(c.runtime === "claude-code" ? { permissionMode: "acceptEdits" as const } : {}),
       });
     }
   }
