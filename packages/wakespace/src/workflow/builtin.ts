@@ -132,17 +132,32 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
   workerRole: "coding",
   fields: {
     request: { type: "string", description: "The original development requirement." },
-    plan: { type: "string", description: "How the work is broken into independent pieces to delegate." },
+    design: { type: "string", description: "Key design decisions resolved during review (also written back to the project's design doc)." },
+    plan: { type: "string", description: "How the work is broken into ordered layers to delegate." },
     summary: { type: "string", description: "Final outcome synthesized from the team's results." },
   },
   stages: [
     {
-      id: "plan",
+      id: "design",
       category: "in_progress",
       entry: { op: "always" },
+      outputFields: ["design"],
+      instructions:
+        "Review and refine the design BEFORE any planning or building. Read the project's design doc (e.g. DESIGN.md in the project root). Resolve its open decisions and inconsistencies (architecture, interfaces, transports, lifecycle, testing approach). UPDATE the design doc in place — add a concise 'Decisions' section capturing what you settled. Then record those key decisions in the `design` field and request transition. Block if the requirement is too unclear to design.",
+    },
+    {
+      id: "plan",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "design", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
       outputFields: ["plan"],
       instructions:
-        "Inspect the request and break it into independent pieces of work. Record `plan` describing the breakdown, then request transition. Block if the request needs lead clarification.",
+        "Turn the refined design into ordered LAYERS to build. Record `plan` describing the layers and their order, then request transition. Block if the request needs lead clarification.",
     },
     {
       id: "delegate",

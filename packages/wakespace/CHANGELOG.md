@@ -35,6 +35,10 @@ All notable changes to `wakespace` are documented here. This project adheres to
   the engine, so a stuck child can't wedge its parent's `childrenDone` — the parent
   unblocks and re-decides. Root tasks keep the plain behaviour. New `run
   --wake-timeout <seconds>` raises the per-wake budget for heavy real builds.
+- The `development-lead` workflow gained an explicit **`design` stage** before
+  planning: the lead must review and refine the project's design doc (update it in
+  place) and record the key decisions before `plan` is admitted — so design review
+  is a first-class, gated step, not bundled into planning.
 - **A lead task can build and coordinate a team** (ADR 0009). New built-in
   `development-lead` workflow: a 负责人 plans an effort, delegates the pieces to a
   team of child tasks (each auto-staffed by capability), is re-woken as they finish,

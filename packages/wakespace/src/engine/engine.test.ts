@@ -894,6 +894,11 @@ describe("lead creates a team (ADR 0009)", () => {
           return;
         }
         // the lead
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
         if (ctx.stageId === "plan") {
           await input.tools?.set_field?.execute?.({ field: "plan", value: "One piece: part 1." }, {});
           await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
@@ -938,6 +943,11 @@ describe("lead creates a team (ADR 0009)", () => {
         if (ctx.workflow.id === "simple-commit") {
           await input.tools?.set_field?.execute?.({ field: "summary", value: "child finished" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "child done" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
         if (ctx.stageId === "plan") {
@@ -987,6 +997,11 @@ describe("lead creates a team (ADR 0009)", () => {
         if (ctx.workflow.id === "simple-commit") {
           await input.tools?.set_field?.execute?.({ field: "summary", value: "isolated child done" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
         if (ctx.stageId === "plan") {
@@ -1048,6 +1063,11 @@ describe("lead creates a team (ADR 0009)", () => {
         }, "ai-sdk");
       }
       return scriptLoop(async (input) => {
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
         if (ctx.stageId === "plan") {
           await input.tools?.set_field?.execute?.({ field: "plan", value: "one piece" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
@@ -1091,6 +1111,11 @@ describe("lead creates a team (ADR 0009)", () => {
           order.push(String(ctx.task.fields.request)); // record run order
           await input.tools?.set_field?.execute?.({ field: "summary", value: `did ${ctx.task.fields.request}` }, {});
           await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
         if (ctx.stageId === "plan") {
