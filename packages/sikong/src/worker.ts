@@ -60,7 +60,7 @@ export function workerHasRole(worker: Worker, role: string): boolean {
 
 /** Provider default models used for auto-discovered workers (operators override via `worker create`). */
 const DISCOVERY_MODEL: Record<WorkerProvider, string> = {
-  deepseek: "deepseek-chat",
+  deepseek: "deepseek-v4-flash",
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-5.1",
 };
