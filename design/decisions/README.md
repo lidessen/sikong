@@ -43,3 +43,4 @@ Files use a monotonic four-digit prefix:
 | [0011](0011-task-dependencies.md) | Accepted | Sibling task dependencies (dependsOn) |
 | [0012](0012-adversarial-dialectic-design-stage.md) | Accepted | Adversarial-dialectic design stage for the lead (alternatives field + guard) |
 | [0013](0013-usage-and-cost-accounting.md) | Accepted | Usage & cost accounting (tokens, cache, $; subscription windows; LiteLLM prices) |
+| [0014](0014-wake-cost-optimization.md) | Accepted | Wake cost optimization (flash@max, prefix-stable wakes, pro-on-escalation) |

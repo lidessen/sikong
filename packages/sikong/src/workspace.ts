@@ -130,16 +130,24 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   const explicit = await workers.list();
   const roster = explicit.length ? explicit : await discoveredRoster();
   const defaultWorkerId = (await readConfig(dir)).defaultWorkerId;
-  const defaultLoop: LoopFactory = (ctx) =>
-    resolveWorkerLoop(
-      selectWorker(roster, {
-        ...(ctx.task.workerId ? { workerId: ctx.task.workerId } : {}),
-        ...(ctx.project?.defaultWorker ? { projectDefault: ctx.project.defaultWorker } : {}),
-        ...(defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}),
-        ...(ctx.workflow.workerRole ? { workerRole: ctx.workflow.workerRole } : {}),
-      }),
+  const selectArgs = (ctx: WakeContext) => ({
+    ...(ctx.task.workerId ? { workerId: ctx.task.workerId } : {}),
+    ...(ctx.project?.defaultWorker ? { projectDefault: ctx.project.defaultWorker } : {}),
+    ...(defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}),
+    ...(ctx.workflow.workerRole ? { workerRole: ctx.workflow.workerRole } : {}),
+  });
+  // "strong" tier escalates DeepSeek to its pro model — reserved for retries where
+  // the fast model failed (per public evals, pro's edge is long-horizon/stuck work).
+  // Other providers keep their default model.
+  const escalateModel = (w: Worker, tier?: "fast" | "strong"): string =>
+    tier === "strong" && w.provider === "deepseek" ? "deepseek-v4-pro" : w.model;
+  const defaultLoop: LoopFactory = (ctx) => {
+    const w = selectWorker(roster, selectArgs(ctx));
+    return resolveWorkerLoop(
+      { ...w, model: escalateModel(w, ctx.modelTier) },
       { ...(ctx.project ? { project: ctx.project } : {}) },
     );
+  };
   const defaultIntakeLoop = () =>
     resolveWorkerLoop(selectWorker(roster, defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}));
   const loop: LoopFactory = opts.loop ?? defaultLoop;
@@ -164,13 +172,8 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     // workers authenticate by API key; OAuth/subscription detection is deferred.
     describeWorker: (ctx: WakeContext) => {
       try {
-        const w = selectWorker(roster, {
-          ...(ctx.task.workerId ? { workerId: ctx.task.workerId } : {}),
-          ...(ctx.project?.defaultWorker ? { projectDefault: ctx.project.defaultWorker } : {}),
-          ...(defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}),
-          ...(ctx.workflow.workerRole ? { workerRole: ctx.workflow.workerRole } : {}),
-        });
-        return { model: w.model, provider: w.provider, billingMode: "token" as const };
+        const w = selectWorker(roster, selectArgs(ctx));
+        return { model: escalateModel(w, ctx.modelTier), provider: w.provider, billingMode: "token" as const };
       } catch {
         return undefined;
       }

@@ -15,6 +15,17 @@ All notable changes to `sikong` are documented here. This project adheres to
   bundled binary) and passes it as `pathToClaudeCodeExecutable`, so the published
   binary uses the operator's installed `claude`. Running from source is unchanged.
 
+### Changed
+
+- **Wake cost optimization** (ADR 0014). (1) DeepSeek workers run `deepseek-v4-flash`
+  at `CLAUDE_CODE_EFFORT_LEVEL=max` with flash subagents + AUTH_TOKEN auth. (2) The
+  wake `system` prompt is now prefix-stable (role + stage instructions + field
+  *schema* + tools); current field *values* and the team snapshot moved to the
+  per-wake message, so DeepSeek's prefix cache covers the system across a task's
+  re-wakes (the lead-re-wake token sink). (3) A task that fails a wake escalates its
+  retry to `deepseek-v4-pro` (`WakeContext.modelTier`), so the strong model is spent
+  only where the fast one demonstrably struggles.
+
 ### Added
 
 - **`sikong watch` — live terminal dashboard.** Redraws the workspace overview

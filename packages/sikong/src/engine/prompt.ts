@@ -38,10 +38,12 @@ function renderValue(value: unknown): string {
 }
 
 /**
- * Assemble the wake's system prompt from the PROJECTION (fields), never the raw
- * timeline — the projection is the snapshot an agent reads (event-sourcing /
- * context-rot discipline). M1 keeps this minimal; richer context (a rolling
- * timeline summary, retrieval tool) is a later refinement.
+ * Assemble the wake's SYSTEM prompt — the STABLE half: role, stage instructions,
+ * project memory, the field SCHEMA, and the tool lists. It is byte-stable across
+ * a task's many re-wakes (within a stage), so DeepSeek's server-side prefix cache
+ * covers it and re-wakes get ~10× cheaper. The VOLATILE half (current field
+ * values + team snapshot) lives in the per-wake message (buildPrompt), and deeper
+ * detail is pulled on demand by the agent's own tools.
  *
  * Task-agnostic by design: it renders state and lists the worker's tools, but it
  * never teaches the worker HOW to do the work — that is the agent's own concern.
@@ -52,7 +54,6 @@ export function buildSystem(
   stage: StageDef | undefined,
   workerToolNames: readonly string[] = [],
   projectMemory = "",
-  team: readonly TeamMember[] = [],
 ): string {
   const lines: string[] = [
     `# Workflow: ${wf.name}`,
@@ -67,27 +68,15 @@ export function buildSystem(
 
   const fieldNames = Object.keys(wf.fields);
   if (fieldNames.length) {
-    lines.push("", "## Fields (the task's state)");
+    // Schema only — STABLE across re-wakes so it stays in the cached system
+    // prefix. Current values + the team snapshot are volatile and live in the
+    // per-wake message (buildPrompt) instead, so the system prompt is byte-stable
+    // and DeepSeek's prefix cache covers it across a task's many re-wakes.
+    lines.push("", "## Fields (the task's state — schema; current values are in the wake message)");
     for (const name of fieldNames) {
       const def = wf.fields[name];
-      lines.push(
-        `- ${name} (${def?.type})${def?.description ? ` — ${def.description}` : ""}: ${renderValue(task.fields[name])}`,
-      );
+      lines.push(`- ${name} (${def?.type})${def?.description ? ` — ${def.description}` : ""}`);
     }
-  }
-
-  if (team.length) {
-    lines.push("", "## Team (your subtasks)");
-    for (const m of team) {
-      const parts = [`- ${m.id} (${m.workflowId}) — ${m.status}`];
-      if (m.isolate) parts.push(`[isolated → branch sikong/${m.id}]`);
-      if (m.summary) parts.push(`summary: ${renderValue(m.summary)}`);
-      else if (m.request) parts.push(`request: ${renderValue(m.request)}`);
-      lines.push(parts.join("  "));
-    }
-    lines.push(
-      "Review what your subtasks returned. To take it further, create more subtasks or finish this stage — never reach into a running subtask.",
-    );
   }
 
   const toolNames = stageToolNames(stage);
@@ -108,10 +97,43 @@ export function buildSystem(
   return lines.join("\n");
 }
 
-export function buildPrompt(task: Task, wf: WorkflowDef, stage: StageDef | undefined): string {
-  void wf;
+/**
+ * The per-wake message: the VOLATILE state — current field values + the team
+ * snapshot — plus the action nudge. Kept out of the system prompt so the system
+ * stays prefix-stable (cacheable). The agent is told to pull deeper detail
+ * (full subtask output, files) on demand with its own tools rather than have it
+ * all pre-stuffed here.
+ */
+export function buildPrompt(
+  task: Task,
+  wf: WorkflowDef,
+  stage: StageDef | undefined,
+  team: readonly TeamMember[] = [],
+): string {
   void stage;
-  return `Advance task ${task.id} now: do this stage's work and update the task via the tools.`;
+  const lines: string[] = [];
+  const fieldNames = Object.keys(wf.fields);
+  if (fieldNames.length) {
+    lines.push("## Current field values");
+    for (const name of fieldNames) {
+      lines.push(`- ${name}: ${renderValue(task.fields[name])}`);
+    }
+  }
+  if (team.length) {
+    lines.push("", "## Team (your subtasks)");
+    for (const m of team) {
+      const parts = [`- ${m.id} (${m.workflowId}) — ${m.status}`];
+      if (m.isolate) parts.push(`[isolated → branch sikong/${m.id}]`);
+      if (m.summary) parts.push(`summary: ${renderValue(m.summary)}`);
+      else if (m.request) parts.push(`request: ${renderValue(m.request)}`);
+      lines.push(parts.join("  "));
+    }
+    lines.push(
+      "Review what your subtasks returned (read a subtask's full output or the project files with your tools if you need more than the summary). To take it further, create more subtasks or finish this stage — never reach into a running subtask.",
+    );
+  }
+  lines.push("", `Advance task ${task.id} now: do this stage's work and update the task via the tools.`);
+  return lines.join("\n");
 }
 
 export function buildCommitSystem(

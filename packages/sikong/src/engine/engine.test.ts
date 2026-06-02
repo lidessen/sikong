@@ -911,7 +911,9 @@ describe("lead creates a team (ADR 0009)", () => {
           return;
         }
         // review — the lead must see its team here
-        leadReviewSystem = input.system ?? "";
+        // Team snapshot now lives in the per-wake message (prompt), not the
+        // stable system prompt (prefix-cache split) — check both.
+        leadReviewSystem = `${input.system ?? ""}\n${input.prompt ?? ""}`;
         await input.tools?.set_field?.execute?.({ field: "summary", value: "Team completed the effort." }, {});
         await input.tools?.request_transition?.execute?.({ reason: "reviewed" }, {});
       });

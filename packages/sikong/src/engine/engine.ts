@@ -306,6 +306,12 @@ export interface WakeContext {
   stageId: string;
   /** The task's project (for cwd/model/env isolation), when a ProjectStore is wired. */
   project?: Project;
+  /**
+   * Model tier for this wake. "fast" by default; "strong" once a task's prior
+   * wake(s) failed — the worker boundary escalates to a stronger model for the
+   * retry (pro is reserved for where the fast model demonstrably struggles).
+   */
+  modelTier?: "fast" | "strong";
 }
 
 /** Builds the worker loop for a wake. Lets each wake choose runtime/provider. */
@@ -663,7 +669,16 @@ export class WorkflowEngine {
     if (project && task.isolate && this.o.isolateWorkspace) {
       project = await this.o.isolateWorkspace({ task, workflow: wf, stageId: task.stageId, project }, project);
     }
-    const ctx: WakeContext = { task, workflow: wf, stageId: task.stageId, ...(project ? { project } : {}) };
+    // Escalate the model tier once a task has a prior failed wake (circuit
+    // breaker bumped .errors) — the retry runs on the stronger model.
+    const priorErrors = this.state.get(taskId)?.errors ?? 0;
+    const ctx: WakeContext = {
+      task,
+      workflow: wf,
+      stageId: task.stageId,
+      ...(project ? { project } : {}),
+      modelTier: priorErrors > 0 ? "strong" : "fast",
+    };
     const workerInfo = this.o.describeWorker?.(ctx);
     const loop = this.o.loop(ctx);
     if (!loop.supports("tools"))
@@ -704,8 +719,8 @@ export class WorkflowEngine {
         : undefined;
     const team = await this.teamSnapshots(task);
     const run = loop.run({
-      system: buildSystem(task, wf, stage, workerToolNames, project?.memory, team),
-      prompt: buildPrompt(task, wf, stage),
+      system: buildSystem(task, wf, stage, workerToolNames, project?.memory),
+      prompt: buildPrompt(task, wf, stage, team),
       tools,
       signal: controller.signal,
       ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),

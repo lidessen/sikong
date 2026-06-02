@@ -29,6 +29,8 @@ import { MODEL_PRICES } from "./prices.generated";
  */
 
 const DEEPSEEK_ANTHROPIC = "https://api.deepseek.com/anthropic";
+/** DeepSeek's cheap/fast tier — used for Claude Code haiku-level + subagent calls. */
+const DEEPSEEK_FLASH = "deepseek-v4-flash";
 const DEEPSEEK_OPENAI = "https://api.deepseek.com/v1";
 const ANTHROPIC_BASE = "https://api.anthropic.com";
 const OPENAI_BASE = "https://api.openai.com/v1";
@@ -95,13 +97,21 @@ export function deepseek(opts: { apiKey?: string; model?: string } = {}): ModelP
     configureFor(runtime): RuntimeConfig {
       switch (runtime) {
         case "claude-code":
+          // DeepSeek's recommended Claude Code config: AUTH_TOKEN auth, the cheap
+          // flash tier for haiku-level + subagents, and max effort (which closes
+          // most of the flash↔pro quality gap per public evals). `model` is the
+          // main tier the caller picked (flash by default; pro on escalation).
           return {
             runtime,
             model,
             env: {
               ANTHROPIC_BASE_URL: DEEPSEEK_ANTHROPIC,
               ANTHROPIC_API_KEY: apiKey,
+              ANTHROPIC_AUTH_TOKEN: apiKey,
               ANTHROPIC_MODEL: model,
+              ANTHROPIC_DEFAULT_HAIKU_MODEL: DEEPSEEK_FLASH,
+              CLAUDE_CODE_SUBAGENT_MODEL: DEEPSEEK_FLASH,
+              CLAUDE_CODE_EFFORT_LEVEL: "max",
             },
           };
         case "ai-sdk":
