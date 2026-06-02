@@ -82,6 +82,20 @@ export type RuntimeConfig =
 export type RuntimeConfigFor<R extends RuntimeType> = Extract<RuntimeConfig, { runtime: R }>;
 
 /**
+ * Per-model price, USD per 1,000,000 tokens. Cache rates are optional — only the
+ * providers/models that bill cache separately set them. These are defaults
+ * shipped with the library (prices change); a consumer may override them.
+ */
+export interface ModelPricing {
+  inputPer1M: number;
+  outputPer1M: number;
+  /** Price for cache-read (hit) input tokens, if the provider bills them apart. */
+  cacheReadPer1M?: number;
+  /** Price for cache-creation/write input tokens, if billed apart. */
+  cacheWritePer1M?: number;
+}
+
+/**
  * A credential/endpoint bundle, orthogonal to the runtime. Declares which
  * runtimes it can drive and produces each runtime's launch config on demand.
  */
@@ -92,6 +106,12 @@ export interface ModelProvider {
   supportedRuntimes: RuntimeType[];
   /** Produce the launch config for a runtime. Throws if unsupported. */
   configureFor(runtime: RuntimeType): RuntimeConfig;
+  /**
+   * Best-known list price for a model id, or undefined when unknown (never
+   * guessed — an unknown price means cost is reported as n/a, not zero). The
+   * provider owns this because it knows its own model catalogue.
+   */
+  pricing?(modelId: string): ModelPricing | undefined;
 }
 
 export class ProviderRuntimeError extends Error {

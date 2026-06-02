@@ -2,10 +2,12 @@ import { resolveApiKey } from "../core/credentials";
 import {
   codexProviderOverrides,
   ProviderRuntimeError,
+  type ModelPricing,
   type ModelProvider,
   type RuntimeConfig,
   type RuntimeType,
 } from "../core/provider";
+import { MODEL_PRICES } from "./prices.generated";
 
 /**
  * Built-in providers. Each is pure data describing an endpoint + credential and
@@ -43,6 +45,33 @@ function unsupported(
 /** Derive a conventional env var name from a provider id, e.g. "my-llm" -> "MY_LLM_API_KEY". */
 function envVarFor(id: string): string {
   return `${id.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+}
+
+/**
+ * List prices come from the vendored LiteLLM snapshot
+ * (src/providers/prices.generated.ts; refresh with scripts/refresh-prices.ts —
+ * we do not hand-maintain prices). Matched by exact model id, else the snapshot
+ * entry sharing the longest id prefix (so e.g. "claude-sonnet-4-6" maps to the
+ * closest "claude-sonnet-4-5"). An unknown model returns undefined → cost is
+ * reported n/a, never guessed.
+ */
+function sharedPrefix(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i += 1;
+  return i;
+}
+
+export function modelPricing(modelId: string): ModelPricing | undefined {
+  const id = modelId.toLowerCase();
+  const exact = MODEL_PRICES[id];
+  if (exact) return exact;
+  let best: { key: string; shared: number } | undefined;
+  for (const key of Object.keys(MODEL_PRICES)) {
+    const shared = sharedPrefix(id, key);
+    if (shared >= 5 && (!best || shared > best.shared)) best = { key, shared };
+  }
+  return best ? MODEL_PRICES[best.key] : undefined;
 }
 
 /**
@@ -89,6 +118,7 @@ export function deepseek(opts: { apiKey?: string; model?: string } = {}): ModelP
           return unsupported("deepseek", runtime, supportedRuntimes);
       }
     },
+    pricing: (modelId) => modelPricing(modelId),
   };
 }
 
@@ -122,6 +152,7 @@ export function anthropic(opts: { apiKey?: string; model?: string } = {}): Model
           return unsupported("anthropic", runtime, supportedRuntimes);
       }
     },
+    pricing: (modelId) => modelPricing(modelId),
   };
 }
 
@@ -164,6 +195,7 @@ export function openai(opts: {
           return unsupported("openai", runtime, supportedRuntimes);
       }
     },
+    pricing: (modelId) => modelPricing(modelId),
   };
 }
 

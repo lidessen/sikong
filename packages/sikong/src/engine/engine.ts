@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
+  addUsage,
   defineTool,
   emptyUsage,
   type AgentLoop,
   type LoopEvent,
   type RunResult,
+  type TokenUsage,
   type ToolSet,
 } from "agent-loop";
 import {
@@ -318,6 +320,17 @@ export type LoopFactory = (ctx: WakeContext) => AgentLoop;
  */
 export type WorkerToolsFactory = (ctx: WakeContext, loop: AgentLoop) => ToolSet | Promise<ToolSet>;
 
+/** What worker a wake hired — recorded with usage so the report can cost it. */
+export interface WorkerInfo {
+  model?: string;
+  provider?: string;
+  /** "token" = pay-per-token (priced in $); "subscription" = quota/window-based ($ n/a). */
+  billingMode?: "token" | "subscription";
+}
+
+/** Describes the worker a wake will hire (model/provider/billing), for usage accounting. */
+export type DescribeWorker = (ctx: WakeContext) => WorkerInfo | undefined;
+
 /**
  * Provide an isolated workspace for a task that requested it (`Task.isolate`, ADR
  * 0010). Opaque to the engine — the worker boundary maps it to e.g. a git worktree
@@ -357,6 +370,8 @@ export interface WorkflowEngineOptions {
    * worker that carries its own interface (a coding-agent runtime) needs none.
    */
   workerTools?: WorkerToolsFactory;
+  /** Optional: describe the worker a wake hires (model/provider/billing) for usage costing. */
+  describeWorker?: DescribeWorker;
   /** Provide an isolated workspace for `isolate` tasks (ADR 0010); opaque to the engine. */
   isolateWorkspace?: IsolateWorkspace;
   /** Release an isolated task's workspace when it terminates (commit + cleanup). */
@@ -649,6 +664,7 @@ export class WorkflowEngine {
       project = await this.o.isolateWorkspace({ task, workflow: wf, stageId: task.stageId, project }, project);
     }
     const ctx: WakeContext = { task, workflow: wf, stageId: task.stageId, ...(project ? { project } : {}) };
+    const workerInfo = this.o.describeWorker?.(ctx);
     const loop = this.o.loop(ctx);
     if (!loop.supports("tools"))
       throw new Error(
@@ -714,6 +730,7 @@ export class WorkflowEngine {
       controller.abort();
       run.cancel("wake timeout");
     });
+    let wakeUsage: TokenUsage = result.usage;
     let commands = drain();
     await this.chron({
       type: "wake.diagnostics",
@@ -863,6 +880,7 @@ export class WorkflowEngine {
         commitController.abort();
         commitRun.cancel("wake commit timeout");
       });
+      wakeUsage = addUsage(wakeUsage, result.usage);
       commands = [...firstPassCommands, ...drain(), ...commitCommands];
       await this.chron({
         type: "wake.diagnostics",
@@ -967,6 +985,18 @@ export class WorkflowEngine {
         commands: commands.length,
         ...(advancedTo ? { advancedTo } : {}),
         ...(error ? { error: error.message } : {}),
+        usage: {
+          inputTokens: wakeUsage.inputTokens,
+          outputTokens: wakeUsage.outputTokens,
+          totalTokens: wakeUsage.totalTokens,
+          ...(wakeUsage.cacheReadTokens !== undefined ? { cacheReadTokens: wakeUsage.cacheReadTokens } : {}),
+          ...(wakeUsage.cacheCreationTokens !== undefined
+            ? { cacheCreationTokens: wakeUsage.cacheCreationTokens }
+            : {}),
+          ...(workerInfo?.model ? { model: workerInfo.model } : {}),
+          ...(workerInfo?.provider ? { provider: workerInfo.provider } : {}),
+          ...(workerInfo?.billingMode ? { billingMode: workerInfo.billingMode } : {}),
+        },
       },
     });
 

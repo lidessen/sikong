@@ -29,6 +29,7 @@ export {
   anthropicCompatible,
   deepseek,
   gateway,
+  modelPricing,
   openai,
   openaiCompatible,
 } from "./providers";
@@ -50,6 +51,7 @@ export type {
   ClaudeRuntimeConfig,
   CodexRuntimeConfig,
   CursorRuntimeConfig,
+  ModelPricing,
   ModelProvider,
   RuntimeConfig,
   RuntimeConfigFor,

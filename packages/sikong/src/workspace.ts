@@ -159,6 +159,22 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
       workerLoop.id === "ai-sdk" && ctx.project?.root
         ? createProjectTools({ cwd: ctx.project.root, ...(ctx.project.env ? { env: ctx.project.env } : {}) })
         : {},
+    // Record which worker a wake hires (model/provider) so the usage report can
+    // cost it. Same selection as defaultLoop. billingMode is "token" — discovered
+    // workers authenticate by API key; OAuth/subscription detection is deferred.
+    describeWorker: (ctx: WakeContext) => {
+      try {
+        const w = selectWorker(roster, {
+          ...(ctx.task.workerId ? { workerId: ctx.task.workerId } : {}),
+          ...(ctx.project?.defaultWorker ? { projectDefault: ctx.project.defaultWorker } : {}),
+          ...(defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}),
+          ...(ctx.workflow.workerRole ? { workerRole: ctx.workflow.workerRole } : {}),
+        });
+        return { model: w.model, provider: w.provider, billingMode: "token" as const };
+      } catch {
+        return undefined;
+      }
+    },
     // Isolation (ADR 0010) lives entirely here, off git only. The engine forwards
     // `isolate` tasks opaquely; we give them their own git worktree and reclaim it
     // on terminal. Non-git projects are a no-op (the task just shares the root).

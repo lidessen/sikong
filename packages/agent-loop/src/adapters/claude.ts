@@ -198,7 +198,13 @@ export class ClaudeAdapter implements BackendAdapter {
 
     const result = (async (): Promise<BackendResult> => {
       started = Date.now();
-      let usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      let usage = {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      };
       const toolNames = new Map<string, string>();
       const streamState = { streamedText: "", streamedThinking: "" };
       let stepIndex = -1;
@@ -251,6 +257,8 @@ export class ClaudeAdapter implements BackendAdapter {
               inputTokens: usage.inputTokens,
               outputTokens: usage.outputTokens,
               totalTokens: usage.totalTokens,
+              cacheReadTokens: usage.cacheReadTokens,
+              cacheCreationTokens: usage.cacheCreationTokens,
               source: "runtime",
             });
           }
@@ -773,7 +781,13 @@ export function mapClaudeMessage(
   streamState: { streamedText: string; streamedThinking: string },
 ): {
   events: LoopEvent[];
-  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+  };
 } {
   const events: LoopEvent[] = [];
 
@@ -910,20 +924,55 @@ export function mapClaudeMessage(
     return { events, usage: mapResultUsage(message) };
   }
 
+  // Capture per-turn usage from assistant messages too, so a run that is
+  // cancelled before the final `result` arrives (the common case under
+  // sikong, which stops the run on a terminal tool call) still reports usage.
+  // The `result` message, when it arrives, is authoritative and overrides this.
+  if (message.type === "assistant") {
+    const u = mapAssistantUsage(message);
+    if (u) return { events, usage: u };
+  }
+
   return { events };
+}
+
+function mapAssistantUsage(message: SDKMessage):
+  | { inputTokens: number; outputTokens: number; totalTokens: number; cacheReadTokens: number; cacheCreationTokens: number }
+  | undefined {
+  const usage = (message as { message?: { usage?: Record<string, unknown> } }).message?.usage;
+  if (!usage) return undefined;
+  const inputTokens = Number(usage.input_tokens ?? 0);
+  const outputTokens = Number(usage.output_tokens ?? 0);
+  const cacheReadTokens = Number(usage.cache_read_input_tokens ?? 0);
+  const cacheCreationTokens = Number(usage.cache_creation_input_tokens ?? 0);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+  };
 }
 
 function mapResultUsage(message: SDKMessage & { type: "result" }): {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
 } {
   const usage = (message as { usage?: Record<string, unknown> }).usage ?? {};
+  // Anthropic's input_tokens EXCLUDES cached tokens; cache read/creation are
+  // reported (and billed) separately. Keep them apart for accurate costing.
   const inputTokens = Number(usage.input_tokens ?? 0);
   const outputTokens = Number(usage.output_tokens ?? 0);
+  const cacheReadTokens = Number(usage.cache_read_input_tokens ?? 0);
+  const cacheCreationTokens = Number(usage.cache_creation_input_tokens ?? 0);
   return {
     inputTokens,
     outputTokens,
-    totalTokens: inputTokens + outputTokens,
+    totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
   };
 }

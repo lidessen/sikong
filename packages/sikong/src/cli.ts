@@ -30,6 +30,7 @@ import {
   JsonWorkspaceProjectionStore,
 } from "./store";
 import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
+import { renderUsage, summarizeUsage } from "./usage";
 import { acquireLock, getDefaultWorker, openWorkspace, reconcileWorktrees, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
 import { parseDataFile } from "./config-file";
 import { isValidProjectId, type Project } from "./project";
@@ -308,6 +309,27 @@ switch (cmd) {
       break;
     }
     for (const e of entries) console.log(chronicleLine(e));
+    break;
+  }
+  case "usage": {
+    const projectId = flag("--project");
+    const allEntries = await new JsonWorkspaceChronicleStore(dir).recent({
+      type: ["wake.end", "wake.error"],
+      limit: 1_000_000,
+    });
+    const tasks = await new JsonWorkspaceProjectionStore(dir).query();
+    const taskProject = new Map(tasks.map((t) => [t.id, t.projectId] as const));
+    let entries = allEntries;
+    if (projectId) {
+      const ids = new Set(tasks.filter((t) => t.projectId === projectId).map((t) => t.id));
+      entries = allEntries.filter((e) => e.taskId !== undefined && ids.has(e.taskId));
+    }
+    const report = summarizeUsage(entries, taskProject, Date.now());
+    if (!text) {
+      printJson(report);
+      break;
+    }
+    console.log(renderUsage(report, projectId ? { scope: `project ${projectId}` } : {}));
     break;
   }
   case "inspect": {
@@ -613,6 +635,7 @@ switch (cmd) {
       "  status [--project <id>] [--text]\n" +
       "  task <id> [--text]\n" +
       "  chronicle [--task <id>] [-n <N>] [--text]\n" +
+      "  usage [--project <id>] [--text]        token usage + cost (5h/7d/30d windows)\n" +
       "  inspect wait [--task <id>] [--after <seq>] [--timeout <ms>] [--text]\n" +
       "  --json is accepted for compatibility; agent-facing commands already default to JSON\n" +
         "  --dir <path>   workspace dir override ($SIKONG_HOME or ~/.sikong by default; legacy $SIKONG_DIR still works)",

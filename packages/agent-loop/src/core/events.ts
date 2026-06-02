@@ -26,9 +26,14 @@ export type LoopEvent =
     }
   | {
       type: "usage";
+      /** Uncached input tokens (excludes cache read/creation). */
       inputTokens: number;
       outputTokens: number;
       totalTokens: number;
+      /** Cache-read input tokens (cheap hits), if the backend reports them. */
+      cacheReadTokens?: number;
+      /** Cache-creation/write input tokens, if the backend reports them. */
+      cacheCreationTokens?: number;
       /** Model context window limit, if the backend reports it. */
       contextWindow?: number;
       /** totalTokens / contextWindow when contextWindow is known. */
@@ -62,6 +67,10 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Cache-read input tokens (cheap hits), if any backend reported them. */
+  cacheReadTokens?: number;
+  /** Cache-creation/write input tokens, if any backend reported them. */
+  cacheCreationTokens?: number;
 }
 
 export const emptyUsage = (): TokenUsage => ({
@@ -70,15 +79,32 @@ export const emptyUsage = (): TokenUsage => ({
   totalTokens: 0,
 });
 
-/** Fold a `usage` event into a running total. */
+/** Fold a `usage` event into a running total. Cache fields stay absent unless a backend reported them. */
 export function addUsage(
   acc: TokenUsage,
-  ev: { inputTokens: number; outputTokens: number; totalTokens: number },
+  ev: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    cacheReadTokens?: number;
+    cacheCreationTokens?: number;
+  },
 ): TokenUsage {
+  const hasCache =
+    acc.cacheReadTokens !== undefined ||
+    acc.cacheCreationTokens !== undefined ||
+    ev.cacheReadTokens !== undefined ||
+    ev.cacheCreationTokens !== undefined;
   return {
     inputTokens: acc.inputTokens + ev.inputTokens,
     outputTokens: acc.outputTokens + ev.outputTokens,
     totalTokens: acc.totalTokens + ev.totalTokens,
+    ...(hasCache
+      ? {
+          cacheReadTokens: (acc.cacheReadTokens ?? 0) + (ev.cacheReadTokens ?? 0),
+          cacheCreationTokens: (acc.cacheCreationTokens ?? 0) + (ev.cacheCreationTokens ?? 0),
+        }
+      : {}),
   };
 }
 

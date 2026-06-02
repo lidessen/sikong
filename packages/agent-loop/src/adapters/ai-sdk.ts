@@ -134,7 +134,11 @@ export class AiSdkAdapter implements BackendAdapter {
       rejectResult = rej;
     });
 
-    const cumulative = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    // Normalize to the shape used across adapters: `inputTokens` is UNCACHED
+    // input, cache-read tokens are kept apart. The AI SDK reports `inputTokens`
+    // as the full prompt (cached included) plus a `cachedInputTokens` subset, so
+    // we subtract the cached part out of inputTokens here.
+    const cumulative = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0 };
     let stepIndex = 0;
 
     const run = async () => {
@@ -188,14 +192,18 @@ export class AiSdkAdapter implements BackendAdapter {
 
             const usage = step.usage;
             if (usage) {
-              cumulative.inputTokens += usage.inputTokens ?? 0;
+              const cachedIn = (usage as { cachedInputTokens?: number }).cachedInputTokens ?? 0;
+              cumulative.inputTokens += Math.max(0, (usage.inputTokens ?? 0) - cachedIn);
+              cumulative.cacheReadTokens += cachedIn;
               cumulative.outputTokens += usage.outputTokens ?? 0;
-              cumulative.totalTokens = cumulative.inputTokens + cumulative.outputTokens;
+              cumulative.totalTokens =
+                cumulative.inputTokens + cumulative.outputTokens + cumulative.cacheReadTokens;
               ch.push({
                 type: "usage",
                 inputTokens: cumulative.inputTokens,
                 outputTokens: cumulative.outputTokens,
                 totalTokens: cumulative.totalTokens,
+                cacheReadTokens: cumulative.cacheReadTokens,
                 source: "runtime",
               });
             }
@@ -211,18 +219,34 @@ export class AiSdkAdapter implements BackendAdapter {
         }
 
         const total = await streamResult.totalUsage;
-        const finalUsage = {
-          inputTokens: total.inputTokens ?? cumulative.inputTokens,
-          outputTokens: total.outputTokens ?? cumulative.outputTokens,
-          totalTokens:
-            (total.inputTokens ?? cumulative.inputTokens) +
-            (total.outputTokens ?? cumulative.outputTokens),
-        };
+        const totalCachedIn = (total as { cachedInputTokens?: number }).cachedInputTokens;
+        const finalUsage =
+          total.inputTokens !== undefined || total.outputTokens !== undefined
+            ? (() => {
+                const cachedIn = totalCachedIn ?? cumulative.cacheReadTokens;
+                const uncachedIn = Math.max(0, (total.inputTokens ?? cumulative.inputTokens) - cachedIn);
+                const out = total.outputTokens ?? cumulative.outputTokens;
+                return {
+                  inputTokens: uncachedIn,
+                  outputTokens: out,
+                  totalTokens: uncachedIn + out + cachedIn,
+                  cacheReadTokens: cachedIn,
+                };
+              })()
+            : { ...cumulative };
 
         ch.end();
         resolveResult({ usage: finalUsage, durationMs: Date.now() - startedAt });
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        // An abort is an expected cancellation (the caller stopped the run, e.g.
+        // after a terminal tool call) — not a failure. Still report the usage we
+        // accumulated from completed steps so it isn't lost.
+        if (ac.signal.aborted) {
+          ch.end();
+          resolveResult({ usage: { ...cumulative }, durationMs: Date.now() - startedAt });
+          return;
+        }
         ch.push({ type: "error", error });
         ch.fail(error);
         rejectResult(error);

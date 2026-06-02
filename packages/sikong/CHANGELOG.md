@@ -7,6 +7,19 @@ All notable changes to `sikong` are documented here. This project adheres to
 
 ### Added
 
+- **Usage & cost accounting** (ADR 0013): a new `sikong usage [--project]
+  [--text]` command reports token usage (uncached input / output / cache-read /
+  cache-write) and estimated $ cost per task / project / workspace, plus
+  ccusage-style 5h / 7d / 30d windows. The engine records each wake's usage and
+  hired model on its chronicle entry; cost is priced from a vendored LiteLLM
+  price snapshot (`agent-loop`, refresh with `scripts/refresh-prices.ts`) — no
+  hand-maintained prices. Honest by mode: pay-per-token workers get $; subscription
+  workers and unknown models report tokens only ($ n/a). Required agent-loop
+  changes: cache-token fields on `usage`/`TokenUsage` with per-adapter mapping,
+  usage preserved on run cancellation (sikong stops a run on the terminal tool
+  call, which previously dropped usage), provider `pricing()` + exported
+  `modelPricing()`. Subscription rate-limit % (5h/weekly) is deferred — the Claude
+  SDK doesn't surface the unified rate-limit headers yet.
 - **Adversarial-dialectic design stage for the lead** (ADR 0012): the
   `development-lead` `design` stage now requires an `alternatives` field (JSON
   `[{ option, pros, why_rejected }]`) and gates `plan` entry on it, and its

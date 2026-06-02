@@ -42,3 +42,4 @@ Files use a monotonic four-digit prefix:
 | [0010](0010-optional-subtask-isolation.md) | Accepted | Optional per-subtask isolation (git worktree) at the worker boundary |
 | [0011](0011-task-dependencies.md) | Accepted | Sibling task dependencies (dependsOn) |
 | [0012](0012-adversarial-dialectic-design-stage.md) | Accepted | Adversarial-dialectic design stage for the lead (alternatives field + guard) |
+| [0013](0013-usage-and-cost-accounting.md) | Accepted | Usage & cost accounting (tokens, cache, $; subscription windows; LiteLLM prices) |
