@@ -173,7 +173,7 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
         ],
       },
       instructions:
-        "Break the work into layers and create one subtask per layer with `create_subtask` (use the `development` workflow for code changes, or `general` otherwise); each is auto-staffed. ORDER them with dependencies: give each subtask a short `key` and list its prerequisite keys in `dependsOn`, so a later layer (e.g. the CLI) starts only after the layers it builds on (e.g. the control API) finish. Do NOT fan independent-looking layers out in parallel from an empty base — they will collide. Use `isolate: true` only for subtasks that genuinely edit the same files concurrently. Delegate the layers, then request transition to wait for the team.",
+        "Break the work into layers and create one subtask per layer with `create_subtask` (use the `development` workflow for code changes, or `general` otherwise); each is auto-staffed. ORDER them with dependencies: give each subtask a short `key` and list its prerequisite keys in `dependsOn`, so a later layer (e.g. the CLI) starts only after the layers it builds on (e.g. the control API) finish. COLLISION RULE — two subtasks that may touch the SAME files must never run unordered: either chain them with `dependsOn` (preferred — it also gives a clean build order), or, when they are genuinely independent yet edit shared files, set `isolate: true` on EACH so it gets its own git worktree and you merge the branches at review. Only subtasks touching disjoint files may run unordered without isolation; never fan independent-looking layers out in parallel from an empty base — they will collide. Delegate the layers, then request transition to wait for the team.",
     },
     {
       id: "review",
