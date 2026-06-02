@@ -15,7 +15,7 @@ import type {
 import * as zod from "zod";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import type {
   BackendAdapter,
@@ -62,6 +62,14 @@ export interface ClaudeAdapterOptions {
   allowedPaths?: string[];
   /** Raw `--flag value` pairs forwarded to the underlying CLI. */
   extraArgs?: string[];
+  /**
+   * Path to the Claude Code CLI the SDK spawns. Unset ⇒ auto-resolved (env
+   * `CLAUDE_CODE_EXECUTABLE`, then a `claude` on PATH / common install dirs),
+   * falling back to the SDK's bundled binary. Set explicitly to pin one. This is
+   * what lets a `bun --compile` single-file build (which can't embed the SDK's
+   * native binary) drive claude-code via the user's installed `claude`.
+   */
+  pathToClaudeCodeExecutable?: string;
   /** Reserved: idle timeout (ms). Currently unused by the SDK transport. */
   idleTimeout?: number;
   /** Override the model's context-window size (tokens) for usage.usedRatio. */
@@ -409,7 +417,42 @@ function buildOptions(args: {
     },
     tools: { type: "preset", preset: "claude_code" },
     extraArgs: opts.extraArgs ? parseClaudeExtraArgs(opts.extraArgs) : undefined,
+    pathToClaudeCodeExecutable: resolveClaudeExecutable(opts.pathToClaudeCodeExecutable),
   };
+}
+
+/**
+ * Resolve the Claude Code CLI the SDK should spawn. Returns undefined when none
+ * is found, so the SDK falls back to its bundled binary (the dev/source path).
+ * A `bun --compile` standalone has NO bundled binary, so this is what makes the
+ * compiled `sikong` drive claude-code: it finds the user's installed `claude`.
+ * Resolution order: explicit arg → env → PATH (real file, not a shell function)
+ * → common install locations.
+ */
+function resolveClaudeExecutable(explicit?: string): string | undefined {
+  const exe = process.platform === "win32" ? "claude.exe" : "claude";
+  const candidates: string[] = [];
+  if (explicit) candidates.push(explicit);
+  const env = process.env.CLAUDE_CODE_EXECUTABLE ?? process.env.CLAUDE_CODE_PATH;
+  if (env) candidates.push(env);
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir) candidates.push(join(dir, exe));
+  }
+  const home = homedir();
+  candidates.push(
+    join(home, ".local", "bin", exe),
+    join(home, ".claude", "local", exe),
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+  );
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) return candidate;
+    } catch {
+      // unreadable candidate — skip
+    }
+  }
+  return undefined;
 }
 
 function resolveClaudeModel(model?: string): string | undefined {

@@ -5,6 +5,16 @@ All notable changes to `sikong` are documented here. This project adheres to
 
 ## Unreleased
 
+### Fixed
+
+- **The compiled `sikong` binary can now drive claude-code workers.** A
+  `bun --compile` single-file build cannot embed the Claude Agent SDK's native
+  CLI, so claude-code wakes failed with "Native CLI binary for <platform> not
+  found". The claude adapter now resolves the Claude Code executable (env
+  `CLAUDE_CODE_EXECUTABLE` → `claude` on PATH / common install dirs → the SDK's
+  bundled binary) and passes it as `pathToClaudeCodeExecutable`, so the published
+  binary uses the operator's installed `claude`. Running from source is unchanged.
+
 ### Added
 
 - **Usage & cost accounting** (ADR 0013): a new `sikong usage [--project]
