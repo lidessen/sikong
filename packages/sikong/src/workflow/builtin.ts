@@ -133,6 +133,7 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
   fields: {
     request: { type: "string", description: "The original development requirement." },
     design: { type: "string", description: "Key design decisions resolved during review (also written back to the project's design doc)." },
+    alternatives: { type: "json", description: "Adversarial record of the design: the candidate approaches considered and why each was rejected — a JSON array of { option, pros, why_rejected }." },
     plan: { type: "string", description: "How the work is broken into ordered layers to delegate." },
     summary: { type: "string", description: "Final outcome synthesized from the team's results." },
   },
@@ -141,9 +142,9 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
       id: "design",
       category: "in_progress",
       entry: { op: "always" },
-      outputFields: ["design"],
+      outputFields: ["design", "alternatives"],
       instructions:
-        "Review and refine the design BEFORE any planning or building. Read the project's design doc (e.g. DESIGN.md in the project root). Resolve its open decisions and inconsistencies (architecture, interfaces, transports, lifecycle, testing approach). UPDATE the design doc in place — add a concise 'Decisions' section capturing what you settled. Then record those key decisions in the `design` field and request transition. Block if the requirement is too unclear to design.",
+        "Review and refine the design BEFORE any planning or building — and think adversarially, not just convergently. Read the project's design doc (e.g. DESIGN.md in the project root). DIVERGE first: for the consequential decisions (architecture, language/stack, interfaces, transports, lifecycle, testing approach) identify 2-3 GENUINELY different candidate approaches, and steelman each one. Then attack your preferred choice with a pre-mortem (assume it failed — why?). Only after that CONVERGE: resolve the open decisions and inconsistencies, and UPDATE the design doc in place — add a concise 'Decisions' section capturing what you settled. Record the settled decisions in `design`, and record the seriously-considered-but-rejected approaches in `alternatives` as a JSON array of { option, pros, why_rejected } (do not pad it with strawmen — only options you actually weighed). Then request transition. Block if the requirement is too unclear to design.",
     },
     {
       id: "plan",
@@ -152,6 +153,7 @@ export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
         op: "and",
         all: [
           { op: "field", field: "design", cmp: "exists" },
+          { op: "field", field: "alternatives", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },

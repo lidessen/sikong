@@ -7,6 +7,14 @@ All notable changes to `sikong` are documented here. This project adheres to
 
 ### Added
 
+- **Adversarial-dialectic design stage for the lead** (ADR 0012): the
+  `development-lead` `design` stage now requires an `alternatives` field (JSON
+  `[{ option, pros, why_rejected }]`) and gates `plan` entry on it, and its
+  instructions demand divergent-then-convergent reasoning (steelman 2-3
+  candidates, pre-mortem the chosen one). The rejected options are recorded in
+  durable state so the lead's consequential calls are auditable. Field+guard
+  enforce presence/shape/audit; the instructions induce the thinking. Scoped to
+  the lead only — the child `development` design stay lightweight.
 - **Sibling task dependencies** (ADR 0011): `create_subtask` accepts `key` and
   `dependsOn` (sibling keys); the engine runs a dependent only after all its
   prerequisites are terminal (resolving keys→ids within the delegate pass, and

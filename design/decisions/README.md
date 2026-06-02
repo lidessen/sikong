@@ -41,3 +41,4 @@ Files use a monotonic four-digit prefix:
 | [0009](0009-lead-creates-team.md) | Accepted | A lead task creates and coordinates a team (via subtasks) |
 | [0010](0010-optional-subtask-isolation.md) | Accepted | Optional per-subtask isolation (git worktree) at the worker boundary |
 | [0011](0011-task-dependencies.md) | Accepted | Sibling task dependencies (dependsOn) |
+| [0012](0012-adversarial-dialectic-design-stage.md) | Accepted | Adversarial-dialectic design stage for the lead (alternatives field + guard) |

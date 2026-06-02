@@ -896,6 +896,7 @@ describe("lead creates a team (ADR 0009)", () => {
         // the lead
         if (ctx.stageId === "design") {
           await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
           await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
@@ -947,6 +948,7 @@ describe("lead creates a team (ADR 0009)", () => {
         }
         if (ctx.stageId === "design") {
           await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
           await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
@@ -1001,6 +1003,7 @@ describe("lead creates a team (ADR 0009)", () => {
         }
         if (ctx.stageId === "design") {
           await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
           await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
@@ -1065,6 +1068,7 @@ describe("lead creates a team (ADR 0009)", () => {
       return scriptLoop(async (input) => {
         if (ctx.stageId === "design") {
           await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
           await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
@@ -1115,6 +1119,7 @@ describe("lead creates a team (ADR 0009)", () => {
         }
         if (ctx.stageId === "design") {
           await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
           await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
