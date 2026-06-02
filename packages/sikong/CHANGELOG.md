@@ -17,6 +17,10 @@ All notable changes to `sikong` are documented here. This project adheres to
 
 ### Added
 
+- **`sikong watch` — live terminal dashboard.** Redraws the workspace overview
+  (projects, task counts, recent activity) plus the token-usage + cost panel
+  every `--interval` seconds (default 3); `--project` scopes it, `--once` renders
+  a single frame. Read-only (polls the workspace home), ctrl-c to exit.
 - **Usage & cost accounting** (ADR 0013): a new `sikong usage [--project]
   [--text]` command reports token usage (uncached input / output / cache-read /
   cache-write) and estimated $ cost per task / project / workspace, plus

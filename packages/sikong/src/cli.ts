@@ -44,9 +44,9 @@ const VALUE_FLAGS = new Set([
   "--root", "--name", "--model", "--worker", "--runtime", "--provider", "--desc",
   "--permission", "--permission-mode", "--wake-timeout",
   "--after", "--timeout", "--poll",
-  "--parent",
+  "--parent", "--interval",
 ]);
-const BOOL_FLAGS = new Set(["--json", "--text", "--human"]);
+const BOOL_FLAGS = new Set(["--json", "--text", "--human", "--once"]);
 const fail = (msg: string, code = 2): never => {
   console.error(msg);
   process.exit(code);
@@ -330,6 +330,52 @@ switch (cmd) {
       break;
     }
     console.log(renderUsage(report, projectId ? { scope: `project ${projectId}` } : {}));
+    break;
+  }
+  case "watch": {
+    // Live terminal dashboard: overview + token/cost + recent activity, redrawn
+    // every interval. Read-only (polls ~/.sikong); ctrl-c to exit. `--once`
+    // renders a single frame (scriptable / testable).
+    const intervalSec = Math.max(1, Number(flag("--interval") ?? "3"));
+    const projectId = flag("--project");
+    const once = hasFlag("--once");
+    const projectsStore = new JsonProjectStore(dir);
+    const workersStore = new JsonWorkerStore(dir);
+    const projectionsStore = new JsonWorkspaceProjectionStore(dir);
+    const chronicleStore = new JsonWorkspaceChronicleStore(dir);
+    const defaultWorkerId = await getDefaultWorker(dir);
+    const tick = async () => {
+      const overview = await workspaceOverview(
+        { projects: projectsStore, workers: workersStore, projections: projectionsStore, chronicle: chronicleStore },
+        {
+          ...(projectId ? { projectId } : {}),
+          ...(defaultWorkerId ? { defaultWorkerId } : {}),
+          activityLimit: 8,
+        },
+      );
+      const tasks = await projectionsStore.query();
+      const taskProject = new Map(tasks.map((t) => [t.id, t.projectId] as const));
+      const all = await chronicleStore.recent({ type: ["wake.end", "wake.error"], limit: 1_000_000 });
+      const entries = projectId
+        ? all.filter((e) => e.taskId !== undefined && taskProject.get(e.taskId) === projectId)
+        : all;
+      const usageReport = summarizeUsage(entries, taskProject, Date.now());
+      if (!once) process.stdout.write("\x1b[2J\x1b[H");
+      console.log(
+        `sikong watch — ${new Date().toLocaleTimeString()}${once ? "" : ` · every ${intervalSec}s · ctrl-c to exit`}\n`,
+      );
+      console.log(renderOverview(overview, { dir }));
+      console.log("\n" + renderUsage(usageReport, projectId ? { scope: `project ${projectId}` } : {}));
+    };
+    await tick();
+    if (once) break;
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => void tick().catch(() => {}), intervalSec * 1000);
+      process.on("SIGINT", () => {
+        clearInterval(timer);
+        resolve();
+      });
+    });
     break;
   }
   case "inspect": {
@@ -636,6 +682,7 @@ switch (cmd) {
       "  task <id> [--text]\n" +
       "  chronicle [--task <id>] [-n <N>] [--text]\n" +
       "  usage [--project <id>] [--text]        token usage + cost (5h/7d/30d windows)\n" +
+      "  watch [--project <id>] [--interval <s>] [--once]   live dashboard (overview + usage)\n" +
       "  inspect wait [--task <id>] [--after <seq>] [--timeout <ms>] [--text]\n" +
       "  --json is accepted for compatibility; agent-facing commands already default to JSON\n" +
         "  --dir <path>   workspace dir override ($SIKONG_HOME or ~/.sikong by default; legacy $SIKONG_DIR still works)",
