@@ -15,7 +15,7 @@ import {
   type ToolSet,
 } from "agent-loop";
 import { WorkflowEngine, type LoopFactory } from "./engine";
-import { DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "../workflow/builtin";
+import { DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "../workflow/builtin";
 import type { WorkflowDef } from "../workflow/types";
 import {
   MemoryChronicleStore,
@@ -879,6 +879,56 @@ describe("WorkflowEngine wake cycle", () => {
     expect(commitSystem).not.toContain("hidden");
     const wakeCommit = (await chronicle.recent({ taskId: "facts", type: "wake.commit", limit: 10 }))[0];
     expect(String(JSON.stringify(wakeCommit?.data?.toolCallFacts))).toContain("vitest run");
+  });
+});
+
+describe("lead creates a team (ADR 0009)", () => {
+  test("a lead plans, delegates to a child, then reviews the team's result", async () => {
+    let leadReviewSystem = "";
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === "simple-commit") {
+          // a team member: do the work and report a structured summary
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "child handled part 1" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "done part 1" }, {});
+          return;
+        }
+        // the lead
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "One piece: part 1." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "delegate") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "do part 1" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        // review — the lead must see its team here
+        leadReviewSystem = input.system ?? "";
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "Team completed the effort." }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "reviewed" }, {});
+      });
+    const engine = newEngine(loop, [DEVELOPMENT_LEAD_WORKFLOW, SIMPLE_COMMIT]);
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development-lead",
+      taskId: "lead1",
+      fields: { request: "ship the effort" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("lead1");
+    expect(task?.status).toBe("done");
+    expect(task?.fields.summary).toBe("Team completed the effort.");
+    expect(task?.childIds.length).toBe(1);
+    const childId = task!.childIds[0]!;
+    expect((await engine.getTask(childId))?.status).toBe("done");
+    // the lead saw its team — id, status, and the child's structured summary — in review
+    expect(leadReviewSystem).toContain("## Team (your subtasks)");
+    expect(leadReviewSystem).toContain(childId);
+    expect(leadReviewSystem).toContain("child handled part 1");
   });
 });
 

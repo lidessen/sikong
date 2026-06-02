@@ -116,3 +116,72 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
     },
   ],
 };
+
+/**
+ * The lead workflow (ADR 0009): a 负责人 plans an effort, breaks it into a team of
+ * child tasks (each auto-staffed by capability), is re-woken as they finish,
+ * reviews the Team section, and synthesizes the outcome. `create_subtask` is
+ * enabled ONLY on the delegate stage, so ordinary tasks can't fan out. Coordination
+ * reuses `childrenDone` + parent re-wake — no new engine mechanism.
+ */
+export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
+  id: "development-lead",
+  version: "1",
+  name: "Development Lead",
+  description: "Lead a development effort: plan it, delegate the pieces to a team, review their results, and report.",
+  workerRole: "coding",
+  fields: {
+    request: { type: "string", description: "The original development requirement." },
+    plan: { type: "string", description: "How the work is broken into independent pieces to delegate." },
+    summary: { type: "string", description: "Final outcome synthesized from the team's results." },
+  },
+  stages: [
+    {
+      id: "plan",
+      category: "in_progress",
+      entry: { op: "always" },
+      outputFields: ["plan"],
+      instructions:
+        "Inspect the request and break it into independent pieces of work. Record `plan` describing the breakdown, then request transition. Block if the request needs lead clarification.",
+    },
+    {
+      id: "delegate",
+      category: "in_progress",
+      tools: ["create_subtask", "append_note", "request_transition", "block", "cancel"],
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "plan", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      instructions:
+        "Create one subtask per planned piece of work with `create_subtask` (use the `development` workflow for code changes, or `general` otherwise); each runs independently and is auto-staffed. Delegate at least one, then request transition to wait for the team.",
+    },
+    {
+      id: "review",
+      category: "in_progress",
+      outputFields: ["summary"],
+      entry: {
+        op: "and",
+        all: [
+          { op: "childrenDone" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      instructions:
+        "Read the Team section and review what each subtask returned. Synthesize a one-line `summary` of the overall outcome and request transition. If the effort failed or needs another round of work, call `block` with the concrete reason so the lead can be re-directed.",
+    },
+    {
+      id: "done",
+      category: "done",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "summary", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+    },
+  ],
+};

@@ -7,6 +7,15 @@ All notable changes to `wakespace` are documented here. This project adheres to
 
 ### Added
 
+- **A lead task can build and coordinate a team** (ADR 0009). New built-in
+  `development-lead` workflow: a 负责人 plans an effort, delegates the pieces to a
+  team of child tasks (each auto-staffed by capability), is re-woken as they finish,
+  reviews their results, and synthesizes the outcome — reusing `create_subtask` +
+  `childrenDone` + parent re-wake, no new engine mechanism. A lead's wake now shows
+  a read-only `## Team` section (each subtask's status + summary) so it can review
+  and re-plan; re-planning stays task-level (spawn/cancel), never mid-task injection.
+  `create_subtask` remains opt-in per stage (enabled only on the lead's delegate
+  stage). Select it with `create "<req>" --workflow development-lead [--worker <id>]`.
 - **Wakespace now staffs tasks itself** (ADR 0008). The operator only provisions the
   workforce once — set a provider key (e.g. `DEEPSEEK_API_KEY`/`ANTHROPIC_API_KEY`)
   and/or install `claude`; wakespace auto-discovers the roster and hires per task.

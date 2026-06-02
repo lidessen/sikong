@@ -1,5 +1,14 @@
-import type { StageDef, WorkflowDef, Task } from "../workflow/types";
+import type { StageDef, TaskStatus, WorkflowDef, Task } from "../workflow/types";
 import { COMMAND_TOOL_NAMES, type CommandToolName } from "./command-tools";
+
+/** A compact, read-only snapshot of a child task shown to its lead's wake (ADR 0009). */
+export interface TeamMember {
+  id: string;
+  workflowId: string;
+  status: TaskStatus;
+  summary?: string;
+  request?: string;
+}
 
 export interface ToolCallFact {
   tool: string;
@@ -41,6 +50,7 @@ export function buildSystem(
   stage: StageDef | undefined,
   workerToolNames: readonly string[] = [],
   projectMemory = "",
+  team: readonly TeamMember[] = [],
 ): string {
   const lines: string[] = [
     `# Workflow: ${wf.name}`,
@@ -62,6 +72,19 @@ export function buildSystem(
         `- ${name} (${def?.type})${def?.description ? ` — ${def.description}` : ""}: ${renderValue(task.fields[name])}`,
       );
     }
+  }
+
+  if (team.length) {
+    lines.push("", "## Team (your subtasks)");
+    for (const m of team) {
+      const parts = [`- ${m.id} (${m.workflowId}) — ${m.status}`];
+      if (m.summary) parts.push(`summary: ${renderValue(m.summary)}`);
+      else if (m.request) parts.push(`request: ${renderValue(m.request)}`);
+      lines.push(parts.join("  "));
+    }
+    lines.push(
+      "Review what your subtasks returned. To take it further, create more subtasks or finish this stage — never reach into a running subtask.",
+    );
   }
 
   const toolNames = stageToolNames(stage);

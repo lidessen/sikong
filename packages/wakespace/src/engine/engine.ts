@@ -34,7 +34,7 @@ import type {
 import type { Project } from "../project";
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
-import { buildCommitSystem, buildPrompt, buildSystem, type ToolCallFact } from "./prompt";
+import { buildCommitSystem, buildPrompt, buildSystem, type TeamMember, type ToolCallFact } from "./prompt";
 
 function isTerminal(status: TaskStatus): boolean {
   return status === "done" || status === "cancelled";
@@ -639,8 +639,9 @@ export class WorkflowEngine {
             providerOptions: { deepseek: { thinking: { type: "disabled" } } },
           }
         : undefined;
+    const team = await this.teamSnapshots(task);
     const run = loop.run({
-      system: buildSystem(task, wf, stage, workerToolNames, project?.memory),
+      system: buildSystem(task, wf, stage, workerToolNames, project?.memory, team),
       prompt: buildPrompt(task, wf, stage),
       tools,
       signal: controller.signal,
@@ -1004,6 +1005,29 @@ export class WorkflowEngine {
     if (task.childIds.length === 0) return [];
     const kids = await Promise.all(task.childIds.map((id) => this.o.projections.get(id)));
     return kids.flatMap((k) => (k ? [k.status] : []));
+  }
+
+  /**
+   * Read-only snapshot of a lead's team (its children) for its wake prompt
+   * (ADR 0009): id, workflow, status, and the child's summary/request fields so
+   * the lead can review and re-plan. Live projection read; not a durable event.
+   */
+  private async teamSnapshots(task: Task): Promise<TeamMember[]> {
+    if (task.childIds.length === 0) return [];
+    const kids = await Promise.all(task.childIds.map((id) => this.o.projections.get(id)));
+    return kids.flatMap((k) =>
+      k
+        ? [
+            {
+              id: k.id,
+              workflowId: k.workflowId,
+              status: k.status,
+              ...(typeof k.fields.summary === "string" && k.fields.summary ? { summary: k.fields.summary } : {}),
+              ...(typeof k.fields.request === "string" && k.fields.request ? { request: k.fields.request } : {}),
+            },
+          ]
+        : [],
+    );
   }
 
   private async loadPinned(taskId: string): Promise<{ task: Task; wf: WorkflowDef }> {
