@@ -100,7 +100,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
       },
       outputFields: ["verification", "summary"],
       instructions:
-        "Verify the implementation with appropriate checks. Record `verification` (what you checked and the results) and `summary`, then request transition. Block if verification fails or cannot run.",
+        "Verify the implementation — adversarially, not just the happy path. Run the project's full checks (build, vet/lint, tests). Your tests must cover EDGE CASES and realistic inputs, never only convenient happy-path values: exercise the actual USER-FACING entry point end-to-end (the CLI command / API / public call a user would actually run), plus boundary and unusual inputs that apply (empty, special characters, multi-token, reserved words, large, concurrent, error paths). If a behavior is user-facing, smoke it the way a user invokes it — green unit tests over safe inputs are not enough. Record `verification` (what you checked, the exact commands run, and their results) and `summary`, then request transition. Block if verification fails or cannot run.",
     },
     {
       id: "done",

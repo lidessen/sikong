@@ -17,6 +17,11 @@ All notable changes to `sikong` are documented here. This project adheres to
 
 ### Changed
 
+- **Verify stage demands adversarial tests** (ADR 0015). The `development`
+  workflow's verify instructions now require edge-case/boundary tests and an
+  end-to-end smoke of the real user-facing entry point (not just green happy-path
+  units) — prompted by dogfood tasks that shipped passing-but-shallow tests
+  (e.g. a search query that crashed in real use despite a green suite).
 - **Wake cost optimization** (ADR 0014). (1) DeepSeek workers run `deepseek-v4-flash`
   at `CLAUDE_CODE_EFFORT_LEVEL=max` with flash subagents + AUTH_TOKEN auth. (2) The
   wake `system` prompt is now prefix-stable (role + stage instructions + field
