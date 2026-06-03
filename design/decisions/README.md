@@ -45,3 +45,4 @@ Files use a monotonic four-digit prefix:
 | [0013](0013-usage-and-cost-accounting.md) | Accepted | Usage & cost accounting (tokens, cache, $; subscription windows; LiteLLM prices) |
 | [0014](0014-wake-cost-optimization.md) | Accepted | Wake cost optimization (flash@max, prefix-stable wakes, pro-on-escalation) |
 | [0015](0015-verify-stage-demands-edge-case-tests.md) | Accepted | Verify stage demands adversarial/edge-case tests + a real-user-path smoke |
+| [0016](0016-sikong-self-iteration-loop.md) | Accepted | sikong self-iteration loop (sikong improves sikong; promotion needs explicit lead approval) |
