@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "W=\"$(ls -t \"$HOME/.shilu/collections/worklog/entries/\"*.md 2>/dev/null | head -1)\"; if [ -n \"$W\" ]; then echo \"## Latest shilu worklog (auto-loaded — keep this work state in mind):\"; cat \"$W\"; fi",
+            "statusMessage": "Loading latest shilu worklog"
+          }
+        ]
+      }
+    ]
+  }
+}

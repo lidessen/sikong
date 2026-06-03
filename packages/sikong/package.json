@@ -19,6 +19,8 @@
     "release:dry": "bun scripts/release.ts --dry-run",
     "prepublishOnly": "bun run typecheck && bun run test",
     "smoke:deepseek-tools": "bun smokes/smoke-deepseek-project-tools.ts",
+    "self-smoke": "bun scripts/self-smoke.ts",
+    "self-smoke:keep": "bun scripts/self-smoke.ts --keep-tmp",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bunx --bun vitest run",
     "test:watch": "bunx --bun vitest"
