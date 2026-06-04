@@ -123,7 +123,7 @@ describe("workspace (CLI wiring)", () => {
 
       const development = ws.registry.get("development");
       expect(development?.fields.plan).toBeDefined();
-      expect(development?.stages.map((s) => s.id)).toEqual(["plan", "design", "implement", "verify", "done"]);
+      expect(development?.stages.map((s) => s.id)).toEqual(["design", "plan", "build", "verify", "done"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -194,6 +194,9 @@ describe("workspace (CLI wiring)", () => {
       fields: {},
       stages: [
         { id: "split", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask"] },
+        // Intermediate stage prevents vacuous pre-advance through childrenDone
+        // (now vacuously true with zero children) before any child is spawned.
+        { id: "wait", category: "in_progress", entry: { op: "hasEvent", eventType: "subtask.created" } },
         { id: "done", category: "done", entry: { op: "childrenDone" } },
       ],
     };

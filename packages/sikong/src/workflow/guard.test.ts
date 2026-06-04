@@ -39,16 +39,16 @@ describe("evalGuard", () => {
     expect(evalGuard(g, env())).toBe(false);
   });
 
-  test("childrenDone needs ≥1 child, all terminal (cancelled counts)", () => {
-    expect(evalGuard({ op: "childrenDone" }, env({ children: [] }))).toBe(false);
+  test("childrenDone — vacuously true with no children, true when all terminal (cancelled counts)", () => {
+    expect(evalGuard({ op: "childrenDone" }, env({ children: [] }))).toBe(true);
     expect(evalGuard({ op: "childrenDone" }, env({ children: ["done", "cancelled"] }))).toBe(true);
     expect(evalGuard({ op: "childrenDone" }, env({ children: ["done", "in_progress"] }))).toBe(false);
   });
 
-  test("childrenSucceeded requires all done — a cancelled child fails it", () => {
+  test("childrenSucceeded — vacuously true with no children, requires all done otherwise", () => {
     expect(evalGuard({ op: "childrenSucceeded" }, env({ children: ["done", "done"] }))).toBe(true);
     expect(evalGuard({ op: "childrenSucceeded" }, env({ children: ["done", "cancelled"] }))).toBe(false);
-    expect(evalGuard({ op: "childrenSucceeded" }, env({ children: [] }))).toBe(false);
+    expect(evalGuard({ op: "childrenSucceeded" }, env({ children: [] }))).toBe(true);
   });
 
   test("and / or / not compose", () => {

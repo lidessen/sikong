@@ -83,7 +83,14 @@ export function apply(
       ];
     case "append_note":
       return [mk("note.appended", { text: command.text })];
-    case "create_subtask":
+    case "create_subtask": {
+      // Enforce maxTeamDepth: a task whose depth already meets or exceeds the
+      // workflow's cap cannot spawn further subtasks.
+      const cap = wf.maxTeamDepth;
+      if (cap !== undefined && task.depth >= cap)
+        reject(
+          `max team depth (${cap}) reached — task is at depth ${task.depth} and cannot create more subtasks`,
+        );
       // The engine mints the child id before recording this; a blank id would be
       // a link to no task (and wedge a childrenDone gate forever).
       if (!command.childId.trim()) reject("create_subtask requires a non-empty child id (engine-minted)");
@@ -96,6 +103,7 @@ export function apply(
           ...(command.key ? { key: command.key } : {}),
         }),
       ];
+    }
     case "block":
       if (task.status === "blocked") reject(`task ${task.id} is already blocked`);
       return [mk("task.blocked", { reason: command.reason })];
@@ -196,6 +204,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
       fields: isRecord(p.fields) ? { ...p.fields } : {},
       status: statusForStage(wf, stageId),
       childIds: [],
+      depth: typeof p.depth === "number" ? p.depth : 0,
       cursor: seq ?? 0,
       createdAt: ts ?? 0,
       updatedAt: ts ?? 0,
@@ -336,6 +345,8 @@ export function initTask(params: {
   dependsOn?: readonly string[];
   fields?: Record<string, unknown>;
   source?: EventSource;
+  /** Depth in the team tree — set by the engine from parent.depth + 1. */
+  depth?: number;
 }): NewEvent[] {
   const wf = params.workflow;
   const s0 = wf.stages[0];
@@ -347,6 +358,7 @@ export function initTask(params: {
     workflowVersion: wf.version,
     stageId: s0.id,
     fields: params.fields ?? {},
+    depth: params.depth ?? 0,
   };
   if (params.parentId) payload.parentId = params.parentId;
   if (params.workerId) payload.workerId = params.workerId;

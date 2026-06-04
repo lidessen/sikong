@@ -89,6 +89,13 @@ export interface WorkflowDef {
   fields: FieldsSchema;
   /** Ordered; `stages[0]` is the initial stage entered at creation. */
   stages: readonly StageDef[];
+  /**
+   * Caps the depth of the team tree rooted at this workflow. A task at D >=
+   * maxTeamDepth cannot spawn subtasks — its `create_subtask` commands are
+   * rejected at the command level. Unset ⇒ no limit. Root tasks (depth 0) are
+   * always allowed regardless of this cap — it only gates subtree growth.
+   */
+  maxTeamDepth?: number;
 }
 
 // ---- Task instance --------------------------------------------------------
@@ -115,6 +122,8 @@ export interface Task {
   dependsOn?: readonly string[];
   parentId?: string;
   childIds: readonly string[];
+  /** Depth in the team tree: 0 for root, parent.depth + 1 for children. */
+  depth: number;
   /** `seq` of the last event folded into this projection. */
   cursor: number;
   createdAt: number;

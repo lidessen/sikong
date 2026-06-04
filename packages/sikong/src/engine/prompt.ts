@@ -59,9 +59,9 @@ export function buildSystem(
     `# Workflow: ${wf.name}`,
     wf.description,
     "",
-    `You are advancing task ${task.id}, currently in stage "${task.stageId}"${
-      stage ? ` (${stage.category})` : ""
-    }.`,
+    `You are advancing task ${task.id} (depth ${task.depth}${
+      task.parentId ? `, child of ${task.parentId}` : ""
+    }), currently in stage "${task.stageId}"${stage ? ` (${stage.category})` : ""}.`,
   ];
   if (stage?.instructions) lines.push("", "## Stage", stage.instructions);
   if (projectMemory.trim()) lines.push("", "## Project memory", projectMemory.trim());

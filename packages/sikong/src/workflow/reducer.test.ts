@@ -62,6 +62,31 @@ describe("project / initTask", () => {
   test("empty timeline throws", () => {
     expect(() => project([], WF)).toThrow();
   });
+
+  test("depth defaults to 0 for root tasks", () => {
+    const t = initial();
+    expect(t.depth).toBe(0);
+    expect(t.parentId).toBeUndefined();
+  });
+
+  test("depth is set from initTask params", () => {
+    const events = stamp(initTask({ taskId: "t2", projectId: "p", workflow: WF, depth: 2 }));
+    const t = project(events, WF);
+    expect(t.depth).toBe(2);
+  });
+
+  test("depth propagates through applyEventsToTask with subtask.created", () => {
+    let t = initial();
+    const childEvent = {
+      type: "subtask.created" as const,
+      taskId: "t",
+      source: "worker" as const,
+      payload: { childId: "c1", workflowId: "general", input: "x" },
+    };
+    t = applyEventsToTask(t, stamp([childEvent]), WF);
+    expect(t.childIds).toEqual(["c1"]);
+    expect(t.depth).toBe(0); // parent depth unchanged
+  });
 });
 
 describe("apply (the aggregate)", () => {
@@ -119,6 +144,41 @@ describe("apply (the aggregate)", () => {
     // unblock is only legal once block (the prior command) has taken effect.
     const events = reduceCommands(initial(), WF, [{ kind: "block", reason: "x" }, { kind: "unblock" }]);
     expect(events.map((e) => e.type)).toEqual(["task.blocked", "task.unblocked"]);
+  });
+
+  test("create_subtask beyond maxTeamDepth is rejected", () => {
+    const cappedWf: WorkflowDef = {
+      ...WF,
+      id: "capped",
+      version: "1",
+      maxTeamDepth: 2,
+    };
+    // Build a task at depth 2 (one below the cap — can still create children)
+    const t1 = project(
+      stamp(initTask({ taskId: "t1", projectId: "p", workflow: cappedWf, depth: 1 })),
+      cappedWf,
+    );
+    const ev = apply(t1, cappedWf, {
+      kind: "create_subtask",
+      childId: "c1",
+      workflowId: "general",
+      input: "x",
+    });
+    expect(ev[0]?.type).toBe("subtask.created");
+
+    // Build a task at depth 2 (equal to maxTeamDepth — create_subtask rejected)
+    const t2 = project(
+      stamp(initTask({ taskId: "t2", projectId: "p", workflow: cappedWf, depth: 2 })),
+      cappedWf,
+    );
+    expect(() =>
+      apply(t2, cappedWf, {
+        kind: "create_subtask",
+        childId: "c2",
+        workflowId: "general",
+        input: "y",
+      }),
+    ).toThrow(CommandRejectedError);
   });
 });
 

@@ -47,6 +47,13 @@ export function validateWorkflow(def: WorkflowDef, opts: ValidateOptions = {}): 
         push("enum-without-values", `enum field "${name}" has no allowed values`, { field: name });
     }
 
+  // maxTeamDepth: if set, must be a positive integer (>= 1). 0 would block all
+  // delegation — if you want no delegation just omit the field.
+  if (def.maxTeamDepth !== undefined) {
+    if (!Number.isInteger(def.maxTeamDepth) || def.maxTeamDepth < 1)
+      push("invalid-max-team-depth", `maxTeamDepth must be a positive integer (>= 1), got ${JSON.stringify(def.maxTeamDepth)}`);
+  }
+
   // Stages
   if (def.stages.length === 0) {
     push("no-stages", "workflow has no stages");

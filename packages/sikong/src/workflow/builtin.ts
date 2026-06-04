@@ -164,50 +164,47 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
   ],
 };
 
+/**
+ * The merged adaptive development workflow (ADR 0020): a single workflow for
+ * both SOLO and TEAM scopes — the agent discovers the right scale at the build
+ * stage rather than guessing at intake time.
+ *
+ * Stages: design → plan → build → verify → done.
+ * - `create_subtask` is available on `build` and `verify` stages.
+ * - `childrenDone` is vacuously true with no children, so the solo path flows
+ *   through uniform guards.
+ * - `maxTeamDepth` (default 2) caps how many tiers of delegation are allowed
+ *   (root depth 0 → lead at depth 1 → workers at depth 2, who cannot fan out).
+ */
 export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
   id: "development",
-  version: "1",
+  version: "2",
   name: "Development",
-  description: "Plan, design, implement, and verify a project code or documentation change.",
-  // Staff coding work to a coding-capable worker (a real coding agent) when one is
-  // available; falls back to any worker otherwise. See ADR 0008.
+  description: "Development (adapts to solo or team scope): design, plan, build, verify, and deliver.",
   workerRole: "coding",
+  maxTeamDepth: 2,
   fields: {
     request: { type: "string", description: "The original development request." },
-    plan: { type: "string", description: "Bounded implementation plan and acceptance criteria." },
-    design: { type: "string", description: "Design notes, tradeoffs, and selected approach." },
-    implementation: { type: "string", description: "What was changed during implementation." },
+    design: { type: "string", description: "Design decisions, tradeoffs, and selected approach." },
+    alternatives: { type: "json", description: "Adversarial record of the design: the candidate approaches considered and why each was rejected — a JSON array of { option, pros, why_rejected }." },
+    plan: { type: "string", description: "Bounded implementation plan and acceptance criteria. Decide solo vs team." },
+    implementation: { type: "string", description: "What was changed during implementation (set when working solo)." },
     changedFiles: { type: "json", description: "Array of project file paths changed by the implementation." },
     verification: { type: "string", description: "Verification commands, results, and any residual risk." },
     summary: { type: "string", description: "One-line final outcome." },
   },
   stages: [
     {
-      id: "plan",
-      category: "in_progress",
-      entry: { op: "always" },
-      outputFields: ["plan"],
-      instructions:
-        "Inspect the request and relevant project context. Set `plan` with the bounded approach and acceptance criteria, then request transition. Block if the request needs lead clarification.",
-    },
-    {
       id: "design",
       category: "in_progress",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "plan", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["design"],
+      entry: { op: "always" },
+      outputFields: ["design", "alternatives"],
       instructions:
-        "Turn the plan into a concrete design. Set `design` with the chosen approach and important tradeoffs, then request transition.",
+        "Review and refine the design BEFORE any planning or building — and think adversarially, not just convergently. Read existing design documents in the project. DIVERGE first: for consequential decisions (architecture, stack, interfaces, transports, lifecycle, testing approach) identify 2-3 genuinely different candidate approaches and steelman each one. Then attack your preferred choice with a pre-mortem (assume it failed — why?). For trivial decisions a light treatment is fine. CONVERGE: resolve open decisions and update design docs. Record the settled decisions in `design`, and record seriously-considered-but-rejected approaches in `alternatives` as a JSON array of { option, pros, why_rejected } (do not pad it with strawmen — only options you actually weighed). Then request transition. Block if the requirement is too unclear to design.",
     },
     {
-      id: "implement",
+      id: "plan",
       category: "in_progress",
-      outputFields: ["implementation", "changedFiles"],
       entry: {
         op: "and",
         all: [
@@ -215,23 +212,45 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
+      outputFields: ["plan"],
       instructions:
-        "Implement the designed change. Record `implementation` (what you changed) and set `changedFiles` to a JSON array of the changed project file paths, then request transition. Block with a concrete reason if the change cannot be made.",
+        "Turn the refined design into a bounded plan with acceptance criteria. This is where you decide **solo vs team**: if the work is small enough for you alone, say so in the plan and proceed to build directly. If it needs a team, describe the layers to delegate. Set `plan` with the approach, then request transition. Block if the request needs lead clarification.",
+    },
+    {
+      id: "build",
+      category: "in_progress",
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "plan", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["implementation", "changedFiles"],
+      instructions:
+        "The adaptive stage — implement the change directly OR delegate via `create_subtask`. For solo work: write the code, record `implementation` (what you changed) and set `changedFiles` to a JSON array of the changed project file paths, then request transition. For delegation (planned team effort): create one subtask per layer with `create_subtask`, respecting dependsOn ordering and the collision rule for shared-file edits (two subtasks touching the same files must either chain with dependsOn or isolate each via isolate:true). After delegating, request transition to wait for the team. Block with a concrete reason if the change cannot be made.",
     },
     {
       id: "verify",
       category: "in_progress",
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
       entry: {
         op: "and",
         all: [
-          { op: "field", field: "implementation", cmp: "exists" },
-          { op: "field", field: "changedFiles", cmp: "exists" },
+          {
+            op: "or",
+            any: [
+              { op: "field", field: "implementation", cmp: "exists" },
+              { op: "childrenDone" },
+            ],
+          },
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
       outputFields: ["verification", "summary"],
       instructions:
-        "Verify the implementation — adversarially, not just the happy path. Run the project's full checks (build, vet/lint, tests). Your tests must cover EDGE CASES and realistic inputs, never only convenient happy-path values: exercise the actual USER-FACING entry point end-to-end (the CLI command / API / public call a user would actually run), plus boundary and unusual inputs that apply (empty, special characters, multi-token, reserved words, large, concurrent, error paths). If a behavior is user-facing, smoke it the way a user invokes it — green unit tests over safe inputs are not enough. Record `verification` (what you checked, the exact commands run, and their results) and `summary`, then request transition. Block if verification fails or cannot run.",
+        "Verify the implementation adversarially (ADR 0015) AND/OR review+merge the team's results. Run the project's full checks (build, vet/lint, tests) covering EDGE CASES and real-user-path smokes — not only happy-path values. If the team used isolated worktrees, merge each branch with git now. You MAY create follow-up subtasks with `create_subtask` for multi-round efforts (set no summary to be re-woken). Record `verification` (what you checked, exact commands, and results) and set `summary` as a one-line outcome, then request transition. Block if verification fails or cannot run.",
     },
     {
       id: "done",
@@ -239,8 +258,8 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
       entry: {
         op: "and",
         all: [
-          { op: "field", field: "verification", cmp: "exists" },
           { op: "field", field: "summary", cmp: "exists" },
+          { op: "childrenDone" },
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
@@ -373,13 +392,23 @@ export const RELEASE_WORKFLOW: WorkflowDef = {
 };
 
 /**
- * The lead workflow (ADR 0009): a 负责人 plans an effort, breaks it into a team of
- * child tasks (each auto-staffed by capability), is re-woken as they finish,
- * reviews the Team section, and synthesizes the outcome. `create_subtask` is
- * enabled ONLY on the delegate stage, so ordinary tasks can't fan out. Coordination
- * reuses `childrenDone` + parent re-wake — no new engine mechanism.
+ * Alias for the development workflow, kept for one transition release so that
+ * existing tooling referencing `development-lead` continues to work. After one
+ * release this constant is removed and only `DEVELOPMENT_WORKFLOW` remains.
+ * (ADR 0020)
  */
 export const DEVELOPMENT_LEAD_WORKFLOW: WorkflowDef = {
+  ...DEVELOPMENT_WORKFLOW,
+  id: "development-lead",
+};
+
+/**
+ * The original `development-lead@v1` definition, retained so that tasks already
+ * pinned to `development-lead@v1` can still load and replay their timeline.
+ * Registration happens in `workspace.ts` alongside the v2 alias. Deleted after
+ * one transition release. (ADR 0020)
+ */
+export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
   id: "development-lead",
   version: "1",
   name: "Development Lead",

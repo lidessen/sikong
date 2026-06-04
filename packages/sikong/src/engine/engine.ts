@@ -405,6 +405,14 @@ export interface WorkflowEngineOptions {
    * a stuck task can't wedge a parent's `childrenDone` forever. Default 1 (one retry).
    */
   maxWakeRetries?: number;
+  /**
+   * Default max team depth for workflows that don't set their own `maxTeamDepth`.
+   * A task at D >= maxTeamDepth cannot spawn subtasks — its `create_subtask`
+   * commands are rejected. The per-workflow cap (when set) takes precedence if it
+   * is more restrictive. When unset, workflows without their own maxTeamDepth
+   * have no engine-enforced depth limit (Infinity). Default 2 in `openWorkspace`.
+   */
+  maxTeamDepth?: number;
 }
 
 /**
@@ -442,6 +450,8 @@ export class WorkflowEngine {
     taskId?: string;
     fields?: Record<string, unknown>;
     parentId?: string;
+    /** Depth in the team tree — computed from parent.depth + 1 when spawning subtasks. */
+    depth?: number;
     /** The hired worker (model/runtime) for this task; falls back to project/workspace defaults. */
     workerId?: string;
     /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary. */
@@ -469,6 +479,7 @@ export class WorkflowEngine {
         workflow: wf,
         ...(params.fields ? { fields: params.fields } : {}),
         ...(params.parentId ? { parentId: params.parentId } : {}),
+        ...(params.depth !== undefined ? { depth: params.depth } : {}),
         ...(params.workerId ? { workerId: params.workerId } : {}),
         ...(params.isolate ? { isolate: true } : {}),
         ...(params.dependsOn && params.dependsOn.length ? { dependsOn: params.dependsOn } : {}),
@@ -1138,12 +1149,27 @@ export class WorkflowEngine {
     const wf = this.o.registry.get(command.workflowId) ?? this.o.registry.get("general");
     if (!wf)
       throw new Error(`create_subtask: workflow "${command.workflowId}" not registered and no GENERAL fallback`);
+    // Enforce depth cap BEFORE creating the child, so the child is never stranded
+    // as an orphan. The effective cap is the more restrictive of the engine-level
+    // maxTeamDepth and the parent's workflow-level cap (ADR 0020).
+    const parentWf = this.o.registry.get(parent.workflowId, parent.workflowVersion);
+    const engineCap = this.o.maxTeamDepth;
+    const wfCap = parentWf?.maxTeamDepth;
+    const effectiveCap =
+      engineCap !== undefined && wfCap !== undefined
+        ? Math.min(engineCap, wfCap)
+        : (engineCap ?? wfCap);
+    if (effectiveCap !== undefined && parent.depth >= effectiveCap)
+      throw new Error(
+        `max team depth (${effectiveCap}) reached — task "${parent.id}" is at depth ${parent.depth} and cannot create more subtasks`,
+      );
     await this.createTask({
       projectId: parent.projectId,
       workflowId: wf.id,
       taskId: command.childId, // pre-minted by the batch so siblings' dependsOn could resolve
       ...(wf.fields.request ? { fields: { request: command.input } } : {}),
       ...(parent.workerId ? { workerId: parent.workerId } : {}),
+      depth: parent.depth + 1,
       ...(command.isolate ? { isolate: true } : {}),
       ...(deps.length ? { dependsOn: deps } : {}),
       parentId: parent.id,

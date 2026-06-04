@@ -28,15 +28,15 @@ export function evalGuard(guard: Guard, env: GuardEnv): boolean {
     case "hasEvent":
       return env.eventTypes.has(guard.eventType);
     case "childrenDone":
-      // All children reached an END STATE — done OR cancelled. Fail-closed: false
-      // with zero children. (A cancelled/failed child still SATISFIES this; gate on
-      // `childrenSucceeded` if a failed subtask must not advance the parent.) Beware
-      // `not(childrenDone)` — TRUE for a childless task.
-      return env.children.length > 0 && env.children.every((s) => TERMINAL.has(s));
+      // All children reached an END STATE — done OR cancelled. Vacuously true
+      // with zero children (no child contradicts "all are done"). A cancelled/failed
+      // child still SATISFIES this; gate on `childrenSucceeded` if a failed subtask
+      // must not advance the parent.
+      return env.children.every((s) => TERMINAL.has(s));
     case "childrenSucceeded":
       // Stricter join: every child finished SUCCESSFULLY (done); a cancelled child
-      // makes this false. Fail-closed with zero children.
-      return env.children.length > 0 && env.children.every((s) => s === "done");
+      // makes this false. Vacuously true with zero children.
+      return env.children.every((s) => s === "done");
     case "and":
       return guard.all.every((g) => evalGuard(g, env));
     case "or":

@@ -113,6 +113,54 @@ describe("validateWorkflow", () => {
     };
     expect(() => assertValidWorkflow(wf)).toThrow(WorkflowValidationError);
   });
+
+  test("rejects maxTeamDepth of 0 (must be >= 1 per ADR 0020)", () => {
+    const wf: WorkflowDef = {
+      id: "x", version: "1", name: "X", description: "", fields: {},
+      maxTeamDepth: 0,
+      stages: [
+        { id: "a", category: "todo", entry: { op: "always" } },
+        { id: "done", category: "done", entry: { op: "always" } },
+      ],
+    };
+    expect(codes(wf)).toContain("invalid-max-team-depth");
+  });
+
+  test("accepts valid maxTeamDepth positive value", () => {
+    const wf: WorkflowDef = {
+      id: "x", version: "1", name: "X", description: "", fields: {},
+      maxTeamDepth: 3,
+      stages: [
+        { id: "a", category: "todo", entry: { op: "always" } },
+        { id: "done", category: "done", entry: { op: "always" } },
+      ],
+    };
+    expect(codes(wf)).not.toContain("invalid-max-team-depth");
+  });
+
+  test("rejects negative maxTeamDepth", () => {
+    const wf: WorkflowDef = {
+      id: "x", version: "1", name: "X", description: "", fields: {},
+      maxTeamDepth: -1,
+      stages: [
+        { id: "a", category: "todo", entry: { op: "always" } },
+        { id: "done", category: "done", entry: { op: "always" } },
+      ],
+    };
+    expect(codes(wf)).toContain("invalid-max-team-depth");
+  });
+
+  test("rejects non-integer maxTeamDepth", () => {
+    const wf: WorkflowDef = {
+      id: "x", version: "1", name: "X", description: "", fields: {},
+      maxTeamDepth: 2.5,
+      stages: [
+        { id: "a", category: "todo", entry: { op: "always" } },
+        { id: "done", category: "done", entry: { op: "always" } },
+      ],
+    };
+    expect(codes(wf)).toContain("invalid-max-team-depth");
+  });
 });
 
 // ── DESIGN_WORKFLOW adversarial edge-case tests ──────────────────────────────────

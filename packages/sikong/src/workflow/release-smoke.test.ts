@@ -553,6 +553,7 @@ describe("RELEASE_WORKFLOW M0 spine smoke", () => {
       stageId: "approve",
       fields: { request: "test" },
       childIds: [],
+      depth: 0,
       cursor: 1,
       createdAt: 1000,
       updatedAt: 1000,

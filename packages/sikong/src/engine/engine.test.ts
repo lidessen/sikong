@@ -154,7 +154,7 @@ describe("WorkflowEngine wake cycle", () => {
           return;
         }
 
-        if (ctx.stageId === "implement") {
+        if (ctx.stageId === "build") {
           await input.tools?.set_field?.execute?.(
             { field: "implementation", value: "Changed worker discovery output." },
             {},
@@ -362,7 +362,7 @@ describe("WorkflowEngine wake cycle", () => {
           await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
-        if (ctx.stageId === "implement") {
+        if (ctx.stageId === "build") {
           await input.tools?.writeFile?.execute?.({ path: "marker.txt", content: "done\n" }, {});
           await input.tools?.set_field?.execute?.({ field: "implementation", value: "Changed marker." }, {});
           await input.tools?.set_field?.execute?.({ field: "changedFiles", value: ["marker.txt"] }, {});
@@ -409,8 +409,9 @@ describe("WorkflowEngine wake cycle", () => {
         if (!input.tools?.commit_stage) return;
         commitSystem = input.system ?? "";
         await input.tools?.block?.execute?.({ reason: "confused" }, {});
+        // At the design stage, only `design` and `alternatives` are in outputFields.
         await input.tools?.commit_stage?.execute?.(
-          { fields: { plan: "Bounded plan from request." }, reason: "planned" },
+          { fields: { design: "Design the bounded change." }, reason: "designed" },
           {},
         );
         await input.tools?.block?.execute?.({ reason: "late confusion" }, {});
@@ -428,9 +429,9 @@ describe("WorkflowEngine wake cycle", () => {
     const task = await engine.getTask("commit-stage-wins");
     expect(commitSystem).toContain("Current task fields");
     expect(commitSystem).toContain("plan the change");
-    expect(task?.stageId).toBe("design");
+    expect(task?.stageId).toBe("plan");
     expect(task?.status).toBe("in_progress");
-    expect(task?.fields.plan).toBe("Bounded plan from request.");
+    expect(task?.fields.design).toBe("Design the bounded change.");
   });
 
   test("reports a wake error when even the forced commit pass emits no state commands", async () => {
@@ -709,6 +710,10 @@ describe("WorkflowEngine wake cycle", () => {
       fields: {},
       stages: [
         { id: "split", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask"] },
+        // Intermediate stage prevents vacuous pre-advance through childrenDone
+        // before any child has been spawned (childrenDone is now vacuously true
+        // with zero children).
+        { id: "wait", category: "in_progress", entry: { op: "hasEvent", eventType: "subtask.created" } },
         { id: "done", category: "done", entry: { op: "childrenDone" } },
       ],
     };
@@ -882,9 +887,9 @@ describe("WorkflowEngine wake cycle", () => {
   });
 });
 
-describe("lead creates a team (ADR 0009)", () => {
-  test("a lead plans, delegates to a child, then reviews the team's result", async () => {
-    let leadReviewSystem = "";
+describe("DEVELOPMENT workflow (team delegation)", () => {
+  test("a parent plans, delegates to a child, then reviews the team's result", async () => {
+    let parentReviewSystem = "";
     const loop: LoopFactory = (ctx) =>
       scriptLoop(async (input) => {
         if (ctx.workflow.id === "simple-commit") {
@@ -893,7 +898,7 @@ describe("lead creates a team (ADR 0009)", () => {
           await input.tools?.request_transition?.execute?.({ reason: "done part 1" }, {});
           return;
         }
-        // the lead
+        // the parent (adaptive DEVELOPMENT)
         if (ctx.stageId === "design") {
           await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
           await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
@@ -905,42 +910,43 @@ describe("lead creates a team (ADR 0009)", () => {
           await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
           return;
         }
-        if (ctx.stageId === "delegate") {
+        if (ctx.stageId === "build") {
           await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "do part 1" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
           return;
         }
-        // review — the lead must see its team here
+        // verify — the parent must see its team here
         // Team snapshot now lives in the per-wake message (prompt), not the
         // stable system prompt (prefix-cache split) — check both.
-        leadReviewSystem = `${input.system ?? ""}\n${input.prompt ?? ""}`;
+        parentReviewSystem = `${input.system ?? ""}\n${input.prompt ?? ""}`;
+        await input.tools?.set_field?.execute?.({ field: "verification", value: "Reviewed team results." }, {});
         await input.tools?.set_field?.execute?.({ field: "summary", value: "Team completed the effort." }, {});
-        await input.tools?.request_transition?.execute?.({ reason: "reviewed" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
       });
-    const engine = newEngine(loop, [DEVELOPMENT_LEAD_WORKFLOW, SIMPLE_COMMIT]);
+    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW, SIMPLE_COMMIT]);
 
     await engine.createTask({
       projectId: "p",
-      workflowId: "development-lead",
-      taskId: "lead1",
+      workflowId: "development",
+      taskId: "parent1",
       fields: { request: "ship the effort" },
     });
     await engine.idle();
 
-    const task = await engine.getTask("lead1");
+    const task = await engine.getTask("parent1");
     expect(task?.status).toBe("done");
     expect(task?.fields.summary).toBe("Team completed the effort.");
     expect(task?.childIds.length).toBe(1);
     const childId = task!.childIds[0]!;
     expect((await engine.getTask(childId))?.status).toBe("done");
-    // the lead saw its team — id, status, and the child's structured summary — in review
-    expect(leadReviewSystem).toContain("## Team (your subtasks)");
-    expect(leadReviewSystem).toContain(childId);
-    expect(leadReviewSystem).toContain("child handled part 1");
+    // the parent saw its team — id, status, and the child's structured summary — in verify
+    expect(parentReviewSystem).toContain("## Team (your subtasks)");
+    expect(parentReviewSystem).toContain(childId);
+    expect(parentReviewSystem).toContain("child handled part 1");
   });
 
-  test("a lead can run another round in review before finishing (multi-round)", async () => {
-    let reviewPasses = 0;
+  test("a parent can run another round in verify before finishing (multi-round)", async () => {
+    let verifyPasses = 0;
     const loop: LoopFactory = (ctx) =>
       scriptLoop(async (input) => {
         if (ctx.workflow.id === "simple-commit") {
@@ -959,34 +965,35 @@ describe("lead creates a team (ADR 0009)", () => {
           await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
           return;
         }
-        if (ctx.stageId === "delegate") {
+        if (ctx.stageId === "build") {
           await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part A" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
           return;
         }
-        // review
-        reviewPasses++;
-        if (reviewPasses === 1) {
+        // verify
+        verifyPasses++;
+        if (verifyPasses === 1) {
           // need another round: spawn a follow-up, do NOT set summary yet
           await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part B" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "another round" }, {});
           return;
         }
+        await input.tools?.set_field?.execute?.({ field: "verification", value: "Verified all rounds." }, {});
         await input.tools?.set_field?.execute?.({ field: "summary", value: "All rounds complete." }, {});
         await input.tools?.request_transition?.execute?.({ reason: "complete" }, {});
       });
-    const engine = newEngine(loop, [DEVELOPMENT_LEAD_WORKFLOW, SIMPLE_COMMIT]);
+    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW, SIMPLE_COMMIT]);
 
     await engine.createTask({
       projectId: "p",
-      workflowId: "development-lead",
-      taskId: "lead-multi",
+      workflowId: "development",
+      taskId: "parent-multi",
       fields: { request: "two-round effort" },
     });
     await engine.idle();
 
-    const task = await engine.getTask("lead-multi");
-    expect(reviewPasses).toBe(2); // re-woken for a second review round after the follow-up finished
+    const task = await engine.getTask("parent-multi");
+    expect(verifyPasses).toBe(2); // re-woken for a second verify round after the follow-up finished
     expect(task?.status).toBe("done");
     expect(task?.fields.summary).toBe("All rounds complete.");
     expect(task?.childIds.length).toBe(2); // initial team member + the follow-up
@@ -1014,7 +1021,7 @@ describe("lead creates a team (ADR 0009)", () => {
           await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
           return;
         }
-        if (ctx.stageId === "delegate") {
+        if (ctx.stageId === "build") {
           await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part X", isolate: true }, {});
           await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
           return;
@@ -1023,7 +1030,7 @@ describe("lead creates a team (ADR 0009)", () => {
         await input.tools?.request_transition?.execute?.({ reason: "reviewed" }, {});
       });
     const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
     registry.register(SIMPLE_COMMIT);
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
@@ -1040,24 +1047,24 @@ describe("lead creates a team (ADR 0009)", () => {
       },
     });
 
-    await engine.createTask({ projectId: "p", workflowId: "development-lead", taskId: "iso-lead", fields: { request: "x" } });
+    await engine.createTask({ projectId: "p", workflowId: "development", taskId: "iso-parent", fields: { request: "x" } });
     await engine.idle();
 
-    const lead = await engine.getTask("iso-lead");
-    expect(lead?.status).toBe("done");
-    expect(lead?.childIds.length).toBe(1);
-    const childId = lead!.childIds[0]!;
+    const parent = await engine.getTask("iso-parent");
+    expect(parent?.status).toBe("done");
+    expect(parent?.childIds.length).toBe(1);
+    const childId = parent!.childIds[0]!;
     const child = await engine.getTask(childId);
     expect(child?.isolate).toBe(true); // the child carries the isolation flag
     expect(child?.status).toBe("done");
     // the worker boundary saw the isolated child on its wake, and released it on terminal
     expect(isolated).toContain(childId);
     expect(released).toContain(childId);
-    // the lead itself was never isolated
-    expect(isolated).not.toContain("iso-lead");
+    // the parent itself was never isolated
+    expect(isolated).not.toContain("iso-parent");
   });
 
-  test("a child whose wakes keep failing is auto-failed so the lead unblocks (ADR 0010 #2)", async () => {
+  test("a child whose wakes keep failing is auto-failed so the parent unblocks (ADR 0010 #2)", async () => {
     let childWakes = 0;
     const loop: LoopFactory = (ctx) => {
       if (ctx.workflow.id === "simple-commit") {
@@ -1079,17 +1086,19 @@ describe("lead creates a team (ADR 0009)", () => {
           await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
           return;
         }
-        if (ctx.stageId === "delegate") {
+        if (ctx.stageId === "build") {
           await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "do x" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
           return;
         }
+        // verify
+        await input.tools?.set_field?.execute?.({ field: "verification", value: "Child failed; effort closed." }, {});
         await input.tools?.set_field?.execute?.({ field: "summary", value: "child failed; effort closed" }, {});
         await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
       });
     };
     const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
     registry.register(SIMPLE_COMMIT);
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
@@ -1099,17 +1108,17 @@ describe("lead creates a team (ADR 0009)", () => {
       maxWakeRetries: 1, // one retry, then terminal-fail
     });
 
-    await engine.createTask({ projectId: "p", workflowId: "development-lead", taskId: "fail-lead", fields: { request: "x" } });
+    await engine.createTask({ projectId: "p", workflowId: "development", taskId: "fail-parent", fields: { request: "x" } });
     await engine.idle();
 
-    const lead = await engine.getTask("fail-lead");
+    const parent = await engine.getTask("fail-parent");
     expect(childWakes).toBeGreaterThanOrEqual(2); // initial + one retry before auto-fail
-    const childId = lead!.childIds[0]!;
+    const childId = parent!.childIds[0]!;
     expect((await engine.getTask(childId))?.status).toBe("cancelled"); // auto-failed → terminal
-    expect(lead?.status).toBe("done"); // childrenDone resolved — the lead was NOT wedged
+    expect(parent?.status).toBe("done"); // childrenDone resolved — the parent was NOT wedged
   });
 
-  test("the lead can order subtasks with dependsOn — a dependent runs only after its prerequisite (ADR 0011)", async () => {
+  test("the parent can order subtasks with dependsOn — a dependent runs only after its prerequisite (ADR 0011)", async () => {
     const order: string[] = [];
     const loop: LoopFactory = (ctx) =>
       scriptLoop(async (input) => {
@@ -1130,17 +1139,19 @@ describe("lead creates a team (ADR 0009)", () => {
           await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
           return;
         }
-        if (ctx.stageId === "delegate") {
+        if (ctx.stageId === "build") {
           await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "A", key: "a" }, {});
           await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "B", key: "b", dependsOn: ["a"] }, {});
           await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
           return;
         }
+        // verify
+        await input.tools?.set_field?.execute?.({ field: "verification", value: "both layers done" }, {});
         await input.tools?.set_field?.execute?.({ field: "summary", value: "both layers done" }, {});
         await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
       });
     const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
@@ -1148,19 +1159,276 @@ describe("lead creates a team (ADR 0009)", () => {
       loop,
     });
 
-    await engine.createTask({ projectId: "p", workflowId: "development-lead", taskId: "dag-lead", fields: { request: "x" } });
+    await engine.createTask({ projectId: "p", workflowId: "development", taskId: "dag-parent", fields: { request: "x" } });
     await engine.idle();
 
-    const lead = await engine.getTask("dag-lead");
+    const parent = await engine.getTask("dag-parent");
     expect(order).toEqual(["A", "B"]); // B waited for A (dependency respected), not parallel
-    expect(lead?.status).toBe("done");
-    expect(lead?.childIds.length).toBe(2);
-    for (const c of lead!.childIds) expect((await engine.getTask(c))?.status).toBe("done");
+    expect(parent?.status).toBe("done");
+    expect(parent?.childIds.length).toBe(2);
+    for (const c of parent!.childIds) expect((await engine.getTask(c))?.status).toBe("done");
     // the dependent carries the resolved prerequisite id
-    const tasks = await Promise.all(lead!.childIds.map((c) => engine.getTask(c)));
+    const tasks = await Promise.all(parent!.childIds.map((c) => engine.getTask(c)));
     const b = tasks.find((t) => t?.fields.request === "B");
     const a = tasks.find((t) => t?.fields.request === "A");
     expect(b?.dependsOn).toEqual([a?.id]);
+  });
+
+  test("DEVELOPMENT_LEAD_WORKFLOW alias still delegates and completes end-to-end", async () => {
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === SIMPLE_COMMIT.id) {
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "alias child done" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+          return;
+        }
+        if (ctx.stageId === "design") {
+          await input.tools?.set_field?.execute?.({ field: "design", value: "alias test" }, {});
+          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "A", pros: "fast", why_rejected: "weaker fit" }] }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+          return;
+        }
+        if (ctx.stageId === "plan") {
+          await input.tools?.set_field?.execute?.({ field: "plan", value: "delegate" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+          return;
+        }
+        if (ctx.stageId === "build") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "alias sub" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        // verify
+        await input.tools?.set_field?.execute?.({ field: "verification", value: "alias verified" }, {});
+        await input.tools?.set_field?.execute?.({ field: "summary", value: "alias done" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
+      });
+    const engine = newEngine(loop, [DEVELOPMENT_LEAD_WORKFLOW, SIMPLE_COMMIT]);
+
+    await engine.createTask({
+      projectId: "p",
+      workflowId: "development-lead",
+      taskId: "alias-test",
+      fields: { request: "alias smoke" },
+    });
+    await engine.idle();
+
+    const task = await engine.getTask("alias-test");
+    expect(task?.status).toBe("done");
+    expect(task?.childIds).toHaveLength(1);
+    expect((await engine.getTask(task!.childIds[0]!))?.status).toBe("done");
+  });
+
+  test("depth propagates from parent to child subtask", async () => {
+    const CHILD: WorkflowDef = {
+      id: "child-depth", version: "1", name: "Child", description: "", fields: {},
+      stages: [
+        { id: "open", category: "in_progress", entry: { op: "always" } },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    const PARENT: WorkflowDef = {
+      id: "parent-depth", version: "1", name: "Parent", description: "", fields: {},
+      stages: [
+        { id: "split", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask"] },
+        // Intermediate guard prevents vacuous pre-advance through childrenDone
+        // before any child has been spawned (childrenDone is vacuously true
+        // with zero children per ADR 0020).
+        { id: "wait", category: "in_progress", entry: { op: "hasEvent", eventType: "subtask.created" } },
+        { id: "review", category: "in_progress", entry: { op: "childrenDone" } },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === "child-depth") {
+          await input.tools?.request_transition?.execute?.({}, {});
+          return;
+        }
+        if (ctx.stageId === "split") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "child-depth", input: "do part" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+      });
+    const engine = newEngine(loop, [CHILD, PARENT]);
+
+    await engine.createTask({ projectId: "p", workflowId: "parent-depth", taskId: "P-depth" });
+    await engine.idle();
+
+    const parent = await engine.getTask("P-depth");
+    expect(parent?.depth).toBe(0);
+    const child = await engine.getTask(parent!.childIds[0]!);
+    expect(child?.depth).toBe(1);
+  });
+
+  test("maxTeamDepth in a workflow prevents subtask creation beyond the cap", async () => {
+    const CHILD: WorkflowDef = {
+      id: "child-cap", version: "1", name: "Child", description: "", fields: {},
+      // Also capped so a child spawned by CAPPED (depth 1) cannot itself spawn subtasks.
+      maxTeamDepth: 1,
+      stages: [
+        // create_subtask is available so the test can prove the reducer rejects beyond maxTeamDepth.
+        // request_transition also listed so the child can complete normally.
+        { id: "open", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask", "request_transition"] },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    const CAPPED: WorkflowDef = {
+      id: "capped", version: "1", name: "Capped", description: "",
+      maxTeamDepth: 1, // only root can create children; depth 1 cannot
+      fields: {},
+      stages: [
+        { id: "split", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask"] },
+        // Intermediate guard prevents vacuous pre-advance through childrenDone
+        // (now vacuously true with zero children) before any child is spawned.
+        { id: "wait", category: "in_progress", entry: { op: "hasEvent", eventType: "subtask.created" } },
+        { id: "review", category: "in_progress", entry: { op: "childrenDone" } },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    let rejects: string[] = [];
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === "child-cap") {
+          // child at depth 1 tries to spawn a subtask — should be rejected by maxTeamDepth
+          if (ctx.stageId === "open") {
+            await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "deep nested" }, {});
+          }
+          await input.tools?.request_transition?.execute?.({}, {});
+          return;
+        }
+        if (ctx.stageId === "split") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "child-cap", input: "first level" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+      });
+    const engine = newEngine(loop, [CHILD, CAPPED], {
+      onReject: (i: { command: unknown; reason: string }) => rejects.push(i.reason),
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "capped", taskId: "C1" });
+    await engine.idle();
+
+    const parent = await engine.getTask("C1");
+    expect(parent?.childIds).toHaveLength(1); // first subtask (depth 0 → 1) succeeds
+    const child = await engine.getTask(parent!.childIds[0]!);
+    expect(child?.depth).toBe(1);
+    expect(child?.status).toBe("done"); // the child completed OK
+    // The child at depth 1 tried to spawn a subtask at depth 2 but maxTeamDepth=1 rejects it
+    expect(rejects.some((r) => /max team depth/.test(r))).toBe(true);
+  });
+
+  test("engine-level maxTeamDepth bounds workflows without explicit caps", async () => {
+    const CHILD: WorkflowDef = {
+      id: "child-engine", version: "1", name: "Child", description: "", fields: {},
+      // No maxTeamDepth — bounded by the engine-level default instead.
+      stages: [
+        { id: "open", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask", "request_transition"] },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    const PARENT: WorkflowDef = {
+      id: "parent-engine", version: "1", name: "Parent", description: "", fields: {},
+      // No maxTeamDepth — bounded by the engine-level default.
+      stages: [
+        { id: "split", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask"] },
+        { id: "wait", category: "in_progress", entry: { op: "hasEvent", eventType: "subtask.created" } },
+        { id: "review", category: "in_progress", entry: { op: "childrenDone" } },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    let rejects: string[] = [];
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(CHILD);
+    registry.register(PARENT);
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.workflow.id === "child-engine") {
+          // child at depth 1 tries to spawn — rejected by engine-level maxTeamDepth=1
+          if (ctx.stageId === "open") {
+            await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "nested" }, {});
+          }
+          await input.tools?.request_transition?.execute?.({}, {});
+          return;
+        }
+        if (ctx.stageId === "split") {
+          await input.tools?.create_subtask?.execute?.({ workflowId: "child-engine", input: "first level" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+          return;
+        }
+        await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+      });
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry,
+      maxTeamDepth: 1, // engine-level cap: only root can spawn
+      loop,
+      hooks: { onReject: (i: { reason: string }) => rejects.push(i.reason) },
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "parent-engine", taskId: "E1" });
+    await engine.idle();
+
+    const parent = await engine.getTask("E1");
+    expect(parent?.childIds).toHaveLength(1); // first subtask succeeds
+    const child = await engine.getTask(parent!.childIds[0]!);
+    expect(child?.depth).toBe(1);
+    expect(child?.status).toBe("done");
+    // The child at depth 1 tried to spawn but engine-level maxTeamDepth=1 rejects it
+    expect(rejects.some((r) => /max team depth/.test(r))).toBe(true);
+  });
+
+  test("a 3rd-tier create_subtask is refused by maxTeamDepth (default: 2)", async () => {
+    // Root (depth 0) creates child (depth 1) ✓
+    // Child (depth 1) creates grandchild (depth 2) ✓
+    // Grandchild (depth 2) tries to create great-grandchild (depth 3) ✗
+    const TIER: WorkflowDef = {
+      id: "tier",
+      version: "1",
+      name: "Tier",
+      description: "",
+      // Default maxTeamDepth=2: three tiers allowed (0→1→2), the 4th (2→3) refused
+      maxTeamDepth: 2,
+      fields: {},
+      stages: [
+        { id: "open", category: "in_progress", entry: { op: "always" }, tools: ["create_subtask", "request_transition"] },
+        { id: "done", category: "done", entry: { op: "hasEvent", eventType: "transition.requested" } },
+      ],
+    };
+    const rejects: string[] = [];
+    const loop: LoopFactory = (ctx) =>
+      scriptLoop(async (input) => {
+        if (ctx.stageId === "open") {
+          if (ctx.task.depth < 2) {
+            // Depth 0 (root) or 1 (child): allowed to spawn
+            await input.tools?.create_subtask?.execute?.({ workflowId: "tier", input: "sub" }, {});
+          } else {
+            // Depth 2 (grandchild, 3rd tier): tries and is rejected by maxTeamDepth
+            await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "deep" }, {});
+          }
+        }
+        await input.tools?.request_transition?.execute?.({}, {});
+      });
+    const engine = newEngine(loop, [TIER], {
+      onReject: (i: { reason: string }) => rejects.push(i.reason),
+    });
+
+    await engine.createTask({ projectId: "p", workflowId: "tier", taskId: "T0" });
+    await engine.idle();
+
+    const root = await engine.getTask("T0");
+    expect(root?.childIds).toHaveLength(1);
+    const child = await engine.getTask(root!.childIds[0]!);
+    expect(child?.childIds).toHaveLength(1);
+    const grandchild = await engine.getTask(child!.childIds[0]!);
+    expect(grandchild?.status).toBe("done");
+    // Grandchild's attempt to spawn at depth 3 was rejected by max team depth
+    expect(rejects.some((r) => /max team depth/.test(r))).toBe(true);
   });
 });
 
