@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.9",
-  "comment:workspaces": "sikong-web is intentionally excluded — it's a separately-deployed site that links the sibling semajsx repo via a file: dependency, which isn't present in CI. It builds/deploys standalone (see packages/sikong-web).",
+  "comment:workspaces": "apps/sikong-web is intentionally outside the workspace — it's a separately-deployed site that links the sibling semajsx repo via a file: dependency, which isn't present in CI. It builds/deploys standalone (see apps/sikong-web).",
   "workspaces": ["packages/agent-loop", "packages/sikong"],
   "scripts": {
     "build": "bun run --filter sikong build",
