@@ -46,7 +46,7 @@ jobs:
             fi
             echo "packaged $key"
           done
-          cp "$GITHUB_WORKSPACE/install.sh" dist-release/install.sh
+          cp "$GITHUB_WORKSPACE/install.sh" "$GITHUB_WORKSPACE/dist-release/install.sh"
           ls -la "$GITHUB_WORKSPACE/dist-release"
 
       - name: Publish GitHub Release
