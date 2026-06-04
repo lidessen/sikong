@@ -196,17 +196,12 @@ async function hasPackage(pkg: string): Promise<boolean> {
 async function hasAiSdkProvider(provider: WorkerProvider): Promise<boolean> {
   if (await hasPackage(`@ai-sdk/${provider}`)) return true;
   try {
-    switch (provider) {
-      case "deepseek":
-        await import("@ai-sdk/deepseek");
-        return true;
-      case "anthropic":
-        await import("@ai-sdk/anthropic");
-        return true;
-      case "openai":
-        await import("@ai-sdk/openai");
-        return true;
-    }
+    // Non-literal specifier on purpose: these provider SDKs are OPTIONAL (probed,
+    // not depended on), and a literal `import("@ai-sdk/openai")` makes tsc resolve
+    // a module that may not be installed (CI) → TS2307. A template specifier keeps
+    // the runtime probe without compile-time resolution.
+    await import(`@ai-sdk/${provider}`);
+    return true;
   } catch {
     return false;
   }
@@ -215,7 +210,8 @@ async function hasAiSdkProvider(provider: WorkerProvider): Promise<boolean> {
 async function hasCursorSdk(): Promise<boolean> {
   if (await hasPackage("@cursor/sdk")) return true;
   try {
-    await import("@cursor/sdk");
+    const spec: string = "@cursor/sdk"; // string-typed → non-literal import (see hasAiSdkProvider)
+    await import(spec);
     return true;
   } catch {
     return false;

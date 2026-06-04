@@ -1,0 +1,20 @@
+[
+  {
+    "candidateId": "architect",
+    "title": "Architect — Terminal-Inspired Developer Landing",
+    "type": "web",
+    "designDoc": true
+  },
+  {
+    "candidateId": "nebula",
+    "title": "Nebula — Bold Colorful Product Landing",
+    "type": "web",
+    "designDoc": true
+  },
+  {
+    "candidateId": "flow",
+    "title": "Flow — Clean Modern SaaS-Style Landing",
+    "type": "web",
+    "designDoc": true
+  }
+]

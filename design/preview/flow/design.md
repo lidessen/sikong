@@ -1,0 +1,1 @@
+Minimal layout, problem/solution cards, architecture layer stack, real code examples, generous whitespace, community metrics. Color: dark + blue + teal.
