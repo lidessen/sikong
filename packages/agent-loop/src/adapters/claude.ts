@@ -278,7 +278,7 @@ export class ClaudeAdapter implements BackendAdapter {
         closeStep();
         endInput?.();
         ch.end();
-        return { usage, durationMs: Date.now() - started };
+        return { usage: fillEstimatedOutput(usage, streamState), durationMs: Date.now() - started };
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         // An abort is an expected cancellation, not a stream failure.
@@ -286,7 +286,7 @@ export class ClaudeAdapter implements BackendAdapter {
           closeStep();
           endInput?.();
           ch.end();
-          return { usage, durationMs: Date.now() - started };
+          return { usage: fillEstimatedOutput(usage, streamState), durationMs: Date.now() - started };
         }
         ch.push({ type: "error", error });
         endInput?.();
@@ -994,6 +994,40 @@ function mapAssistantUsage(message: SDKMessage):
     totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
     cacheReadTokens,
     cacheCreationTokens,
+  };
+}
+
+type ClaudeUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+};
+
+/**
+ * DeepSeek's Anthropic-compatible endpoint reports `output_tokens` ONLY in the
+ * final `result` message — streaming `assistant` messages carry output_tokens=0.
+ * sikong stops the worker run on a terminal tool call, so the run is usually
+ * CANCELLED before the result arrives, leaving outputTokens=0 despite real
+ * generation (answer text + reasoning). When the captured output is 0 but content
+ * was streamed, estimate it from the streamed character count (~4 chars/token) so
+ * cost accounting isn't silently zero. A real reported value is never overridden,
+ * so this is a no-op for real Anthropic (which streams output_tokens as it goes).
+ */
+export function fillEstimatedOutput(
+  usage: ClaudeUsage,
+  streamState: { streamedText: string; streamedThinking: string },
+): ClaudeUsage {
+  if (usage.outputTokens > 0) return usage;
+  const chars = streamState.streamedText.length + streamState.streamedThinking.length;
+  if (chars === 0) return usage;
+  const outputTokens = Math.ceil(chars / 4);
+  return {
+    ...usage,
+    outputTokens,
+    totalTokens:
+      usage.inputTokens + outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens,
   };
 }
 

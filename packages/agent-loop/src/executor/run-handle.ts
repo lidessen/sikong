@@ -201,12 +201,18 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
         publish(ev);
       }
 
-      if (wasCancelled) finalize("cancelled");
+      // Even on cancel, prefer the backend's final usage: it estimates output
+      // tokens that some runtimes (DeepSeek) report only in a `result` message
+      // the cancel skips. Falling back to the event-accumulated usage would lose
+      // them (output would read 0). See fillEstimatedOutput in adapters/claude.ts.
+      if (wasCancelled) finalize("cancelled", await backendRun.result.catch(() => undefined));
       else finalize("completed", await backendRun.result);
     } catch (err) {
       if (wasCancelled) {
-        if (backendRun) void backendRun.result.catch(() => {});
-        finalize("cancelled");
+        const cancelledResult = backendRun
+          ? await backendRun.result.catch(() => undefined)
+          : undefined;
+        finalize("cancelled", cancelledResult);
         return;
       }
       const error = err instanceof Error ? err : new Error(String(err));
