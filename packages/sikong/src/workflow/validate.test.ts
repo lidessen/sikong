@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { assertValidWorkflow, validateWorkflow, type ValidateOptions } from "./validate";
-import { DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./builtin";
+import { _DESIGN_WORKFLOW_V1, DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./builtin";
 import { WorkflowValidationError } from "./errors";
 import type { Guard, WorkflowDef } from "./types";
 
@@ -163,7 +163,7 @@ describe("validateWorkflow", () => {
   });
 });
 
-// ── DESIGN_WORKFLOW adversarial edge-case tests ──────────────────────────────────
+// ── DESIGN_WORKFLOW (v2, ADR 0022) adversarial edge-case tests ─────────────
 
 describe("DESIGN_WORKFLOW edge cases", () => {
   const wf = DESIGN_WORKFLOW;
@@ -172,29 +172,24 @@ describe("DESIGN_WORKFLOW edge cases", () => {
     expect(wf.workerRole).toBe("coding");
   });
 
-  test("has the full 8-stage sequence: brief → diverge → preview → critique → converge → refine → deliver → done", () => {
+  test("has the full 6-stage sequence: frame → language → derive → assemble → review → done", () => {
     const ids = wf.stages.map((s) => s.id);
     expect(ids).toEqual([
-      "brief",
-      "diverge",
-      "preview",
-      "critique",
-      "converge",
-      "refine",
-      "deliver",
+      "frame",
+      "language",
+      "derive",
+      "assemble",
+      "review",
       "done",
     ]);
   });
 
   test("every non-initial stage with a field guard references a field set by an earlier stage's outputFields — no dangling guard reference", () => {
-    // Build the set of fields set as outputFields by each stage index
     const cumulativeOutputFields = new Set<string>();
     for (let i = 0; i < wf.stages.length; i++) {
       const stage = wf.stages[i];
       if (!stage) break;
 
-      // Collect fields referenced by the current stage's entry guard (but not the
-      // initial stage — its guard is `always`).
       if (i > 0) {
         const referenced = collectFieldRefs(stage.entry);
         for (const ref of referenced) {
@@ -202,19 +197,19 @@ describe("DESIGN_WORKFLOW edge cases", () => {
         }
       }
 
-      // Accumulate this stage's outputFields
       for (const f of stage.outputFields ?? []) {
         cumulativeOutputFields.add(f);
       }
     }
   });
 
-  test("the preview stage intentionally has no outputFields (it only serves previews, never writes workflow state)", () => {
-    const preview = wf.stages[2];
-    expect(preview?.id).toBe("preview");
-    expect(preview?.outputFields).toBeUndefined();
-    // Preview should still have instructions
-    expect(preview?.instructions).toBeTruthy();
+  test("every stage has outputFields (no stage is purely side-effectful in v2)", () => {
+    for (const stage of wf.stages) {
+      if (stage.id === "done") continue; // terminal stage has no outputFields
+      expect(stage.outputFields).toBeDefined();
+      expect(stage.outputFields?.length).toBeGreaterThan(0);
+      expect(stage.instructions).toBeTruthy();
+    }
   });
 
   test("all outputFields in every stage are declared as workflow fields with a compatible type", () => {
@@ -226,17 +221,35 @@ describe("DESIGN_WORKFLOW edge cases", () => {
     }
   });
 
-  test("JSON-typed fields (candidates, critiques, changedFiles) only appear as outputFields of stages that write them", () => {
-    expect(wf.fields.candidates).toBeDefined();
-    expect(wf.fields.candidates?.type).toBe("json");
-    expect(wf.fields.critiques).toBeDefined();
-    expect(wf.fields.critiques?.type).toBe("json");
+  test("JSON-typed fields (alternatives, designSpec, changedFiles) only appear as outputFields of stages that write them", () => {
+    expect(wf.fields.alternatives).toBeDefined();
+    expect(wf.fields.alternatives?.type).toBe("json");
+    expect(wf.fields.designSpec).toBeDefined();
+    expect(wf.fields.designSpec?.type).toBe("json");
     expect(wf.fields.changedFiles).toBeDefined();
     expect(wf.fields.changedFiles?.type).toBe("json");
   });
 
+  test("language and alternatives are paired output fields (language stage outputs both)", () => {
+    const language = wf.stages[1];
+    expect(language?.id).toBe("language");
+    expect(language?.outputFields).toContain("language");
+    expect(language?.outputFields).toContain("alternatives");
+  });
+
+  test("the 'derive' stage guards on both language AND alternatives (the dialectic gate)", () => {
+    const derive = wf.stages[2];
+    expect(derive?.id).toBe("derive");
+    const refs = collectAllFieldGuards(derive?.entry ?? { op: "always" });
+    const langGuard = refs.find((g) => g.field === "language");
+    const altGuard = refs.find((g) => g.field === "alternatives");
+    expect(langGuard).toBeDefined();
+    expect(altGuard).toBeDefined();
+    expect(langGuard?.cmp).toBe("exists");
+    expect(altGuard?.cmp).toBe("exists");
+  });
+
   test("every guard field reference that uses 'exists' cmp is paired with a field that appears in some stage's outputFields", () => {
-    // Check guards recursively for field-exists patterns
     const expectedFields = new Set<string>();
     for (const stage of wf.stages) {
       for (const f of stage.outputFields ?? []) {
@@ -256,20 +269,33 @@ describe("DESIGN_WORKFLOW edge cases", () => {
     }
   });
 
-  test("done stage's entry guard requires the same fields that deliver stage outputs", () => {
-    const deliver = wf.stages[6];
-    const done = wf.stages[7];
-    expect(deliver?.id).toBe("deliver");
+  test("done stage's entry guard references fields set by earlier stages (changedFiles from assemble, summary from review)", () => {
+    const done = wf.stages[5];
     expect(done?.id).toBe("done");
 
-    const deliverOutputs = new Set(deliver?.outputFields ?? []);
-    const doneRefs = collectFieldRefs(done?.entry ?? { op: "always" });
+    // Collect output fields from all non-terminal stages
+    const earlierOutputs = new Set<string>();
+    for (let i = 0; i < wf.stages.length - 1; i++) {
+      const stage = wf.stages[i];
+      if (!stage) break;
+      for (const f of stage.outputFields ?? []) {
+        earlierOutputs.add(f);
+      }
+    }
 
-    // Every field done checks (via exists) should be output by deliver
+    const doneRefs = collectFieldRefs(done?.entry ?? { op: "always" });
     for (const ref of doneRefs) {
-      expect(deliverOutputs.has(ref)).toBe(true);
+      expect(earlierOutputs.has(ref)).toBe(true);
     }
   });
+});
+
+test("_DESIGN_WORKFLOW_V1 backward compat constant is valid and matches the ADR 0017 shape", () => {
+  expect(validateWorkflow(_DESIGN_WORKFLOW_V1)).toEqual([]);
+  expect(_DESIGN_WORKFLOW_V1.version).toBe("1");
+  expect(_DESIGN_WORKFLOW_V1.stages.map((s) => s.id)).toEqual([
+    "brief", "diverge", "preview", "critique", "converge", "refine", "deliver", "done",
+  ]);
 });
 
 /** Collect field names referenced by an {@link op: "field"} guard within a nested guard tree. */

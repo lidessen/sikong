@@ -129,12 +129,12 @@ describe("workspace (CLI wiring)", () => {
     }
   });
 
-  test("openWorkspace registers builtin design workflow and keeps it builtin-owned", async () => {
+  test("openWorkspace registers builtin design workflow (v2) and keeps it builtin-owned", async () => {
     const dir = await tmp();
     try {
       const fakeDesign: WorkflowDef = {
         id: "design",
-        version: "1",
+        version: "2",
         name: "Fake Design",
         description: "",
         fields: {},
@@ -149,9 +149,9 @@ describe("workspace (CLI wiring)", () => {
       });
 
       const design = ws.registry.get("design");
-      expect(design?.fields.brief).toBeDefined();
+      expect(design?.fields.frame).toBeDefined();
       expect(design?.stages.map((s) => s.id)).toEqual([
-        "brief", "diverge", "preview", "critique", "converge", "refine", "deliver", "done",
+        "frame", "language", "derive", "assemble", "review", "done",
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });

@@ -46,8 +46,9 @@ Files use a monotonic four-digit prefix:
 | [0014](0014-wake-cost-optimization.md) | Accepted | Wake cost optimization (flash@max, prefix-stable wakes, pro-on-escalation) |
 | [0015](0015-verify-stage-demands-edge-case-tests.md) | Accepted | Verify stage demands adversarial/edge-case tests + a real-user-path smoke |
 | [0016](0016-sikong-self-iteration-loop.md) | Accepted | sikong self-iteration loop (sikong improves sikong; promotion needs explicit lead approval) |
-| [0017](0017-design-workflow.md) | Accepted | Design workflow (sikong-orchestrated UI design → real semajsx, live preview; not a separate project) |
+| [0017](0017-design-workflow.md) | Superseded | Design workflow (sikong-orchestrated UI design → real semajsx, live preview) — superseded by 0022 |
 | [0018](0018-sikong-web-package.md) | Accepted | sikong-web — new package for sikong.dev website + local monitor dashboard |
 | [0019](0019-release-workflow.md) | Accepted | Release/deploy workflow (select stable → gate → tag → approve → publish → confirm; tag+npm+vercel) |
 | [0020](0020-unify-development-workflow.md) | Accepted | Unify development + development-lead into one adaptive workflow (delegation optional; engine maxTeamDepth cap) |
 | [0021](0021-configurable-effort-level.md) | Accepted | Configurable, lead-decided effort level (generic RunInput.effort + per-stage/per-subtask resolution; default medium) |
+| [0022](0022-philosophy-driven-design-workflow.md) | Accepted | Philosophy-driven design workflow (frame → language → derive → assemble → review; design-language catalog) — supersedes 0017 |

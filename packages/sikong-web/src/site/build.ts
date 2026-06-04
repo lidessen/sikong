@@ -13,52 +13,17 @@
  * @module
  */
 
-import { renderToString, renderToStringWithCSS } from "semajsx/html"
-import { Page } from "./components"
+import { renderToStringWithCSS } from "semajsx/html"
+import { Page, GLOBAL_CSS } from "./components"
 
 const OUT_DIR = "dist"
-const YEAR = new Date().getFullYear()
-
-// Global styles — not scoped via css() since they target raw elements
-const GLOBAL_CSS = `
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
-    Helvetica, Arial, sans-serif;
-  background: #0f172a;
-  color: #e2e8f0;
-  line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-a { color: #60a5fa; text-decoration: none; transition: color 0.15s ease; }
-a:hover { color: #93c5fd; }
-::selection { background: rgba(59, 130, 246, 0.3); }
-code {
-  font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
-  font-size: 0.875em;
-}
-
-/* Hover interactions for fixed class names used in components */
-.sk-card:hover { border-color: #3b82f6; }
-.sk-btn-primary:hover { background: #2563eb; }
-.sk-btn-secondary:hover { border-color: #475569; background: #1e293b; }
-.sk-foot-link:hover { color: #94a3b8; }
-
-/* Responsive tweaks */
-@media (max-width: 640px) {
-  .sk-card { padding: 24px; }
-}
-`
 
 // Render the Page to an HTML document with extracted scoped CSS.
-// renderToStringWithCSS returns both html and css (<style> tags).
+// renderToStringWithCSS returns both html and css (<style> tags) —
+// the scoped styles are extracted from the component tree and returned as
+// rendered <style> elements. Global/reset styles come from the GLOBAL_CSS export.
 const vnode = Page()
 const { html, css: styleTags } = renderToStringWithCSS(vnode)
-
-// renderToString is available for plain SSR (no CSS extraction).
-// Using renderToStringWithCSS below for combined HTML + scoped CSS output.
 
 // Assemble the complete HTML document
 const doc = `<!doctype html>
@@ -66,7 +31,13 @@ const doc = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Sikong — Durable Agent Workspaces</title>
+  <title>Sikong (司空) — Durable Agent Workspaces</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔭</text></svg>">
+  <meta name="description" content="Sikong is a universal coordination layer for multi-agent, multi-runtime development. One config, four backends, full observability." />
+  <meta name="og:title" content="Sikong (司空) — Durable Agent Workspaces" />
+  <meta name="og:description" content="Build with agent workflows across any runtime. Unified orchestration for Claude Code, Codex, Cursor, and AI SDK." />
+  <meta name="og:type" content="website" />
+  <meta name="og:url" content="https://sikong.dev" />
   <style>${GLOBAL_CSS}</style>
   ${styleTags}
 </head>
@@ -76,7 +47,7 @@ const doc = `<!doctype html>
 
 // Write the output file
 await Bun.write(`${OUT_DIR}/index.html`, doc)
-console.log(`✓ ${OUT_DIR}/index.html (${YEAR})`)
+console.log(`✓ ${OUT_DIR}/index.html`)
 
 // Copy the curl installer into the site output so sikong.dev/install.sh serves it
 // (matches the hero's `curl -fsSL https://sikong.dev/install.sh | sh`). The repo

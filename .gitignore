@@ -1,6 +1,8 @@
 node_modules/
 dist/
 packages/sikong/npm/
+design/preview/
+.vercel/
 *.log
 .DS_Store
 .env

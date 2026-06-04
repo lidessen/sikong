@@ -45,7 +45,7 @@ const VALUE_FLAGS = new Set([
   "--permission", "--permission-mode", "--wake-timeout",
   "--after", "--timeout", "--poll",
   "--parent", "--interval",
-  "--brief", "--style-tokens", "--ref",
+  "--frame", "--ref",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--text", "--human", "--once"]);
 const fail = (msg: string, code = 2): never => {
@@ -666,21 +666,15 @@ switch (cmd) {
 
   case "design": {
     const request = positional[1];
-    if (!request) fail("usage: cli design <request> [--project <id>] [--id <id>] [--worker <id>] [--brief <text>] [--style-tokens <text>]");
+    if (!request) fail("usage: cli design <request> [--project <id>] [--id <id>] [--worker <id>] [--frame <text>]");
     const ws = await openWorkspace(dir);
     const projectId = flag("--project") ?? "default";
     const id = flag("--id");
     const workerId = flag("--worker");
     const parentId = flag("--parent");
-    const brief = flag("--brief");
-    const styleTokens = flag("--style-tokens");
-    // Append style-tokens as constraints to the request text (no dedicated field).
-    let requestText = request;
-    if (styleTokens) {
-      requestText = `${requestText}\n\nStyle tokens / constraints: ${styleTokens}`;
-    }
-    const fields: Record<string, unknown> = { request: requestText };
-    if (brief) fields.brief = brief;
+    const frame = flag("--frame");
+    const fields: Record<string, unknown> = { request };
+    if (frame) fields.frame = frame;
     let task;
     try {
       const wf = ws.registry.get("design");
@@ -711,8 +705,7 @@ switch (cmd) {
     };
     if (text) {
       console.log(`created ${task!.id} → workflow "design" @ "${task!.stageId}" (${task!.status})`);
-      if (brief) console.log(`  brief: ${brief.slice(0, 80)}${brief.length > 80 ? "…" : ""}`);
-      if (styleTokens) console.log(`  style tokens: ${styleTokens.slice(0, 80)}${styleTokens.length > 80 ? "…" : ""}`);
+      if (frame) console.log(`  frame: ${frame.slice(0, 80)}${frame.length > 80 ? "…" : ""}`);
       console.log(`drive it: ${cli} run --task ${task!.id} --dir ${dir}`);
     } else {
       printJson(result);
@@ -774,8 +767,8 @@ switch (cmd) {
       `sikong CLI (dir: ${dir})\n\n` +
         "drive:\n" +
         "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--parent <id>] [--id <id>]\n" +
-        "  design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--brief <text>] [--style-tokens <text>]\n" +
-        "                                                               shorthand for --workflow design; --brief sets the brief field; --style-tokens appends constraints\n" +
+        "  design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--frame <text>]\n" +
+        "                                                               shorthand for --workflow design; --frame pre-fills the design frame (ADR 0022)\n" +
         "  release <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--ref <ref>]\n" +
         "                                                               shorthand for --workflow release; --ref pre-fills the releaseRef field\n" +
         "  run [--task <id>]\n" +
