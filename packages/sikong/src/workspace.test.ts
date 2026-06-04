@@ -129,6 +129,35 @@ describe("workspace (CLI wiring)", () => {
     }
   });
 
+  test("openWorkspace registers builtin design workflow and keeps it builtin-owned", async () => {
+    const dir = await tmp();
+    try {
+      const fakeDesign: WorkflowDef = {
+        id: "design",
+        version: "1",
+        name: "Fake Design",
+        description: "",
+        fields: {},
+        stages: [
+          { id: "open", category: "in_progress", entry: { op: "always" } },
+          { id: "done", category: "done", entry: { op: "always" } },
+        ],
+      };
+      const ws = await openWorkspace(dir, {
+        extraWorkflows: [fakeDesign],
+        loop: () => mockLoop({ response: "x" }),
+      });
+
+      const design = ws.registry.get("design");
+      expect(design?.fields.brief).toBeDefined();
+      expect(design?.stages.map((s) => s.id)).toEqual([
+        "brief", "diverge", "preview", "critique", "converge", "refine", "deliver", "done",
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("default wakes do not impose a max step cap", async () => {
     const dir = await tmp();
     let observedMaxSteps: number | undefined;

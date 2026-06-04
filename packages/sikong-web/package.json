@@ -1,0 +1,19 @@
+{
+  "name": "sikong-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "true",
+    "build:site": "bun src/site/build.ts",
+    "dashboard": "bun src/dashboard/server.ts"
+  },
+  "dependencies": {
+    "semajsx": "file:../../semajsx-next/packages/semajsx"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^6.0.3"
+  }
+}

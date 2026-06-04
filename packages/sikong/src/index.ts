@@ -27,6 +27,9 @@ export * from "./store";
 // ---- Wake engine (M1) -----------------------------------------------------
 export * from "./engine";
 
+// ---- Worker tools (injected at the worker boundary) -----------------------
+export * from "./tools";
+
 // ---- Observability --------------------------------------------------------
 export * from "./inspect";
 

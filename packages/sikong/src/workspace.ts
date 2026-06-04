@@ -9,9 +9,11 @@ import {
   openai,
   type AgentLoop,
   type ModelProvider,
+  type ToolSet,
 } from "agent-loop";
+import { buildDesignTools } from "./tools";
 import { WorkflowEngine, type EngineHooks, type LoopFactory, type WakeContext } from "./engine";
-import { DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./workflow/builtin";
+import { DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./workflow/builtin";
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
 import { discoveredRoster, selectWorker, type Worker } from "./worker";
@@ -113,12 +115,14 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   const workers = new JsonWorkerStore(dir);
 
   const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+  registry.register(DESIGN_WORKFLOW);
   registry.register(DEVELOPMENT_WORKFLOW);
   registry.register(DEVELOPMENT_LEAD_WORKFLOW);
   for (const wf of await loadWorkflows(dir)) registry.register(wf);
   for (const wf of opts.extraWorkflows ?? []) registry.register(wf);
   registry.register(DEVELOPMENT_WORKFLOW); // builtin development workflow wins over persisted definitions
   registry.register(DEVELOPMENT_LEAD_WORKFLOW); // builtin lead workflow wins over persisted definitions
+  registry.register(DESIGN_WORKFLOW); // builtin design workflow wins over persisted definitions
   registry.register(GENERAL_WORKFLOW); // builtin fallback always wins over a persisted "general"
 
   // Sikong staffs each task itself (ADR 0008): the operator only provisions the
@@ -163,10 +167,18 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     // The worker boundary: a bare ai-sdk worker gets generic file/shell tools from
     // agent-loop (the agent's interior). A coding-agent runtime carries its own
     // interface, so it needs none. The engine never references coding tools.
-    workerTools: (ctx: WakeContext, workerLoop: AgentLoop) =>
-      workerLoop.id === "ai-sdk" && ctx.project?.root
-        ? createProjectTools({ cwd: ctx.project.root, ...(ctx.project.env ? { env: ctx.project.env } : {}) })
-        : {},
+    workerTools: async (ctx: WakeContext, workerLoop: AgentLoop): Promise<ToolSet> => {
+      const tools: ToolSet = {};
+      // ai-sdk bare worker gets generic file/shell project tools
+      if (workerLoop.id === "ai-sdk" && ctx.project?.root) {
+        Object.assign(tools, await createProjectTools({ cwd: ctx.project.root, ...(ctx.project.env ? { env: ctx.project.env } : {}) }));
+      }
+      // Design workflow injects preview + deliver tools (ADR 0017)
+      if (ctx.workflow.id === "design" && ctx.project?.root) {
+        Object.assign(tools, buildDesignTools({ projectRoot: ctx.project.root }).tools);
+      }
+      return tools;
+    },
     // Record which worker a wake hires (model/provider) so the usage report can
     // cost it. Same selection as defaultLoop. billingMode is "token" — discovered
     // workers authenticate by API key; OAuth/subscription detection is deferred.

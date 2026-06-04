@@ -33,6 +33,137 @@ export const GENERAL_WORKFLOW: WorkflowDef = {
   ],
 };
 
+/**
+ * The design workflow (ADR 0017): design UI components/pages as real semajsx
+ * code through a structured divergent-convergent cycle. Stages: brief →
+ * diverge → preview → critique → converge → refine → deliver. The preview
+ * stage emits runnable semajsx bundles (SSR/dev server or SSG build) that the
+ * owner interacts with — no mockup gap. Two owner approval gates: converge
+ * (approved design) and deliver (landing the work).
+ */
+export const DESIGN_WORKFLOW: WorkflowDef = {
+  id: "design",
+  version: "1",
+  name: "Design",
+  description:
+    "Design UI components or pages as real semajsx code: brief, diverge, preview, critique, converge, refine, deliver.",
+  workerRole: "coding",
+  fields: {
+    request: { type: "string", description: "The original design request." },
+    brief: { type: "string", description: "Captured design brief with constraints, targets (web and/or TUI), and style tokens." },
+    candidates: { type: "json", description: "Array of candidate designs, each as a runnable semajsx bundle with name, description, and code." },
+    critiques: { type: "json", description: "Array of adversarial critiques per candidate covering hierarchy, a11y, consistency, token usage." },
+    design: { type: "string", description: "The converged/chosen design description." },
+    changedFiles: { type: "json", description: "Array of project file paths written during delivery." },
+    summary: { type: "string", description: "One-line final outcome." },
+  },
+  stages: [
+    {
+      id: "brief",
+      category: "in_progress",
+      entry: { op: "always" },
+      outputFields: ["brief"],
+      instructions:
+        "Capture what to design — page, component, or screen — and the constraints: target platforms (web and/or TUI), style tokens/branding, and any existing patterns to follow. Set `brief` with the refined brief, then request transition. Block if the request is too unclear.",
+    },
+    {
+      id: "diverge",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "brief", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["candidates"],
+      instructions:
+        "Generate N genuinely different candidate designs as real semajsx code (the diverge step — judge-panel pattern, each a different approach). Each candidate is a runnable bundle. Set `candidates` to a JSON array of the candidate designs (each with name, description, and code), then request transition.",
+    },
+    {
+      id: "preview",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "candidates", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      instructions:
+        "Emit each candidate as a live preview — serve the runnable semajsx bundles for the owner to interact with (web: SSR/dev server or static SSG build; TUI: terminal render). When the previews are live, request transition. Do not write workflow fields in this stage — just serve previews.",
+    },
+    {
+      id: "critique",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "candidates", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["critiques"],
+      instructions:
+        "Adversarially critique the candidates across multiple lenses — information hierarchy, accessibility, visual consistency, token/token-usage discipline. Each candidate should be judged by distinct lenses. Record the critiques in `critiques` as a JSON array (each entry with candidate name, lens, and assessment), then request transition.",
+    },
+    {
+      id: "converge",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "critiques", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["design"],
+      instructions:
+        "Synthesize the best design from the candidates, grafting good ideas from runners-up. Set `design` with the converged design description, then request transition for owner review. The owner approves before the next stage — present the decision and rationale clearly.",
+    },
+    {
+      id: "refine",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "design", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["design"],
+      instructions:
+        "Iterate on owner feedback — update the design and re-preview it. Keep updating `design` based on feedback. When the design is approved for delivery, request transition to the deliver stage.",
+    },
+    {
+      id: "deliver",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "design", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["changedFiles", "summary"],
+      instructions:
+        "Write the approved design as real semajsx/ui-based components or pages into the target project. Set `changedFiles` to a JSON array of written file paths and set `summary` as a one-line outcome, then request transition. Block if the writing fails.",
+    },
+    {
+      id: "done",
+      category: "done",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "changedFiles", cmp: "exists" },
+          { op: "field", field: "summary", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+    },
+  ],
+};
+
 export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
   id: "development",
   version: "1",

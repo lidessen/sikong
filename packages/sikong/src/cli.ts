@@ -45,6 +45,7 @@ const VALUE_FLAGS = new Set([
   "--permission", "--permission-mode", "--wake-timeout",
   "--after", "--timeout", "--poll",
   "--parent", "--interval",
+  "--brief", "--style-tokens",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--text", "--human", "--once"]);
 const fail = (msg: string, code = 2): never => {
@@ -232,7 +233,7 @@ async function buildSubmitCommand(ws: Workspace, taskId: string, op: string, res
 }
 
 // Write commands take the dir's exclusive write lock (released on process exit).
-const WRITE_CMDS = new Set(["create", "run", "submit", "register"]);
+const WRITE_CMDS = new Set(["create", "design", "run", "submit", "register"]);
 const needsLock =
   (!!cmd && WRITE_CMDS.has(cmd)) ||
   (cmd === "project" && positional[1] === "create") ||
@@ -663,11 +664,69 @@ switch (cmd) {
     break;
   }
 
+  case "design": {
+    const request = positional[1];
+    if (!request) fail("usage: cli design <request> [--project <id>] [--id <id>] [--worker <id>] [--brief <text>] [--style-tokens <text>]");
+    const ws = await openWorkspace(dir);
+    const projectId = flag("--project") ?? "default";
+    const id = flag("--id");
+    const workerId = flag("--worker");
+    const parentId = flag("--parent");
+    const brief = flag("--brief");
+    const styleTokens = flag("--style-tokens");
+    // Append style-tokens as constraints to the request text (no dedicated field).
+    let requestText = request;
+    if (styleTokens) {
+      requestText = `${requestText}\n\nStyle tokens / constraints: ${styleTokens}`;
+    }
+    const fields: Record<string, unknown> = { request: requestText };
+    if (brief) fields.brief = brief;
+    let task;
+    try {
+      const wf = ws.registry.get("design");
+      if (!wf) fail("built-in 'design' workflow not found");
+      task = await ws.engine.createTask({
+        projectId,
+        workflowId: "design",
+        fields,
+        wake: false,
+        ...(id ? { taskId: id } : {}),
+        ...(workerId ? { workerId } : {}),
+        ...(parentId ? { parentId } : {}),
+      });
+    } catch (err) {
+      fail((err as Error).message, 1);
+    }
+    // Guardrail (ADR 0009): warn when write-class workflow targets cwd.
+    const createdProject = await ws.projects.get(projectId);
+    if (resolve(createdProject?.root ?? ".") === resolve(process.cwd())) {
+      console.error(
+        `⚠ design workflow staffs a coding team that edits the project, and project "${projectId}" root is the current directory (${resolve(createdProject?.root ?? ".")}). Running this task will modify files here. To target a specific directory, \`project create <id> --root <path>\` then pass --project <id>.`,
+      );
+    }
+    const result = {
+      ok: true,
+      task,
+      next: { command: "run", taskId: task!.id, dir, argv: ["run", "--task", task!.id, "--dir", dir] },
+    };
+    if (text) {
+      console.log(`created ${task!.id} → workflow "design" @ "${task!.stageId}" (${task!.status})`);
+      if (brief) console.log(`  brief: ${brief.slice(0, 80)}${brief.length > 80 ? "…" : ""}`);
+      if (styleTokens) console.log(`  style tokens: ${styleTokens.slice(0, 80)}${styleTokens.length > 80 ? "…" : ""}`);
+      console.log(`drive it: ${cli} run --task ${task!.id} --dir ${dir}`);
+    } else {
+      printJson(result);
+    }
+    break;
+  }
+
   default:
     console.log(
       `sikong CLI (dir: ${dir})\n\n` +
         "drive:\n" +
         "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--parent <id>] [--id <id>]\n" +
+        "  design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--brief <text>] [--style-tokens <text>]\n" +
+        "                                                               shorthand for --workflow design; --brief sets the brief field; --style-tokens appends constraints\n" +
         "  run [--task <id>]\n" +
         "  submit <id> <set-field <f> <v> | transition [reason] | cancel [reason] | block <reason> | unblock>\n" +
         "  register <workflow.yaml>\n" +
