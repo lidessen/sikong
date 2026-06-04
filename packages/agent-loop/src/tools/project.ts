@@ -2,7 +2,7 @@ import { readFile, realpath, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { isAbsolute, relative, resolve } from "node:path";
 import { lookup } from "node:dns/promises";
-import { execa } from "execa";
+import type { Bash } from "just-bash";
 import * as zod from "zod";
 import { defineTool, type ToolDefinition, type ToolSet } from "../core/types";
 
@@ -128,7 +128,7 @@ export async function createProjectTools(options: ProjectToolOptions): Promise<T
   out.replaceInFile = createReplaceInFileTool({ cwd });
   out.insertInFile = createInsertInFileTool({ cwd });
 
-  const rg = createRipgrepTool({ cwd });
+  const rg = createRipgrepTool({ bash, cwd });
   out.rg = rg;
   out.grep = {
     ...rg,
@@ -228,7 +228,7 @@ function hasFinalNewline(text: string): boolean {
   return text.endsWith("\n") || text.endsWith("\r");
 }
 
-function createRipgrepTool(opts: { cwd: string }): ToolDefinition {
+function createRipgrepTool(opts: { bash: Bash; cwd: string }): ToolDefinition {
   return defineTool({
     description:
       "Search project files with ripgrep (`rg`). Returns matching lines with file paths and line numbers.",
@@ -239,20 +239,19 @@ function createRipgrepTool(opts: { cwd: string }): ToolDefinition {
       const pathResult = await resolveProjectPath(opts.cwd, args.path ?? ".");
       if (!pathResult.ok) return { error: pathResult.error };
 
-      const rgArgs = ["--line-number", "--no-heading", "--color=never"];
+      const rgArgs = ["--line-number"];
       if (args.case_insensitive) rgArgs.push("--ignore-case");
       if (args.fixed_strings) rgArgs.push("--fixed-strings");
-      if (args.context !== undefined && args.context > 0) rgArgs.push("--context", String(args.context));
+      if (args.context !== undefined && args.context > 0) rgArgs.push("-C", String(args.context));
       const globs = typeof args.glob === "string" ? [args.glob] : (args.glob ?? []);
       for (const glob of globs) rgArgs.push("--glob", glob);
-      rgArgs.push("--", args.pattern, pathResult.rgPath);
+      rgArgs.push(args.pattern, pathResult.rgPath);
 
       let result: { exitCode?: number; stdout: string; stderr: string };
       try {
-        const completed = await execa("rg", rgArgs, {
-          cwd: opts.cwd,
-          reject: false,
-          cancelSignal: ctx.signal,
+        const completed = await opts.bash.exec("rg", {
+          args: rgArgs,
+          signal: ctx.signal,
         });
         result = {
           exitCode: completed.exitCode,
@@ -260,7 +259,7 @@ function createRipgrepTool(opts: { cwd: string }): ToolDefinition {
           stderr: String(completed.stderr ?? ""),
         };
       } catch (err) {
-        return { error: `rg failed to start: ${(err as Error).message}` };
+        return { error: `rg search failed: ${(err as Error).message}` };
       }
       const exitCode = result.exitCode ?? 0;
       if (exitCode > 1) {
@@ -269,7 +268,8 @@ function createRipgrepTool(opts: { cwd: string }): ToolDefinition {
           exitCode,
         };
       }
-      const lines = result.stdout ? result.stdout.split("\n") : [];
+      const stdout = result.stdout ? result.stdout.replace(/\n$/, "") : "";
+      const lines = stdout ? stdout.split("\n") : [];
       const matches = lines.slice(0, maxResults);
       return {
         matches,
