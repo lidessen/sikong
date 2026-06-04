@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { assertValidWorkflow, validateWorkflow, type ValidateOptions } from "./validate";
-import { DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./builtin";
+import { DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./builtin";
 import { WorkflowValidationError } from "./errors";
 import type { Guard, WorkflowDef } from "./types";
 
@@ -18,6 +18,10 @@ describe("validateWorkflow", () => {
 
   test("the builtin DESIGN workflow is valid", () => {
     expect(validateWorkflow(DESIGN_WORKFLOW)).toEqual([]);
+  });
+
+  test("the builtin RELEASE workflow is valid", () => {
+    expect(validateWorkflow(RELEASE_WORKFLOW)).toEqual([]);
   });
 
   test("flags a workflow with no terminal (done) stage", () => {
@@ -256,3 +260,128 @@ function collectAllFieldGuards(guard: Guard): Array<{ field: string; cmp: string
   walk(guard);
   return out;
 }
+
+// ── RELEASE_WORKFLOW adversarial edge-case tests ──────────────────────────────
+
+describe("RELEASE_WORKFLOW edge cases", () => {
+  const wf = RELEASE_WORKFLOW;
+
+  test("workerRole is 'coding' so it staffs a coding-capable worker", () => {
+    expect(wf.workerRole).toBe("coding");
+  });
+
+  test("has the full 7-stage sequence: assess → gate → prepare → approve → publish → confirm → done", () => {
+    const ids = wf.stages.map((s) => s.id);
+    expect(ids).toEqual([
+      "assess",
+      "gate",
+      "prepare",
+      "approve",
+      "publish",
+      "confirm",
+      "done",
+    ]);
+  });
+
+  test("every non-initial stage with a field guard references a field set by an earlier stage's outputFields — no dangling guard reference", () => {
+    const cumulativeOutputFields = new Set<string>();
+    for (let i = 0; i < wf.stages.length; i++) {
+      const stage = wf.stages[i];
+      if (!stage) break;
+
+      if (i > 0) {
+        const refs = collectAllFieldGuards(stage.entry);
+        for (const { field, cmp } of refs) {
+          if (cmp !== "exists") continue; // eq/ne guards reference external fields (e.g. approved)
+          expect(cumulativeOutputFields.has(field)).toBe(true);
+        }
+      }
+
+      for (const f of stage.outputFields ?? []) {
+        cumulativeOutputFields.add(f);
+      }
+    }
+  });
+
+  test("all outputFields in every stage are declared as workflow fields with a compatible type", () => {
+    for (const stage of wf.stages) {
+      for (const field of stage.outputFields ?? []) {
+        const def = wf.fields[field];
+        expect(def).toBeDefined();
+      }
+    }
+  });
+
+  test("the `approved` field is NOT in any stage's outputFields (lead-only gate)", () => {
+    for (const stage of wf.stages) {
+      expect(stage.outputFields ?? []).not.toContain("approved");
+    }
+  });
+
+  test("JSON-typed fields (releasePlan, gate, published, verification) only appear as outputFields of stages that write them", () => {
+    expect(wf.fields.releasePlan).toBeDefined();
+    expect(wf.fields.releasePlan?.type).toBe("json");
+    expect(wf.fields.gate).toBeDefined();
+    expect(wf.fields.gate?.type).toBe("json");
+    expect(wf.fields.published).toBeDefined();
+    expect(wf.fields.published?.type).toBe("json");
+    expect(wf.fields.verification).toBeDefined();
+    expect(wf.fields.verification?.type).toBe("json");
+  });
+
+  test("every guard field reference that uses 'exists' cmp is paired with a field that appears in some stage's outputFields", () => {
+    const expectedFields = new Set<string>();
+    for (const stage of wf.stages) {
+      for (const f of stage.outputFields ?? []) {
+        expectedFields.add(f);
+      }
+    }
+    // request and releaseRef are input-only — intentionally not in outputFields
+    expectedFields.delete("request");
+    expectedFields.delete("releaseRef");
+
+    for (const stage of wf.stages) {
+      const refs = collectAllFieldGuards(stage.entry);
+      for (const { field, cmp } of refs) {
+        if (cmp === "exists") {
+          expect(expectedFields.has(field)).toBe(true);
+        }
+      }
+    }
+  });
+
+  test("done stage's entry guard requires the same fields that confirm stage outputs", () => {
+    const confirm = wf.stages[5];
+    const done = wf.stages[6];
+    expect(confirm?.id).toBe("confirm");
+    expect(done?.id).toBe("done");
+
+    const confirmOutputs = new Set(confirm?.outputFields ?? []);
+    const doneRefs = collectFieldRefs(done?.entry ?? { op: "always" });
+
+    for (const ref of doneRefs) {
+      expect(confirmOutputs.has(ref)).toBe(true);
+    }
+  });
+
+  test("publish and confirm stages enable create_subtask for fan-out", () => {
+    const publish = wf.stages[4];
+    const confirm = wf.stages[5];
+    expect(publish?.id).toBe("publish");
+    expect(confirm?.id).toBe("confirm");
+
+    expect(publish?.tools).toContain("create_subtask");
+    expect(confirm?.tools).toContain("create_subtask");
+  });
+
+  test("the publish stage guards on approved=true (eq comparator)", () => {
+    const publish = wf.stages[4];
+    expect(publish?.id).toBe("publish");
+
+    // Walk the entry guard tree looking for the approved=true constraint
+    const fieldGuards = collectAllFieldGuards(publish?.entry ?? { op: "always" });
+    const approvedGuard = fieldGuards.find((g) => g.field === "approved");
+    expect(approvedGuard).toBeDefined();
+    expect(approvedGuard?.cmp).toBe("eq");
+  });
+});

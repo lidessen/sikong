@@ -249,6 +249,130 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
 };
 
 /**
+ * The release workflow (ADR 0019): ship a project through a gated, auditable
+ * pipeline. Stages: assess → gate → prepare → approve → publish → confirm.
+ * Each stage is staffed independently per wake. The `approve` stage halts for
+ * external lead approval (`approved` is never in any stage's outputFields so
+ * the agent cannot set it — only `sikong submit set-field approved true` can).
+ * The `publish` and `confirm` stages enable `create_subtask` for fan-out to
+ * parallel artifacts (e.g. npm-publish + Vercel deploy + GitHub Release).
+ */
+export const RELEASE_WORKFLOW: WorkflowDef = {
+  id: "release",
+  version: "1",
+  name: "Release",
+  description: "Ship a project: assess, gate, prepare, approve, publish, confirm.",
+  workerRole: "coding",
+  fields: {
+    request: { type: "string", description: "The original release requirement." },
+    releaseRef: { type: "string", description: "Lead-specified ref/version override (optional)." },
+    releasePlan: { type: "json", description: "Version, ref, targets, changelog, and intended publish commands." },
+    gate: { type: "json", description: "Build/test/smoke commands and results proving the candidate is stable." },
+    prepared: { type: "string", description: "Local release prep done: version bumped, changelog updated, tag created." },
+    releaseSummary: { type: "string", description: "Evidence presented to the lead: version, changelog, gate results, publish plan." },
+    approved: { type: "boolean", description: "Lead approval gate — can only be set externally, never by the agent." },
+    published: { type: "json", description: "Publish commands that ran and resulting artifact URLs." },
+    verification: { type: "json", description: "Landing checks and their results: assets exist, npm resolves, deploy is live." },
+    summary: { type: "string", description: "One-line final outcome." },
+  },
+  stages: [
+    {
+      id: "assess",
+      category: "in_progress",
+      entry: { op: "always" },
+      outputFields: ["releasePlan"],
+      instructions:
+        "Decide what to ship: determine the target ref/version, inspect the project for release mechanisms (package.json scripts, .github/workflows, vercel.json, release scripts), build the changelog since the last release, and infer the publish targets. Set `releasePlan` with the version, ref, targets, changelog, and intended publish commands. Block if the project has no discernible release mechanism, then request transition.",
+    },
+    {
+      id: "gate",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "releasePlan", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["gate"],
+      instructions:
+        "Prove the candidate is stable before any outward-facing action. Run the project's full verification (build + test + any release:check script) on that exact ref, plus a real-user smoke where applicable (ADR 0015). Set `gate` with the exact commands and their results. Block if not green — you do not ship red, then request transition.",
+    },
+    {
+      id: "prepare",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "gate", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["prepared"],
+      instructions:
+        "Make the release locally — nothing outward yet. Bump the version, update CHANGELOG, create the tag (unpushed), and build artifacts. Set `prepared` describing what was done, then request transition.",
+    },
+    {
+      id: "approve",
+      category: "in_progress",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "prepared", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["releaseSummary"],
+      instructions:
+        "HALT for lead approval. Present the full release evidence — version, changelog, gate results, and precisely what will be published where — to the lead. Set `releaseSummary` with the decision context. Request transition. The task stops here until the lead sets `approved=true` externally (this field is never in outputFields so you cannot set it). Only `sikong submit <id> set-field approved true` advances to publish.",
+    },
+    {
+      id: "publish",
+      category: "in_progress",
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "prepared", cmp: "exists" },
+          { op: "field", field: "approved", cmp: "eq", value: true },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["published"],
+      instructions:
+        "Execute the release outward: push the tag (triggers release CI), npm publish, vercel deploy --prod, and/or other publish commands from the releasePlan. You MAY fan out parallel artifacts with `create_subtask`. Set `published` with the commands that ran and resulting artifact URLs. Block if a publish command fails, then request transition.",
+    },
+    {
+      id: "confirm",
+      category: "in_progress",
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "published", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["verification", "summary"],
+      instructions:
+        "Verify the release actually landed: GitHub Release assets exist, npm version resolves, deploy URL is live, install one-liner works. Set `verification` with the landing checks and results. Set `summary` with a one-line outcome. Block if it didn't land, then request transition.",
+    },
+    {
+      id: "done",
+      category: "done",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "verification", cmp: "exists" },
+          { op: "field", field: "summary", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+    },
+  ],
+};
+
+/**
  * The lead workflow (ADR 0009): a 负责人 plans an effort, breaks it into a team of
  * child tasks (each auto-staffed by capability), is re-woken as they finish,
  * reviews the Team section, and synthesizes the outcome. `create_subtask` is

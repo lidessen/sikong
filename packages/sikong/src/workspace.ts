@@ -13,7 +13,7 @@ import {
 } from "agent-loop";
 import { buildDesignTools } from "./tools";
 import { WorkflowEngine, type EngineHooks, type LoopFactory, type WakeContext } from "./engine";
-import { DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "./workflow/builtin";
+import { DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./workflow/builtin";
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
 import { discoveredRoster, selectWorker, type Worker } from "./worker";
@@ -118,11 +118,13 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   registry.register(DESIGN_WORKFLOW);
   registry.register(DEVELOPMENT_WORKFLOW);
   registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+  registry.register(RELEASE_WORKFLOW);
   for (const wf of await loadWorkflows(dir)) registry.register(wf);
   for (const wf of opts.extraWorkflows ?? []) registry.register(wf);
   registry.register(DEVELOPMENT_WORKFLOW); // builtin development workflow wins over persisted definitions
   registry.register(DEVELOPMENT_LEAD_WORKFLOW); // builtin lead workflow wins over persisted definitions
   registry.register(DESIGN_WORKFLOW); // builtin design workflow wins over persisted definitions
+  registry.register(RELEASE_WORKFLOW); // builtin release workflow wins over persisted definitions
   registry.register(GENERAL_WORKFLOW); // builtin fallback always wins over a persisted "general"
 
   // Sikong staffs each task itself (ADR 0008): the operator only provisions the

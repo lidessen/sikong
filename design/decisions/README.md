@@ -49,3 +49,4 @@ Files use a monotonic four-digit prefix:
 | [0017](0017-design-workflow.md) | Accepted | Design workflow (sikong-orchestrated UI design → real semajsx, live preview; not a separate project) |
 | [0018](0018-sikong-web-package.md) | Accepted | sikong-web — new package for sikong.dev website + local monitor dashboard |
 | [0019](0019-release-workflow.md) | Accepted | Release/deploy workflow (select stable → gate → tag → approve → publish → confirm; tag+npm+vercel) |
+| [0020](0020-unify-development-workflow.md) | Accepted | Unify development + development-lead into one adaptive workflow (delegation optional; engine maxTeamDepth cap) |

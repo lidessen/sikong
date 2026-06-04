@@ -106,6 +106,91 @@ release stage — one release mechanism, reused.
 - Outward-facing publishing always passes an explicit human/AI approval.
 - ADR 0016 self-promotion becomes a thin specialization, not a parallel mechanism.
 
+## Implementation design (adversarial design, 2026-06-04)
+
+Three candidate approaches were adversarially weighed before converging on the
+design below. See next section for the rejected alternatives.
+
+### Converged design: structured JSON fields + approve-gate via lead-only boolean
+
+**Worker role.** `coding` — release work needs shell access (git, npm, vercel, gh).
+
+**No new worker tools.** The release workflow needs no custom tools (no equivalent of
+`design_preview`/`design_deliver`). The agent's native shell/git/npm tools handle
+everything. The value of the workflow is *coordination and gates*, not tooling.
+
+**Fields (9).**
+| Field | Type | Set by | Purpose |
+|---|---|---|---|
+| `request` | string | intake / lead | Original release requirement |
+| `releaseRef` | string | lead (optional) | Lead-specified ref/version override |
+| `releasePlan` | json | assess | Version, ref, targets, changelog, commands |
+| `gate` | json | gate | Build/test/smoke commands + results |
+| `prepared` | string | prepare | Local prep done (bump, changelog, tag) |
+| `releaseSummary` | string | approve | Evidence presented to the lead |
+| `approved` | boolean | **lead only** | Gate for publish (never in any outputFields) |
+| `published` | json | publish | Commands ran + artifact URLs |
+| `verification` | json | confirm | Landing checks + results |
+| `summary` | string | confirm → done | One-line outcome |
+
+**Approval mechanism — lead-only boolean, no block needed.**
+The `approved` field is *not listed in any stage's `outputFields`*, which means the
+agent's `set_field` tool (constrained to outputFields) can never set it. Only the
+lead's external `sikong submit <id> set-field approved true` can. The agent in the
+approve stage presents evidence, writes `releaseSummary`, and requests transition —
+the publish guard fails (`approved` missing), the task naturally halts with no
+further agent wakes. When the lead sets `approved=true`, the engine pre-advance
+detects the satisfied guard and transitions to publish without waking the agent in
+the approve stage again. No `block`/`unblock` cycle needed.
+
+**Stage guard chain.**
+```
+assess  → guard: always (initial)
+gate    → guard: releasePlan exists + transition.requested
+prepare → guard: gate exists + transition.requested
+approve → guard: prepared exists + transition.requested
+publish → guard: prepared exists + approved = true + transition.requested
+confirm → guard: published exists + transition.requested
+done    → guard: verification exists + summary exists + transition.requested
+```
+
+The publish guard's `approved = true` condition is the safety boundary: the task
+cannot enter the outward-facing publish stage until the lead sets the boolean.
+
+**Stage tool sets.** All stages default to full command tools (set_field,
+request_transition, append_note, block, cancel). Publish and confirm additionally
+enable `create_subtask` for fan-out to parallel artifacts/sub-checks, following the
+same list-all-tools pattern as DEVELOPMENT_LEAD's delegate stage.
+
+**CLI.** A `release` CLI command (matching the `design` command pattern): shorthand
+for `create --workflow release`. Accepts `--ref` to pre-fill `releaseRef`.
+
+**Registration.** `RELEASE_WORKFLOW` exported from `builtin.ts`, barrel-exported from
+`workflow/index.ts`, registered in `workspace.ts` (builtins section, re-registered
+after persisted definitions to win), validated in `validate.test.ts`.
+
+### Rejected alternatives
+
+**A — Minimal fields (request + approved + summary only).**
+Fields: `request` (string), `approved` (boolean), `summary` (string). All stages
+flow with agent-written text only.
+- Pros: Minimal code, trivially extensible, max agent flexibility.
+- Why rejected: No structured audit trail. The lead approving has no machine-readable
+  evidence to review. Hard to post-process or build CLI tooling around (no gate
+  results, no published artifacts data). The `approved` boolean would need to be on
+  the agent's outputFields list (or all fields are settable) and thus self-approvable.
+
+**C — Hybrid with release descriptor (.sikong/release.json).**
+Like the chosen design, but with an additional `releaseConfig` (json) field that the
+assess stage reads from `.sikong/release.json` (or infers). When present, the agent
+follows deterministic commands from the descriptor verbatim for publish and confirm.
+- Pros: More deterministic for critical release steps, auditability of exact commands.
+  Reduces LLM-inference risk on irreversible actions.
+- Why rejected (deferred): Valuable pattern but out of scope for v0. The descriptor
+  format, discovery, and versioning need design before implementation. The inference
+  approach works for v0 (the agent already inspects package.json/vercel.json etc.),
+  and a descriptor can be layered on later behind the same assess→gate→publish flow.
+
 ## Build order (when accepted)
 1. The `release` workflow def (assess → gate → prepare → approve → publish →
    confirm) + register it.
