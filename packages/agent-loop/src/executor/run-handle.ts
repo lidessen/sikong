@@ -117,11 +117,11 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     else if (decision.action === "stop") doCancel(decision.reason);
   }
 
-  function finalize(
+  async function finalize(
     status: RunResult["status"],
     backendResult?: BackendResult,
     error?: Error,
-  ): void {
+  ): Promise<void> {
     if (settled) return;
     settled = true;
     const result: RunResult = {
@@ -132,9 +132,12 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
       error,
       text,
     };
-    Promise.resolve(hooks.onEnd?.(result))
-      .catch(() => {})
-      .finally(() => endStream());
+    try {
+      await hooks.onEnd?.(result);
+    } catch {
+      // Observational hook — a throw must not crash the run.
+    }
+    endStream();
     resolveResult(result);
   }
 
@@ -144,7 +147,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
 
       const adapter = await backend.getAdapter();
       if (cancelledBeforeStart) {
-        finalize("cancelled");
+        await finalize("cancelled");
         return;
       }
 
@@ -206,19 +209,19 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
       // tokens that some runtimes (DeepSeek) report only in a `result` message
       // the cancel skips. Falling back to the event-accumulated usage would lose
       // them (output would read 0). See fillEstimatedOutput in adapters/claude.ts.
-      if (wasCancelled) finalize("cancelled", await backendRun.result.catch(() => undefined));
-      else finalize("completed", await backendRun.result);
+      if (wasCancelled) await finalize("cancelled", await backendRun.result.catch(() => undefined));
+      else await finalize("completed", await backendRun.result);
     } catch (err) {
       if (wasCancelled) {
         const cancelledResult = backendRun
           ? await backendRun.result.catch(() => undefined)
           : undefined;
-        finalize("cancelled", cancelledResult);
+        await finalize("cancelled", cancelledResult);
         return;
       }
       const error = err instanceof Error ? err : new Error(String(err));
       publish({ type: "error", error });
-      finalize("error", undefined, error);
+      await finalize("error", undefined, error);
     }
   }
 
