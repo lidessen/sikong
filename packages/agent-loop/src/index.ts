@@ -106,6 +106,7 @@ export type {
 } from "./core/hooks";
 export { defineTool } from "./core/types";
 export type {
+  EffortLevel,
   RuntimeId,
   McpServerConfig,
   McpServers,

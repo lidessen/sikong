@@ -20,6 +20,7 @@ export const GENERAL_WORKFLOW: WorkflowDef = {
       id: "open",
       category: "in_progress",
       entry: { op: "always" },
+      effort: "medium",
       outputFields: ["summary"],
       instructions:
         "Do whatever the task needs. Record a one-line `summary` of the outcome, then request a transition to close it.",
@@ -62,6 +63,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
       id: "brief",
       category: "in_progress",
       entry: { op: "always" },
+      effort: "medium",
       outputFields: ["brief"],
       instructions:
         "Capture what to design — page, component, or screen — and the constraints: target platforms (web and/or TUI), style tokens/branding, and any existing patterns to follow. Set `brief` with the refined brief, then request transition. Block if the request is too unclear.",
@@ -69,6 +71,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
     {
       id: "diverge",
       category: "in_progress",
+      effort: "max",
       entry: {
         op: "and",
         all: [
@@ -83,6 +86,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
     {
       id: "preview",
       category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
@@ -96,6 +100,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
     {
       id: "critique",
       category: "in_progress",
+      effort: "high",
       entry: {
         op: "and",
         all: [
@@ -110,6 +115,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
     {
       id: "converge",
       category: "in_progress",
+      effort: "high",
       entry: {
         op: "and",
         all: [
@@ -124,6 +130,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
     {
       id: "refine",
       category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
@@ -138,6 +145,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
     {
       id: "deliver",
       category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
@@ -197,6 +205,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
     {
       id: "design",
       category: "in_progress",
+      effort: "high",
       entry: { op: "always" },
       outputFields: ["design", "alternatives"],
       instructions:
@@ -205,6 +214,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
     {
       id: "plan",
       category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
@@ -219,6 +229,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
     {
       id: "build",
       category: "in_progress",
+      effort: "medium",
       tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
       entry: {
         op: "and",
@@ -234,6 +245,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
     {
       id: "verify",
       category: "in_progress",
+      effort: "medium",
       tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
       entry: {
         op: "and",
@@ -299,6 +311,7 @@ export const RELEASE_WORKFLOW: WorkflowDef = {
       id: "assess",
       category: "in_progress",
       entry: { op: "always" },
+      effort: "medium",
       outputFields: ["releasePlan"],
       instructions:
         "Decide what to ship: determine the target ref/version, inspect the project for release mechanisms (package.json scripts, .github/workflows, vercel.json, release scripts), build the changelog since the last release, and infer the publish targets. Set `releasePlan` with the version, ref, targets, changelog, and intended publish commands. Block if the project has no discernible release mechanism, then request transition.",
@@ -306,6 +319,7 @@ export const RELEASE_WORKFLOW: WorkflowDef = {
     {
       id: "gate",
       category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
@@ -320,6 +334,7 @@ export const RELEASE_WORKFLOW: WorkflowDef = {
     {
       id: "prepare",
       category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
@@ -334,6 +349,7 @@ export const RELEASE_WORKFLOW: WorkflowDef = {
     {
       id: "approve",
       category: "in_progress",
+      effort: "low",
       entry: {
         op: "and",
         all: [
@@ -348,6 +364,7 @@ export const RELEASE_WORKFLOW: WorkflowDef = {
     {
       id: "publish",
       category: "in_progress",
+      effort: "medium",
       tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
       entry: {
         op: "and",
@@ -364,6 +381,7 @@ export const RELEASE_WORKFLOW: WorkflowDef = {
     {
       id: "confirm",
       category: "in_progress",
+      effort: "medium",
       tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
       entry: {
         op: "and",
@@ -425,6 +443,7 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
     {
       id: "design",
       category: "in_progress",
+      effort: "high",
       entry: { op: "always" },
       outputFields: ["design", "alternatives"],
       instructions:
@@ -433,6 +452,7 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
     {
       id: "plan",
       category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
@@ -448,6 +468,7 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
     {
       id: "delegate",
       category: "in_progress",
+      effort: "medium",
       tools: ["create_subtask", "append_note", "request_transition", "block", "cancel"],
       entry: {
         op: "and",
@@ -462,6 +483,7 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
     {
       id: "review",
       category: "in_progress",
+      effort: "medium",
       tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
       outputFields: ["summary"],
       entry: {

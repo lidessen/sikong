@@ -21,7 +21,50 @@ import { createEventChannel } from "../core/channel";
 import { resolveContextWindow } from "../core/context-window";
 import type { LoopEvent } from "../core/events";
 import type { AiSdkProviderSpec } from "../core/provider";
-import type { PreflightResult, ToolDefinition, ToolSet } from "../core/types";
+import type { EffortLevel, PreflightResult, ToolDefinition, ToolSet } from "../core/types";
+
+/**
+ * Map generic EffortLevel to provider-specific AI SDK providerOptions.
+ *
+ * Supported provider kinds:
+ *  - anthropic / anthropic-compatible: `{ anthropic: { thinking: { type: "enabled", budgetTokens } } }`
+ *  - openai / openai-compatible / deepseek: `{ <key>: { reasoning_effort } }` (key is provider name)
+ *
+ * Unsupported spec kinds or unset effort → empty object (honest no-op).
+ */
+function effortToProviderOptions(
+  effort: EffortLevel | undefined,
+  spec: AiSdkProviderSpec | undefined,
+): Record<string, unknown> {
+  if (!effort) return {};
+
+  // Anthropic thinking-budget mapping (tokens).
+  if (spec?.kind === "anthropic") {
+    const budgetTokens =
+      effort === "low" ? 2048 :
+      effort === "medium" ? 8192 :
+      effort === "high" ? 16384 :
+      32768; // max
+    return { anthropic: { thinking: { type: "enabled" as const, budgetTokens } } };
+  }
+
+  // OpenAI / DeepSeek / OpenAI-compatible reasoning-effort mapping.
+  // Note: @ai-sdk/deepseek may not support per-call reasoning_effort — this
+  // is a best-effort pass-through; the provider ignores it if unsupported.
+  if (spec?.kind === "openai" || spec?.kind === "deepseek" || spec?.kind === "openai-compatible") {
+    const reasoningEffort = effort === "max" ? "high" : effort;
+    // Use the provider id as the key — AI SDK models typically key on the
+    // provider base name (e.g. "openai", "deepseek").
+    const providerKey =
+      spec.kind === "deepseek" ? "deepseek" :
+      spec.kind === "openai-compatible" ? spec.name :
+      spec.kind;
+    return { [providerKey]: { reasoning_effort: reasoningEffort } };
+  }
+
+  // Gateway and other provider kinds: no standardized effort support.
+  return {};
+}
 
 /** Per-backend escape hatch for the AI SDK adapter. */
 export interface AiSdkRuntimeOptions {
@@ -113,6 +156,13 @@ export class AiSdkAdapter implements BackendAdapter {
       .filter((s): s is string => Boolean(s && s.trim()))
       .join("\n\n");
 
+    // Merge effort-derived provider options with any per-run overrides.
+    // Per-run options win on key collision (spread order: effort first, then o.providerOptions).
+    const providerOptions: Record<string, unknown> = {
+      ...effortToProviderOptions(req.effort, this.options.spec),
+      ...(o.providerOptions as Record<string, unknown> | undefined),
+    };
+
     const stepBudget = o.maxSteps ?? req.maxSteps ?? this.options.maxSteps;
     const tools = this.buildTools(req, ac.signal);
 
@@ -151,7 +201,7 @@ export class AiSdkAdapter implements BackendAdapter {
           tools,
           ...(o.toolChoice ? { toolChoice: o.toolChoice } : {}),
           ...(o.activeTools ? { activeTools: o.activeTools as Array<keyof AiToolSet> } : {}),
-          ...(o.providerOptions ? { providerOptions: o.providerOptions as never } : {}),
+          ...(Object.keys(providerOptions).length > 0 ? { providerOptions: providerOptions as never } : {}),
           ...(stepBudget ? { stopWhen: stepCountIs(stepBudget) } : {}),
           prepareStep,
         });

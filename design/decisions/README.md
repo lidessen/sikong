@@ -50,3 +50,4 @@ Files use a monotonic four-digit prefix:
 | [0018](0018-sikong-web-package.md) | Accepted | sikong-web — new package for sikong.dev website + local monitor dashboard |
 | [0019](0019-release-workflow.md) | Accepted | Release/deploy workflow (select stable → gate → tag → approve → publish → confirm; tag+npm+vercel) |
 | [0020](0020-unify-development-workflow.md) | Accepted | Unify development + development-lead into one adaptive workflow (delegation optional; engine maxTeamDepth cap) |
+| [0021](0021-configurable-effort-level.md) | Accepted | Configurable, lead-decided effort level (generic RunInput.effort + per-stage/per-subtask resolution; default medium) |

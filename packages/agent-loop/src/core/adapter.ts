@@ -2,6 +2,7 @@ import type { CapabilityList } from "../core/capabilities";
 import type { LoopEvent, TokenUsage } from "../core/events";
 import type { ToolHookDecision, ToolUseHookEvent } from "../core/hooks";
 import type {
+  EffortLevel,
   RuntimeId,
   McpServers,
   PreflightResult,
@@ -31,6 +32,8 @@ export interface ResolvedRequest {
   mcp: McpServers;
   maxSteps?: number;
   signal?: AbortSignal;
+  /** Resolved effort level for this run, or undefined to use the provider default. */
+  effort?: EffortLevel;
   runtimeOptions?: unknown;
   hooks: AdapterHookBridge;
 }

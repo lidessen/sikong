@@ -4,6 +4,7 @@ import {
   defineTool,
   emptyUsage,
   type AgentLoop,
+  type EffortLevel,
   type LoopEvent,
   type RunResult,
   type TokenUsage,
@@ -454,6 +455,8 @@ export class WorkflowEngine {
     depth?: number;
     /** The hired worker (model/runtime) for this task; falls back to project/workspace defaults. */
     workerId?: string;
+    /** Reasoning-effort override for this task, set by a parent's create_subtask({ effort }). */
+    effort?: string;
     /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary. */
     isolate?: boolean;
     /** Task ids this task must wait for before it runs (ADR 0011). */
@@ -481,6 +484,7 @@ export class WorkflowEngine {
         ...(params.parentId ? { parentId: params.parentId } : {}),
         ...(params.depth !== undefined ? { depth: params.depth } : {}),
         ...(params.workerId ? { workerId: params.workerId } : {}),
+        ...(params.effort ? { effort: params.effort } : {}),
         ...(params.isolate ? { isolate: true } : {}),
         ...(params.dependsOn && params.dependsOn.length ? { dependsOn: params.dependsOn } : {}),
         source: params.source ?? "lead",
@@ -729,11 +733,14 @@ export class WorkflowEngine {
           }
         : undefined;
     const team = await this.teamSnapshots(task);
+    // Resolve effort per-wake: task override > stage default > workspace default.
+    const effort: EffortLevel | undefined = (task.effort ?? stage?.effort ?? "medium") as EffortLevel | undefined;
     const run = loop.run({
       system: buildSystem(task, wf, stage, workerToolNames, project?.memory),
       prompt: buildPrompt(task, wf, stage, team),
       tools,
       signal: controller.signal,
+      effort,
       ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),
     });
     workerRun = run;
@@ -1143,7 +1150,7 @@ export class WorkflowEngine {
   /** Create a child task for a create_subtask command and return its minted id. */
   private async spawnSubtask(
     parent: Task,
-    command: { childId: string; workflowId: string; input: string; isolate?: boolean },
+    command: { childId: string; workflowId: string; input: string; isolate?: boolean; effort?: string },
     deps: readonly string[],
   ): Promise<void> {
     const wf = this.o.registry.get(command.workflowId) ?? this.o.registry.get("general");
@@ -1169,6 +1176,7 @@ export class WorkflowEngine {
       taskId: command.childId, // pre-minted by the batch so siblings' dependsOn could resolve
       ...(wf.fields.request ? { fields: { request: command.input } } : {}),
       ...(parent.workerId ? { workerId: parent.workerId } : {}),
+      ...(command.effort ? { effort: command.effort } : {}),
       depth: parent.depth + 1,
       ...(command.isolate ? { isolate: true } : {}),
       ...(deps.length ? { dependsOn: deps } : {}),

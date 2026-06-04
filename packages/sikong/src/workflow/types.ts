@@ -71,6 +71,12 @@ export interface StageDef {
   instructions?: string;
   /** Cron escalation hint: fire a staleness tick after this long (used at M5). */
   escalateAfterMs?: number;
+  /**
+   * Reasoning-effort level for wakes in this stage. Overrides the workspace
+   * default when set; the lead can override per-subtask via create_subtask({ effort }).
+   * Design/dialectic stages default to "high"/"max"; plan/build/verify to "medium".
+   */
+  effort?: "low" | "medium" | "high" | "max";
 }
 
 export interface WorkflowDef {
@@ -118,6 +124,14 @@ export interface Task {
   workerId?: string;
   /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary (git worktree), opaque to the engine. */
   isolate?: boolean;
+  /**
+   * Reasoning-effort override for this task, set at creation by a parent's
+   * `create_subtask({ effort })`. Resolved per-wake: task.effort → stage.effort
+   * → workspace default ("medium"). The lead dials it up for hard pieces
+   * (design/dialectic → "high"/"max") and down for rote ones (plan/build/verify
+   * → "low"/"medium").
+   */
+  effort?: string;
   /** Task ids this task must wait for before it runs (ADR 0011); the engine defers its wakes until all are terminal. */
   dependsOn?: readonly string[];
   parentId?: string;
@@ -187,6 +201,12 @@ export type Command =
       key?: string;
       /** Keys of sibling subtasks (same delegate pass) this one must wait for before it runs. */
       dependsOn?: readonly string[];
+      /**
+       * Reasoning-effort override for this subtask. The lead sets it to dial effort
+       * up for hard pieces (design/dialectic → "high"/"max") or down for rote ones
+       * (plan/build/verify → "low"/"medium"). Takes precedence over the stage default.
+       */
+      effort?: "low" | "medium" | "high" | "max";
     }
   | { kind: "block"; reason: string }
   | { kind: "unblock" }

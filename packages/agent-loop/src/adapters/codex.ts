@@ -15,7 +15,7 @@ import type { CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
 import { resolveContextWindow } from "../core/context-window";
 import { estimateTokens, type LoopEvent } from "../core/events";
-import type { McpServers, PreflightResult } from "../core/types";
+import type { EffortLevel, McpServers, PreflightResult } from "../core/types";
 
 /**
  * Construction-time options for the Codex adapter. Everything here configures
@@ -517,6 +517,24 @@ interface TurnUsage {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Map generic EffortLevel to Codex's native effort values. Codex has no "max"
+ * level — "high" is the ceiling; "low" maps to "minimal" (codex's rote tier).
+ */
+function codexEffort(level: EffortLevel | undefined): CodexAdapterOptions["effort"] | undefined {
+  if (!level) return undefined;
+  switch (level) {
+    case "low":
+      return "minimal";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    case "max":
+      return "high";
+  }
+}
+
+/**
  * Drives the Codex `app-server` CLI over JSON-RPC/stdio and normalizes its
  * notifications into the shared LoopEvent stream.
  *
@@ -797,7 +815,7 @@ export class CodexAdapter implements BackendAdapter {
         cwd: this.opts.cwd,
         model: this.opts.model ?? this.opts.providerModel ?? undefined,
         serviceTier: this.opts.serviceTier ?? undefined,
-        effort: this.opts.effort ?? undefined,
+        effort: codexEffort(req.effort) ?? this.opts.effort ?? undefined,
         summary: this.opts.summary ?? undefined,
         approvalsReviewer: this.opts.approvalsReviewer ?? undefined,
         sandboxPolicy: o.sandboxPolicy ?? undefined,

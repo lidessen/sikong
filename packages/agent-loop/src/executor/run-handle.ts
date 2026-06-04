@@ -155,6 +155,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
         mcp,
         maxSteps: input.maxSteps,
         signal: input.signal,
+        effort: input.effort,
         runtimeOptions: input.runtimeOptions,
         hooks: bridge,
       });

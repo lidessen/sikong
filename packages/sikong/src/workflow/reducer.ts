@@ -101,6 +101,7 @@ export function apply(
           input: command.input,
           blocksParent: command.blocksParent ?? false,
           ...(command.key ? { key: command.key } : {}),
+          ...(command.effort ? { effort: command.effort } : {}),
         }),
       ];
     }
@@ -211,6 +212,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     };
     if (typeof p.parentId === "string") base.parentId = p.parentId;
     if (typeof p.workerId === "string") base.workerId = p.workerId;
+    if (typeof p.effort === "string") base.effort = p.effort;
     if (p.isolate === true) base.isolate = true;
     if (Array.isArray(p.dependsOn) && p.dependsOn.length) base.dependsOn = p.dependsOn.map(String);
     return base;
@@ -342,6 +344,8 @@ export function initTask(params: {
   parentId?: string;
   workerId?: string;
   isolate?: boolean;
+  /** Reasoning-effort override for this task (set by parent's create_subtask). */
+  effort?: string;
   dependsOn?: readonly string[];
   fields?: Record<string, unknown>;
   source?: EventSource;
@@ -362,6 +366,7 @@ export function initTask(params: {
   };
   if (params.parentId) payload.parentId = params.parentId;
   if (params.workerId) payload.workerId = params.workerId;
+  if (params.effort) payload.effort = params.effort;
   if (params.isolate) payload.isolate = true;
   if (params.dependsOn && params.dependsOn.length) payload.dependsOn = [...params.dependsOn];
   return [{ taskId: params.taskId, source: params.source ?? "lead", type: "task.created", payload }];

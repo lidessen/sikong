@@ -384,6 +384,10 @@ function buildOptions(args: {
   if (opts.providerEnv) Object.assign(injected, opts.providerEnv);
   if (opts.env) Object.assign(injected, opts.env);
   if (o.env) Object.assign(injected, o.env);
+  // Per-run effort overrides the provider's default for this specific run.
+  if (req.effort) {
+    injected.CLAUDE_CODE_EFFORT_LEVEL = req.effort;
+  }
   let env: Record<string, string> | undefined;
   if (Object.keys(injected).length > 0) {
     env = {};

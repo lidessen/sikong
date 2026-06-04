@@ -88,6 +88,20 @@ export interface McpServerConfig {
 export type McpServers = Record<string, McpServerConfig>;
 
 /**
+ * Reasoning effort level — a cross-runtime, generic knob for controlling the
+ * model's reasoning depth. Mapped per-adapter to the runtime's native concept
+ * (e.g. claude-code env var, codex effort param, ai-sdk reasoning budget).
+ * Adapters that cannot honor a level ignore it (no capability gate — effort is
+ * advisory where unsupported).
+ *
+ * "low"  — minimal reasoning, fast responses (mechanical / rote work)
+ * "medium" — balanced reasoning (the default across the board)
+ * "high" — deeper reasoning, more output tokens (hard / divergent work)
+ * "max" — maximum reasoning, most expensive but highest quality (design/dialectic)
+ */
+export type EffortLevel = "low" | "medium" | "high" | "max";
+
+/**
  * A skill is a reusable bundle of instructions + tools + MCP servers. The
  * executor compiles skills into the resolved request: instructions are appended
  * to the system prompt, tools and MCP servers are merged in.
@@ -113,6 +127,12 @@ export interface RunInput {
   /** Soft cap on agent turns, where the backend honors it. */
   maxSteps?: number;
   signal?: AbortSignal;
+  /**
+   * Reasoning-effort level for this run. Generic cross-runtime knob:
+   * the adapter maps it to its own native concept. Falls back to the provider
+   * default when unset.
+   */
+  effort?: EffortLevel;
   /** Typed-per-adapter escape hatch for backend-native options. */
   runtimeOptions?: unknown;
   metadata?: Record<string, unknown>;

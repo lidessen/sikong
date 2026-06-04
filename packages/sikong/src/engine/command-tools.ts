@@ -129,6 +129,12 @@ export function buildCommandTools(
             description:
               "Keys of subtasks (created in this same pass) that must finish before this one starts. Use it to order a layered effort instead of running everything in parallel.",
           },
+          effort: {
+            type: "string",
+            enum: ["low", "medium", "high", "max"],
+            description:
+              "Reasoning-effort override for this subtask. Dial up for hard pieces (design/dialectic → high/max) or down for rote ones (plan/build/verify → low/medium). Defaults to the stage default or workspace default (medium).",
+          },
         },
         required: ["workflowId", "input"],
         additionalProperties: false,
@@ -143,6 +149,9 @@ export function buildCommandTools(
           ...(typeof args.key === "string" && args.key ? { key: args.key } : {}),
           ...(Array.isArray(args.dependsOn) && args.dependsOn.length
             ? { dependsOn: args.dependsOn.map(String) }
+            : {}),
+          ...(typeof args.effort === "string" && ["low", "medium", "high", "max"].includes(args.effort)
+            ? { effort: args.effort as "low" | "medium" | "high" | "max" }
             : {}),
         }),
     });
