@@ -3,10 +3,15 @@
 All notable changes to `sikong` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 0.1.7 — 2026-06-04
 
 ### Fixed
 
+- **Output tokens recovered on cancelled DeepSeek wakes.** DeepSeek reports
+  `output_tokens` only in the final result message, but sikong cancels the worker
+  run on the terminal tool call before it arrives — so output read ~0, under-counting
+  cost. The claude adapter now estimates output from streamed text + reasoning on
+  cancel, and the executor prefers the backend's final usage on cancel.
 - **The compiled `sikong` binary can now drive claude-code workers.** A
   `bun --compile` single-file build cannot embed the Claude Agent SDK's native
   CLI, so claude-code wakes failed with "Native CLI binary for <platform> not
@@ -17,6 +22,17 @@ All notable changes to `sikong` are documented here. This project adheres to
 
 ### Changed
 
+- **Unified `development` workflow** (ADR 0020): `development` and
+  `development-lead` merged into one adaptive workflow (design → plan → build →
+  verify → done) where delegation is optional at the build stage; a generic engine
+  `maxTeamDepth` cap (default 2) bounds the team tree (lead → workers). The
+  `development-lead` id remains a thin alias for one release.
+- **Configurable, lead-decided effort level** (ADR 0021): a generic
+  `RunInput.effort` (`low|medium|high|max`) mapped per runtime (claude env, ai-sdk
+  `reasoning_effort`, codex), plus `StageDef.effort` and `create_subtask({ effort })`
+  so the lead dials effort per stage/subtask. The default shifts from
+  max-everywhere to medium-with-escalation (design/dialectic → high/max),
+  superseding the fixed `CLAUDE_CODE_EFFORT_LEVEL=max` default.
 - **Verify stage demands adversarial tests** (ADR 0015). The `development`
   workflow's verify instructions now require edge-case/boundary tests and an
   end-to-end smoke of the real user-facing entry point (not just green happy-path
@@ -33,6 +49,19 @@ All notable changes to `sikong` are documented here. This project adheres to
 
 ### Added
 
+- **Design workflow** (ADR 0017): a `design` workflow (brief → diverge → preview →
+  critique → converge → deliver) that produces real semajsx with live previews,
+  plus `design_preview`/`design_deliver` worker tools and a `sikong design` shorthand.
+- **Release/deploy workflow** (ADR 0019): a general, target-agnostic `release`
+  workflow (assess → gate → prepare → approve → publish → confirm) with a lead-only
+  `approved` gate the agent cannot self-set; `sikong release` / `--workflow release`.
+- **`sikong-web`** (ADR 0018): the sikong.dev static site (semajsx SSG) plus a local
+  monitor dashboard that renders `sikong overview/usage --json`. Built/deployed
+  standalone (not part of the CLI workspace).
+- **curl install**: `curl -fsSL https://sikong.dev/install.sh | sh` — `install.sh`
+  detects OS/arch/libc and fetches the matching prebuilt binary from GitHub
+  Releases; a tag-triggered `release.yml` cross-compiles all platform binaries and
+  publishes the release.
 - **`sikong watch` — live terminal dashboard.** Redraws the workspace overview
   (projects, task counts, recent activity) plus the token-usage + cost panel
   every `--interval` seconds (default 3); `--project` scopes it, `--once` renders
