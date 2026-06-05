@@ -52,3 +52,5 @@ Files use a monotonic four-digit prefix:
 | [0020](0020-unify-development-workflow.md) | Accepted | Unify development + development-lead into one adaptive workflow (delegation optional; engine maxTeamDepth cap) |
 | [0021](0021-configurable-effort-level.md) | Accepted | Configurable, lead-decided effort level (generic RunInput.effort + per-stage/per-subtask resolution; default medium) |
 | [0022](0022-philosophy-driven-design-workflow.md) | Accepted | Philosophy-driven design workflow (frame → language → derive → assemble → review; design-language catalog) — supersedes 0017 |
+| [0023](0023-conductor-goal-loop.md) | Accepted | The Conductor — first-class goal/project-driven autonomous loop (read-only orchestrator + cron; spawns worker tasks, gates outward actions) |
+| [0024](0024-grounded-acceptance-gates.md) | Proposed | Grounded acceptance gates — completion verified by engine-run machine-checked criteria, not agent self-report (the real trustworthy gate) |
