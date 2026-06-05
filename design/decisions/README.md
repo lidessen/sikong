@@ -56,3 +56,4 @@ Files use a monotonic four-digit prefix:
 | [0024](0024-grounded-acceptance-gates.md) | Accepted | Grounded acceptance gates — completion verified by a grounded verifier worker (real checks) + strategic correction loop, not agent self-report |
 | [0025](0025-phase-gated-development-lead-acceptance.md) | Accepted | Phase-gated development with per-phase lead acceptance (验收) — lead woken at each phase boundary to advance/adjust + configure the next phase |
 | [0026](0026-worker-sandbox-escalation.md) | Accepted | Worker sandbox + auto-mode privilege escalation (Claude Code model: sandbox-default + escalate-on-failure) so the worker can run the real toolchain and self-verify |
+| [0027](0027-lead-authored-task-acceptance.md) | Accepted | Lead-authored per-task acceptance checks (Task.acceptance + create_subtask/CLI; merged with stage acceptance at the gate) — a worker can't test around the spec |
