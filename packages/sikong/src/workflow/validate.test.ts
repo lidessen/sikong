@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { assertValidWorkflow, validateWorkflow, type ValidateOptions } from "./validate";
-import { _DESIGN_WORKFLOW_V1, DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./builtin";
+import { _DESIGN_WORKFLOW_V1, _DESIGN_WORKFLOW_V2, DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./builtin";
 import { WorkflowValidationError } from "./errors";
 import type { Guard, WorkflowDef } from "./types";
 
@@ -296,6 +296,16 @@ test("_DESIGN_WORKFLOW_V1 backward compat constant is valid and matches the ADR 
   expect(_DESIGN_WORKFLOW_V1.stages.map((s) => s.id)).toEqual([
     "brief", "diverge", "preview", "critique", "converge", "refine", "deliver", "done",
   ]);
+});
+
+test("_DESIGN_WORKFLOW_V2 backward compat constant is valid and matches the ADR 0022 shape", () => {
+  expect(validateWorkflow(_DESIGN_WORKFLOW_V2)).toEqual([]);
+  expect(_DESIGN_WORKFLOW_V2.version).toBe("2");
+  expect(_DESIGN_WORKFLOW_V2.stages.map((s) => s.id)).toEqual([
+    "frame", "language", "derive", "assemble", "review", "done",
+  ]);
+  // v2 has no `target` field
+  expect(_DESIGN_WORKFLOW_V2.fields["target"]).toBeUndefined();
 });
 
 /** Collect field names referenced by an {@link op: "field"} guard within a nested guard tree. */
