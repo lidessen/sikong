@@ -36,7 +36,7 @@ import { parseDataFile } from "./config-file";
 import { isValidProjectId, type Project } from "./project";
 import { discoverWorkers, discoveredRoster, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
 import type { WorkerPermissionMode } from "./worker";
-import type { Command } from "./workflow";
+import type { AcceptanceCheck, Command } from "./workflow";
 import { resolveWorkspaceDir } from "./workspace-layout";
 
 const VALUE_FLAGS = new Set([
@@ -46,6 +46,7 @@ const VALUE_FLAGS = new Set([
   "--after", "--timeout", "--poll",
   "--parent", "--interval",
   "--frame", "--ref",
+  "--acceptance",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--text", "--human", "--once"]);
 const fail = (msg: string, code = 2): never => {
@@ -407,13 +408,22 @@ switch (cmd) {
   // ---- drive (constructs the engine; create/run reach DeepSeek) ------------
   case "create": {
     const request = positional[1];
-    if (!request) fail("usage: cli create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>]");
+    if (!request) fail("usage: cli create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>] [--acceptance '<json-array>']");
     const ws = await openWorkspace(dir);
     const projectId = flag("--project") ?? "default";
     const id = flag("--id");
     const workflowId = flag("--workflow");
     const workerId = flag("--worker");
     const parentId = flag("--parent");
+    let acceptance: unknown = undefined;
+    const acceptanceRaw = flag("--acceptance");
+    if (acceptanceRaw !== undefined) {
+      try { acceptance = JSON.parse(acceptanceRaw); } catch {
+        fail(`--acceptance must be valid JSON, got: ${acceptanceRaw.slice(0, 80)}`);
+      }
+      if (!Array.isArray(acceptance))
+        fail("--acceptance must be a JSON array of acceptance checks");
+    }
     let task;
     try {
       if (workflowId) {
@@ -431,6 +441,7 @@ switch (cmd) {
           ...(id ? { taskId: id } : {}),
           ...(workerId ? { workerId } : {}),
           ...(parentId ? { parentId } : {}),
+          ...(Array.isArray(acceptance) && acceptance.length ? { acceptance: acceptance as AcceptanceCheck[] } : {}),
         });
       } else {
         task = await ws.engine.intake(request!, {
@@ -439,6 +450,7 @@ switch (cmd) {
           ...(id ? { taskId: id } : {}),
           ...(workerId ? { workerId } : {}),
           ...(parentId ? { parentId } : {}),
+          ...(Array.isArray(acceptance) && acceptance.length ? { acceptance: acceptance as AcceptanceCheck[] } : {}),
         });
       }
     } catch (err) {

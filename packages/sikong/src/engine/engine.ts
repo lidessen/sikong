@@ -21,6 +21,7 @@ import {
   tryAdvance,
 } from "../workflow/reducer";
 import type {
+  AcceptanceCheck,
   AcceptanceVerdict,
   Command,
   EventSource,
@@ -478,6 +479,8 @@ export class WorkflowEngine {
     workerId?: string;
     /** Reasoning-effort override for this task, set by a parent's create_subtask({ effort }). */
     effort?: string;
+    /** Lead-authored per-task acceptance checks (ADR 0027); merged with the stage's static acceptance at gate stages. */
+    acceptance?: readonly AcceptanceCheck[];
     /** Run this task's wakes in an isolated workspace (ADR 0010); honored at the worker boundary. */
     isolate?: boolean;
     /** Task ids this task must wait for before it runs (ADR 0011). */
@@ -508,6 +511,7 @@ export class WorkflowEngine {
         ...(params.effort ? { effort: params.effort } : {}),
         ...(params.isolate ? { isolate: true } : {}),
         ...(params.dependsOn && params.dependsOn.length ? { dependsOn: params.dependsOn } : {}),
+        ...(params.acceptance?.length ? { acceptance: params.acceptance } : {}),
         source: params.source ?? "lead",
       }),
     );
@@ -565,7 +569,7 @@ export class WorkflowEngine {
    */
   async intake(
     request: string,
-    opts: { projectId: string; taskId?: string; workerId?: string; parentId?: string; wake?: boolean },
+    opts: { projectId: string; taskId?: string; workerId?: string; parentId?: string; wake?: boolean; acceptance?: readonly AcceptanceCheck[] },
   ): Promise<Task> {
     const workflows = this.o.registry.list();
     const decision = await this.routeRequest(request, workflows);
@@ -590,6 +594,7 @@ export class WorkflowEngine {
       ...(opts.workerId ? { workerId: opts.workerId } : {}),
       ...(opts.parentId ? { parentId: opts.parentId } : {}),
       ...(opts.wake !== undefined ? { wake: opts.wake } : {}),
+      ...(opts.acceptance?.length ? { acceptance: opts.acceptance } : {}),
     });
   }
 
@@ -1035,8 +1040,16 @@ export class WorkflowEngine {
 
         if (currentAccStatus === "pending" || currentAccStatus === "failed") {
           const accCwd = project?.root ?? ".";
+          // ADR 0027: merge the stage's static acceptance with the lead's per-task
+          // acceptance checks (immutable by the worker). The outer condition gates on
+          // curStage.acceptance so task acceptance only runs at stages that already
+          // carry acceptance — never at design/plan/build.
+          const effectiveChecks = [
+            ...curStage.acceptance,
+            ...(fresh.acceptance ?? []),
+          ];
           const details = await Promise.all(
-            curStage.acceptance.map((check) => evalAcceptanceCheck(check, { cwd: accCwd })),
+            effectiveChecks.map((check) => evalAcceptanceCheck(check, { cwd: accCwd })),
           );
           const anyFailed = details.some((d) => !d.passed);
           const verdict: AcceptanceVerdict = anyFailed ? "failed" : "passed";
@@ -1250,7 +1263,7 @@ export class WorkflowEngine {
   /** Create a child task for a create_subtask command and return its minted id. */
   private async spawnSubtask(
     parent: Task,
-    command: { childId: string; workflowId: string; input: string; isolate?: boolean; effort?: string },
+    command: { childId: string; workflowId: string; input: string; isolate?: boolean; effort?: string; acceptance?: readonly AcceptanceCheck[] },
     deps: readonly string[],
   ): Promise<void> {
     const wf = this.o.registry.get(command.workflowId) ?? this.o.registry.get("general");
@@ -1280,6 +1293,7 @@ export class WorkflowEngine {
       depth: parent.depth + 1,
       ...(command.isolate ? { isolate: true } : {}),
       ...(deps.length ? { dependsOn: deps } : {}),
+      ...(command.acceptance?.length ? { acceptance: command.acceptance } : {}),
       parentId: parent.id,
       // A child with unmet dependencies is created un-scheduled (ADR 0011); it is
       // scheduled when its last dependency terminates (scheduleReadyDependents).

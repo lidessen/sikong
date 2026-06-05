@@ -6,6 +6,8 @@ export interface ValidationIssue {
   message: string;
   stageId?: string;
   field?: string;
+  /** Context label for issues that aren't tied to a stage (e.g. create_subtask acceptance). */
+  context?: string;
 }
 
 /** Optional registries to resolve stage skill/tool references against (M3). */
@@ -278,4 +280,24 @@ function validateAcceptanceCheck(
         { stageId },
       );
   }
+}
+
+/**
+ * Validate acceptance checks from a create_subtask command (ADR 0027). Reuses
+ * the same structural validation as stage acceptance, but with a context label
+ * (e.g. "create_subtask") instead of a stage id. Returns all issues; empty = ok.
+ */
+export function validateAcceptanceChecks(
+  acceptance: readonly AcceptanceCheck[] | undefined,
+  context?: string,
+): ValidationIssue[] {
+  if (!acceptance?.length) return [];
+  const issues: ValidationIssue[] = [];
+  const push = (code: string, message: string, extra?: Partial<ValidationIssue>) =>
+    issues.push({ code, message, ...(context ? { context } : {}), ...extra });
+  for (const check of acceptance) {
+    // Wrap in a minimal fake stage just to reuse the existing validator.
+    validateAcceptanceCheck(check, { id: context ?? "subtask", category: "in_progress", entry: { op: "always" } }, { id: "", version: "", name: "", description: "", fields: {}, stages: [] }, push);
+  }
+  return issues;
 }

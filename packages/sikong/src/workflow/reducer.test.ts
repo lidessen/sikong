@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { apply, applyEventsToTask, initTask, project, reduceCommands, tryAdvance } from "./reducer";
 import { CommandRejectedError } from "./errors";
-import type { NewEvent, Task, TaskEvent, WorkflowDef } from "./types";
+import type { AcceptanceCheck, NewEvent, Task, TaskEvent, WorkflowDef } from "./types";
 import { MemoryEventStore } from "../store/memory";
 
 const WF: WorkflowDef = {
@@ -179,6 +179,25 @@ describe("apply (the aggregate)", () => {
         input: "y",
       }),
     ).toThrow(CommandRejectedError);
+  });
+
+  test("create_subtask with acceptance sets child's acceptance on the event (ADR 0027)", () => {
+    const checks: AcceptanceCheck[] = [
+      { kind: "fileExists", description: "lead check", path: "out.txt" },
+    ];
+    const t1 = project(
+      stamp(initTask({ taskId: "t1", projectId: "p", workflow: WF, depth: 0 })),
+      WF,
+    );
+    const ev = apply(t1, WF, {
+      kind: "create_subtask",
+      childId: "c1",
+      workflowId: "general",
+      input: "x",
+      acceptance: checks,
+    });
+    expect(ev[0]?.type).toBe("subtask.created");
+    expect(ev[0]?.payload.acceptance).toEqual(checks);
   });
 });
 

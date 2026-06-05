@@ -203,6 +203,12 @@ export interface Task {
   childIds: readonly string[];
   /** Depth in the team tree: 0 for root, parent.depth + 1 for children. */
   depth: number;
+  /**
+   * Lead-authored per-task acceptance checks (ADR 0027). Immutable by the worker;
+   * merged with the stage's static acceptance at gate stages. No command mutates
+   * this field — set only at creation, passed via create_subtask for delegation.
+   */
+  acceptance?: readonly AcceptanceCheck[];
   /** `seq` of the last event folded into this projection. */
   cursor: number;
   createdAt: number;
@@ -273,6 +279,11 @@ export type Command =
        * (plan/build/verify → "low"/"medium"). Takes precedence over the stage default.
        */
       effort?: "low" | "medium" | "high" | "max";
+      /**
+       * Lead-authored acceptance checks for this subtask (ADR 0027). Immutable by
+       * the child worker; merged with the stage's static acceptance at gate stages.
+       */
+      acceptance?: readonly AcceptanceCheck[];
     }
   | { kind: "block"; reason: string }
   | { kind: "unblock" }

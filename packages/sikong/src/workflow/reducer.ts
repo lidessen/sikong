@@ -1,6 +1,8 @@
 import { evalGuard, type AcceptanceStatus, type GuardEnv } from "./guard";
 import { CommandRejectedError } from "./errors";
+import { validateAcceptanceChecks } from "./validate";
 import type {
+  AcceptanceCheck,
   Command,
   EventSource,
   FieldDef,
@@ -91,6 +93,10 @@ export function apply(
         reject(
           `max team depth (${cap}) reached — task is at depth ${task.depth} and cannot create more subtasks`,
         );
+      // Validate acceptance check shapes (ADR 0027) — reuse stage-acceptance validation.
+      const accIssues = validateAcceptanceChecks(command.acceptance, "create_subtask");
+      if (accIssues.length)
+        reject(`create_subtask has invalid acceptance checks: ${accIssues.map((i) => i.message).join("; ")}`);
       // The engine mints the child id before recording this; a blank id would be
       // a link to no task (and wedge a childrenDone gate forever).
       if (!command.childId.trim()) reject("create_subtask requires a non-empty child id (engine-minted)");
@@ -102,6 +108,7 @@ export function apply(
           blocksParent: command.blocksParent ?? false,
           ...(command.key ? { key: command.key } : {}),
           ...(command.effort ? { effort: command.effort } : {}),
+          ...(command.acceptance?.length ? { acceptance: [...command.acceptance] } : {}),
         }),
       ];
     }
@@ -228,6 +235,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     if (typeof p.effort === "string") base.effort = p.effort;
     if (p.isolate === true) base.isolate = true;
     if (Array.isArray(p.dependsOn) && p.dependsOn.length) base.dependsOn = p.dependsOn.map(String);
+    if (Array.isArray(p.acceptance) && p.acceptance.length) base.acceptance = p.acceptance as readonly AcceptanceCheck[];
     return base;
   }
 
@@ -389,6 +397,8 @@ export function initTask(params: {
   isolate?: boolean;
   /** Reasoning-effort override for this task (set by parent's create_subtask). */
   effort?: string;
+  /** Lead-authored per-task acceptance checks (ADR 0027). */
+  acceptance?: readonly AcceptanceCheck[];
   dependsOn?: readonly string[];
   fields?: Record<string, unknown>;
   source?: EventSource;
@@ -412,6 +422,7 @@ export function initTask(params: {
   if (params.effort) payload.effort = params.effort;
   if (params.isolate) payload.isolate = true;
   if (params.dependsOn && params.dependsOn.length) payload.dependsOn = [...params.dependsOn];
+  if (params.acceptance?.length) payload.acceptance = [...params.acceptance];
   return [{ taskId: params.taskId, source: params.source ?? "lead", type: "task.created", payload }];
 }
 
