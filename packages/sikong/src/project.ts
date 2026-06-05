@@ -1,4 +1,7 @@
 import type { WorkerPermissionMode } from "./worker";
+import type { SandboxConfig } from "./config-file";
+
+export type { SandboxConfig };
 
 /**
  * A Project is the container every task lives under (Task.projectId always
@@ -26,6 +29,13 @@ export interface Project {
    * structured project YAML.
    */
   memory?: string;
+  /**
+   * Sandbox escalation config (ADR 0026). Controls whether and how the worker's
+   * bash tool can escalate sandbox-constrained commands (build/test toolchain) to
+   * the real host for self-verification. Maps to agent-loop's
+   * `SandboxEscalationConfig`.
+   */
+  sandbox?: SandboxConfig;
 }
 
 /** The builtin fallback project — the zero-config default every task gets without `--project`. */

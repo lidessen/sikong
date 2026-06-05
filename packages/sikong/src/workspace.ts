@@ -9,6 +9,7 @@ import {
   openai,
   type AgentLoop,
   type ModelProvider,
+  type SandboxEscalationConfig,
   type ToolSet,
 } from "agent-loop";
 import { buildDesignTools } from "./tools";
@@ -16,7 +17,7 @@ import { WorkflowEngine, type EngineHooks, type LoopFactory, type WakeContext } 
 import { _DESIGN_WORKFLOW_V1, _DEVELOPMENT_LEAD_WORKFLOW_V1, DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./workflow/builtin";
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
-import { discoveredRoster, selectWorker, type Worker } from "./worker";
+import { discoveredRoster, selectWorker, workerSandboxConfig, type Worker } from "./worker";
 import { ensureWorktree, gcWorktrees, isGitRepo, releaseWorktree, retainedTaskIds } from "./worktree";
 import {
   JsonProjectStore,
@@ -26,7 +27,7 @@ import {
   JsonWorkerStore,
   MemoryWorkflowRegistry,
 } from "./store";
-import { dataFileCandidates, isDataFile, parseDataFile, stringifyYaml, yamlFile } from "./config-file";
+import { dataFileCandidates, isDataFile, parseDataFile, stringifyYaml, yamlFile, type SandboxConfig } from "./config-file";
 import type { Project } from "./project";
 
 /** Build the AgentLoop a worker describes (provider key auto-discovered at this point). */
@@ -175,12 +176,29 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     workerTools: async (ctx: WakeContext, workerLoop: AgentLoop): Promise<ToolSet> => {
       const tools: ToolSet = {};
       // ai-sdk bare worker gets generic file/shell project tools
-      if (workerLoop.id === "ai-sdk" && ctx.project?.root) {
-        Object.assign(tools, await createProjectTools({ cwd: ctx.project.root, ...(ctx.project.env ? { env: ctx.project.env } : {}) }));
+      const proj = ctx.project;
+      if (workerLoop.id === "ai-sdk" && proj?.root) {
+        // Resolve sandbox escalation (ADR 0026) from the hired worker's permission
+        // mode and the project's sandbox config.
+        let sandboxConfig: SandboxEscalationConfig | undefined;
+        try {
+          const w = selectWorker(roster, selectArgs(ctx));
+          const wsc = workerSandboxConfig(w, proj.sandbox);
+          if (wsc) sandboxConfig = wsc;
+        } catch {
+          // Worker unreachable — fall back to project-level config.
+          const wsc = workerSandboxConfig(undefined, proj.sandbox);
+          if (wsc) sandboxConfig = wsc;
+        }
+        Object.assign(tools, await createProjectTools({
+          cwd: proj.root,
+          ...(proj.env ? { env: proj.env } : {}),
+          ...(sandboxConfig ? { sandboxEscalation: sandboxConfig } : {}),
+        }));
       }
       // Design workflow injects preview + deliver tools (ADR 0022, reused from ADR 0017)
-      if (ctx.workflow.id === "design" && ctx.project?.root) {
-        Object.assign(tools, buildDesignTools({ projectRoot: ctx.project.root }).tools);
+      if (ctx.workflow.id === "design" && proj?.root) {
+        Object.assign(tools, buildDesignTools({ projectRoot: proj.root }).tools);
       }
       return tools;
     },

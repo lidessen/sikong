@@ -1,5 +1,7 @@
 import { access, constants } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { SandboxEscalationConfig } from "agent-loop";
+import type { SandboxConfig } from "./config-file";
 
 /**
  * A Worker is a hireable, described agent configuration — the "who/which model"
@@ -56,6 +58,45 @@ export function defaultRolesForRuntime(runtime: WorkerRuntime): readonly string[
 
 export function workerHasRole(worker: Worker, role: string): boolean {
   return (worker.roles ?? defaultRolesForRuntime(worker.runtime)).includes(role);
+}
+
+// ── Sandbox escalation → worker permission mode (ADR 0026) ────────────────────
+
+/**
+ * Derive an agent-loop `SandboxEscalationConfig` from a worker's permission mode
+ * and an optional persisted project/workspace `SandboxConfig`. Workers with
+ * auto-mode or bypassPermissions get escalation enabled; others stay strict.
+ *
+ * The project/workspace config can further restrict or extend the built-in allow
+ * and deny lists.
+ */
+export function workerSandboxConfig(
+  worker?: { permissionMode?: string },
+  projectConfig?: SandboxConfig,
+): SandboxEscalationConfig | undefined {
+  const mode = worker?.permissionMode;
+
+  // Only auto and bypassPermissions modes enable sandbox escalation.
+  if (mode !== "auto" && mode !== "bypassPermissions" && mode !== undefined) {
+    return undefined;
+  }
+
+  // Default: baseline escalation with optional overrides from persisted config.
+  const base: SandboxEscalationConfig = {
+    allowUnsandboxedCommands: projectConfig?.allowUnsandboxedCommands ?? true,
+  };
+
+  if (projectConfig?.allowList?.length) base.allowList = projectConfig.allowList;
+  if (projectConfig?.denyList?.length) base.denyList = projectConfig.denyList;
+  if (projectConfig?.excludedCommands?.length) base.excludedCommands = projectConfig.excludedCommands;
+
+  // Undefined mode (default) but we got here because the worker was explicitly
+  // created — enable escalation.
+  if (mode === undefined) {
+    base.allowUnsandboxedCommands = true;
+  }
+
+  return base;
 }
 
 /** Provider default models used for auto-discovered workers (operators override via `worker create`). */

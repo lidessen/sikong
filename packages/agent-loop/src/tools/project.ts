@@ -5,6 +5,13 @@ import { lookup } from "node:dns/promises";
 import type { Bash } from "just-bash";
 import * as zod from "zod";
 import { defineTool, type ToolDefinition, type ToolSet } from "../core/types";
+import {
+  classifyCommand,
+  isSandboxFailure,
+  isToolchainFailure,
+  runOnHost,
+  type SandboxEscalationConfig,
+} from "./escalation";
 
 const z = ((zod as unknown as { z?: typeof zod }).z ?? zod) as typeof zod;
 
@@ -28,6 +35,15 @@ export interface ProjectToolOptions {
   resolveAddresses?: ResolveAddresses;
   /** Allow private/local URL targets for web_fetch. Defaults to false. */
   allowPrivateUrls?: boolean;
+  /**
+   * Sandbox escalation configuration. When set, the bash tool detects sandbox-
+   * constrained failures (toolchain commands blocked by the virtual FS) and
+   * retries allowed commands on the real host (bypassing the sandbox). Maps to
+   * ADR 0026's auto-mode privilege escalation.
+   *
+   * Default: undefined — no escalation (the virtual sandbox is strict).
+   */
+  sandboxEscalation?: SandboxEscalationConfig;
 }
 
 type AiSdkToolLike = {
@@ -124,6 +140,20 @@ export async function createProjectTools(options: ProjectToolOptions): Promise<T
     readFile: fromAiSdkTool(bashTools.readFile),
     writeFile: fromAiSdkTool(bashTools.writeFile),
   };
+
+  // Wrap the bash tool with sandbox escalation (ADR 0026): detect sandbox-
+  // constrained failures (toolchain commands blocked by the virtual FS) and
+  // retry allowed commands on the real host.
+  const baseBash = out.bash;
+  if (options.sandboxEscalation && baseBash) {
+    out.bash = wrapBashWithEscalation(baseBash, {
+      cwd,
+      maxOutputLength: options.maxOutputLength,
+      sandboxEscalation: options.sandboxEscalation,
+      env: options.env,
+    });
+  }
+
   out.viewFile = createViewFileTool({ cwd });
   out.replaceInFile = createReplaceInFileTool({ cwd });
   out.insertInFile = createInsertInFileTool({ cwd });
@@ -166,6 +196,95 @@ function withPipefail(tool: ToolDefinition): ToolDefinition {
       return tool.execute({ ...rawArgs, command: `set -o pipefail\n${rawArgs.command}` }, ctx);
     },
   };
+}
+
+// ── Sandbox escalation wrapper (ADR 0026) ─────────────────────────────────────
+
+interface BashEscalationOpts {
+  cwd: string;
+  maxOutputLength?: number;
+  sandboxEscalation: SandboxEscalationConfig;
+  env?: Record<string, string>;
+}
+
+/**
+ * Wrap a bash ToolDefinition with sandbox escalation: detect failures that look
+ * like sandbox restrictions (toolchain binary not found, EACCES, etc.), classify
+ * the command, and retry on the real host when the classifier allows it.
+ */
+function wrapBashWithEscalation(
+  tool: ToolDefinition,
+  opts: BashEscalationOpts,
+): ToolDefinition {
+  return {
+    ...tool,
+    execute: async (rawArgs, ctx) => {
+      if (!tool.execute) return { error: "Tool has no executor." };
+      if (!isRecord(rawArgs) || typeof rawArgs.command !== "string") {
+        return tool.execute(rawArgs, ctx);
+      }
+      const command = rawArgs.command;
+
+      // (1) Try the sandboxed execution first.
+      const result = await tool.execute(rawArgs, ctx);
+
+      // (2) Detect sandbox-constrained failure.
+      if (!isSandboxConstrainedResult(command, result)) {
+        return result;
+      }
+
+      // (3) Classify the command — only known-safe commands escalate.
+      const decision = classifyCommand(command, opts.sandboxEscalation);
+      if (decision !== "allow") {
+        // Sandbox denied escalation; return the original failure.
+        return result;
+      }
+
+      // (4) Retry on the real host (bypass sandbox).
+      let hostResult: Awaited<ReturnType<typeof runOnHost>>;
+      try {
+        hostResult = await runOnHost(command, {
+          cwd: opts.cwd,
+          signal: ctx.signal,
+          maxOutputLength: opts.maxOutputLength,
+          env: opts.env,
+        });
+      } catch {
+        // If the retry itself throws, return the original sandbox result.
+        return result;
+      }
+
+      return hostResult;
+    },
+  };
+}
+
+/**
+ * Check whether a bash tool result indicates a sandbox-constrained failure that
+ * might be resolved by running on the real host. Returns true when:
+ * - The command exited with code 127 (command not found) for a known toolchain
+ * - stderr contains sandbox-failure patterns (EACCES, EPERM, bwrap, etc.)
+ * - The result has an `error` field matching sandbox patterns
+ */
+function isSandboxConstrainedResult(command: string, result: unknown): boolean {
+  if (!isRecord(result)) return false;
+
+  // Check for error field with sandbox patterns
+  if (typeof result.error === "string" && isSandboxFailure(result.error)) return true;
+
+  // Check exit code + stderr
+  const exitCode = typeof result.exitCode === "number" ? result.exitCode : 0;
+  const stderr = typeof result.stderr === "string" ? result.stderr : "";
+
+  if (exitCode !== 0) {
+    // Exit 127 = command not found — escalate if it's a toolchain command
+    if (exitCode === 127 && isToolchainFailure(command, stderr)) return true;
+
+    // Sandbox pattern in stderr
+    if (isSandboxFailure(stderr)) return true;
+  }
+
+  return false;
 }
 
 function createViewFileTool(opts: { cwd: string }): ToolDefinition {

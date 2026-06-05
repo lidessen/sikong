@@ -90,8 +90,14 @@ export {
   CapabilityNotSupportedError,
   PreflightError,
 } from "./core/errors";
-export { createProjectTools } from "./tools";
-export type { ProjectToolOptions } from "./tools";
+export { createProjectTools, classifyCommand, isSandboxFailure, isToolchainFailure, runOnHost } from "./tools";
+export type {
+  CommandClassifier,
+  EscalationDecision,
+  HostRunResult,
+  ProjectToolOptions,
+  SandboxEscalationConfig,
+} from "./tools";
 export type {
   HookDecision,
   Hooks,
