@@ -6,6 +6,7 @@ const env = (over: Partial<GuardEnv> = {}): GuardEnv => ({
   fields: {},
   eventTypes: new Set(),
   children: [],
+  acceptanceStatus: "none",
   ...over,
 });
 

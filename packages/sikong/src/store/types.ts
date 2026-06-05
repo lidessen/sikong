@@ -26,6 +26,7 @@ export type ChronicleType =
   | "wake.commit"
   | "wake.end"
   | "wake.error"
+  | "wake.acceptance"
   | "task.advanced"
   | "task.terminal"
   | "command.rejected";

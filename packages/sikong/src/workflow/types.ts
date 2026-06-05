@@ -34,9 +34,10 @@ export type FieldCmp = "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "exist
 
 /**
  * A declarative, serializable predicate over a task's fields + the events in
- * its current stage (+ its children's statuses). Evaluated by the engine, never
- * by an LLM — that is what keeps stage transitions deterministic and auditable,
- * and what makes agent-authored workflows safe (no code injection).
+ * its current stage (+ its children's statuses + acceptance state). Evaluated
+ * by the engine, never by an LLM — that is what keeps stage transitions
+ * deterministic and auditable, and what makes agent-authored workflows safe
+ * (no code injection).
  */
 export type Guard =
   | { op: "always" }
@@ -45,12 +46,69 @@ export type Guard =
   | { op: "hasEvent"; eventType: TaskEventType }
   | { op: "childrenDone" }
   | { op: "childrenSucceeded" }
+  | { op: "acceptancePassed" }
   | { op: "and"; all: readonly Guard[] }
   | { op: "or"; any: readonly Guard[] }
   | { op: "not"; guard: Guard };
 
 /** Coarse Kanban category over fully-custom stages. `Task.status` derives from it. */
 export type StageCategory = "todo" | "in_progress" | "done";
+
+// ---- Acceptance gates (ADR 0024) ------------------------------------------
+
+/**
+ * A structured, machine-checkable acceptance criterion for a stage. The verifier
+ * worker (a grounded executor, not the implementing worker) executes these checks
+ * and reports a verdict before the stage transition is admitted.
+ *
+ * Expand the union to add more check kinds as needed.
+ */
+export type AcceptanceCheck =
+  | {
+      kind: "command";
+      /** Human-readable description of what this checks. */
+      description: string;
+      /** Shell command to run. Must exit 0 (or `expectExit`) to pass. */
+      cmd: string;
+      /** Expected exit code; defaults to 0. */
+      expectExit?: number;
+    }
+  | {
+      kind: "fileExists";
+      description: string;
+      /** Path to the file that must exist. */
+      path: string;
+    }
+  | {
+      kind: "grep";
+      description: string;
+      /** File to search. */
+      path: string;
+      /** Pattern to search for. */
+      pattern: string;
+      /** true = pattern must match; false = pattern must NOT match. */
+      expectMatch: boolean;
+    }
+  | {
+      kind: "projectGate";
+      description: string;
+      // Shorthand for the project's standard verification (typecheck + test).
+      // Expanded to concrete commands at runtime by the verifier.
+    };
+
+/** Per-check result from a single acceptance-verification run. */
+export interface AcceptanceVerdictDetail {
+  /** The `description` of the check this result corresponds to. */
+  checkDescription: string;
+  passed: boolean;
+  /** Evidence captured during execution (stdout, file listing, etc.). */
+  evidence: string;
+  /** Actionable suggestion when the check failed. */
+  suggestion?: string;
+}
+
+/** The four verdicts a verifier can return. */
+export type AcceptanceVerdict = "passed" | "failed" | "abandon";
 
 export interface StageDef {
   id: string;
@@ -77,6 +135,13 @@ export interface StageDef {
    * Design/dialectic stages default to "high"/"max"; plan/build/verify to "medium".
    */
   effort?: "low" | "medium" | "high" | "max";
+  /**
+   * Acceptance checks (ADR 0024) that must pass before the task can leave this
+   * stage. The engine runs a grounded verifier worker to execute these checks;
+   * the next stage's entry guard should include `{ op: "acceptancePassed" }` to
+   * gate on the verdict. When unset or empty, no acceptance requirement applies.
+   */
+  acceptance?: readonly AcceptanceCheck[];
 }
 
 export interface WorkflowDef {
@@ -158,7 +223,8 @@ export type TaskEventType =
   | "task.blocked"
   | "task.unblocked"
   | "cancellation.requested"
-  | "task.cancelled";
+  | "task.cancelled"
+  | "acceptance.verdict";
 
 export interface TaskEvent {
   /** Monotonic per task, starting at 1. Assigned by the EventStore on append. */
@@ -210,7 +276,16 @@ export type Command =
     }
   | { kind: "block"; reason: string }
   | { kind: "unblock" }
-  | { kind: "cancel"; reason?: string };
+  | { kind: "cancel"; reason?: string }
+  | {
+      kind: "acceptance_verdict";
+      /** Overall verdict from the verifier. */
+      verdict: AcceptanceVerdict;
+      /** Per-check results from the verification run. */
+      details: AcceptanceVerdictDetail[];
+      /** Optional prose summary of the verification outcome. */
+      summary?: string;
+    };
 
 /** Provenance applied to events a command/advance produces. */
 export interface ReduceContext {

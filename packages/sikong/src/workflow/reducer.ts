@@ -1,4 +1,4 @@
-import { evalGuard, type GuardEnv } from "./guard";
+import { evalGuard, type AcceptanceStatus, type GuardEnv } from "./guard";
 import { CommandRejectedError } from "./errors";
 import type {
   Command,
@@ -120,6 +120,19 @@ export function apply(
           ? mk("task.cancelled", command.reason ? { reason: command.reason } : {})
           : mk("cancellation.requested", command.reason ? { reason: command.reason } : {}),
       ];
+    case "acceptance_verdict": {
+      const verdict = command.verdict;
+      if (verdict !== "passed" && verdict !== "failed" && verdict !== "abandon")
+        reject(`invalid acceptance verdict "${String(verdict)}"`);
+      const details = Array.isArray(command.details) ? command.details : [];
+      return [
+        mk("acceptance.verdict", {
+          verdict,
+          details,
+          ...(command.summary ? { summary: command.summary } : {}),
+        }),
+      ];
+    }
   }
 }
 
@@ -258,6 +271,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     case "transition.requested":
     case "note.appended":
     case "cancellation.requested":
+    case "acceptance.verdict":
       break; // signal / audit only — no projection change
   }
 
@@ -296,10 +310,12 @@ export function tryAdvance(
     const next = wf.stages[idx + 1];
     if (!next) break; // already at the last stage
 
+    const curStage = stageById(wf, cur.stageId);
     const env: GuardEnv = {
       fields: cur.fields,
       eventTypes: eventTypesInCurrentStage([...allEvents, ...out]),
       children: ctx.children ?? [],
+      acceptanceStatus: deriveAcceptanceStatus(curStage, [...allEvents, ...out]),
     };
     if (!evalGuard(next.entry, env)) break;
 
@@ -332,6 +348,33 @@ function eventTypesInCurrentStage(events: readonly EventLike[]): ReadonlySet<str
     if (t) set.add(t);
   }
   return set;
+}
+
+/**
+ * Derive the acceptance-verification status (ADR 0024) for the current stage by
+ * scanning events. Returns `"none"` when the stage has no acceptance checks,
+ * `"pending"` when checks are defined but no verdict has been recorded yet, and
+ * the verdict value (`"passed"`/`"failed"`/`"abandon"`) when one exists. Only
+ * looks within the current stage boundary — a verdict from a prior stage is
+ * irrelevant.
+ */
+export function deriveAcceptanceStatus(
+  stage: StageDef | undefined,
+  events: readonly EventLike[],
+): AcceptanceStatus {
+  if (!stage?.acceptance?.length) return "none";
+
+  // Scan backwards so the latest verdict wins. Stop at stage boundaries.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev?.type === "acceptance.verdict") {
+      const v = ev.payload.verdict;
+      if (v === "passed" || v === "failed" || v === "abandon") return v;
+    }
+    // Only stage boundaries reset acceptance — unblock changes nothing.
+    if (ev?.type === "stage.entered" || ev?.type === "task.created") break;
+  }
+  return "pending";
 }
 
 // ---- create + small helpers -----------------------------------------------

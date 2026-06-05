@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -140,6 +140,11 @@ describe("WorkflowEngine wake cycle", () => {
   });
 
   test("drives DEVELOPMENT through plan, design, implement, verify, and done", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sikong-dev-drive-"));
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ name: "dev-test", scripts: { typecheck: "true", test: "true" } }),
+    );
     const loop: LoopFactory = (ctx) =>
       scriptLoop(async (input) => {
         if (ctx.stageId === "plan") {
@@ -171,7 +176,15 @@ describe("WorkflowEngine wake cycle", () => {
         await input.tools?.set_field?.execute?.({ field: "summary", value: "Development workflow completed." }, {});
         await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
       });
-    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW]);
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      registry,
+      loop,
+    });
 
     await engine.createTask({
       projectId: "p",
@@ -342,6 +355,10 @@ describe("WorkflowEngine wake cycle", () => {
 
   test("allows a no-write forced commit pass on development planning stages", async () => {
     const root = await mkdtemp(join(tmpdir(), "sikong-dev-plan-commit-"));
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ name: "dev-plan", scripts: { typecheck: "true", test: "true" } }),
+    );
     let calls = 0;
     let planPasses = 0;
     const loop: LoopFactory = (ctx) =>
@@ -887,12 +904,265 @@ describe("WorkflowEngine wake cycle", () => {
   });
 });
 
+describe("Acceptance verifier (ADR 0024 Layers 3+4)", () => {
+  test("passing acceptance checks admit next stage transition", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sikong-acc-pass-"));
+    await writeFile(join(root, "done.txt"), "ready\n", "utf8");
+
+    const ACC_WF: WorkflowDef = {
+      id: "acc-pass",
+      version: "1",
+      name: "AccPass",
+      description: "",
+      fields: {},
+      stages: [
+        {
+          id: "work",
+          category: "in_progress",
+          entry: { op: "always" },
+          acceptance: [{ kind: "fileExists", description: "done file", path: "done.txt" }],
+        },
+        {
+          id: "done",
+          category: "done",
+          entry: {
+            op: "and",
+            all: [
+              { op: "hasEvent", eventType: "transition.requested" },
+              { op: "acceptancePassed" },
+            ],
+          },
+        },
+      ],
+    };
+
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
+    });
+    engine["o"].registry.register(ACC_WF);
+
+    await engine.createTask({ projectId: "p", workflowId: "acc-pass", taskId: "acc-pass-1" });
+    await engine.idle();
+
+    const task = await engine.getTask("acc-pass-1");
+    expect(task?.status).toBe("done");
+    expect(task?.stageId).toBe("done");
+  });
+
+  test("failed acceptance checks prevent stage transition", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sikong-acc-fail-"));
+
+    const ACC_WF: WorkflowDef = {
+      id: "acc-fail",
+      version: "1",
+      name: "AccFail",
+      description: "",
+      fields: {},
+      stages: [
+        {
+          id: "work",
+          category: "in_progress",
+          entry: { op: "always" },
+          acceptance: [{ kind: "fileExists", description: "missing file", path: "missing.txt" }],
+        },
+        {
+          id: "done",
+          category: "done",
+          entry: {
+            op: "and",
+            all: [
+              { op: "hasEvent", eventType: "transition.requested" },
+              { op: "acceptancePassed" },
+            ],
+          },
+        },
+      ],
+    };
+
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
+    });
+    engine["o"].registry.register(ACC_WF);
+
+    await engine.createTask({ projectId: "p", workflowId: "acc-fail", taskId: "acc-fail-1" });
+    await engine.idle();
+
+    const task = await engine.getTask("acc-fail-1");
+    expect(task?.status).toBe("in_progress");
+    expect(task?.stageId).toBe("work");
+
+    // Verify the acceptance.verdict event was recorded
+    const events = await (engine["o"].events as MemoryEventStore).load("acc-fail-1");
+    expect(events.some((e) => e.type === "acceptance.verdict" && e.payload.verdict === "failed")).toBe(true);
+
+    // Verify chronicle recorded the acceptance event
+    const log = await chronicle.recent({ taskId: "acc-fail-1", limit: 50 });
+    expect(log.some((e) => e.type === "wake.acceptance")).toBe(true);
+  });
+
+  test("first acceptance failure schedules a correction wake", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sikong-acc-corr-"));
+    let wakeCount = 0;
+
+    const ACC_WF: WorkflowDef = {
+      id: "acc-corr",
+      version: "1",
+      name: "AccCorr",
+      description: "",
+      fields: {},
+      stages: [
+        {
+          id: "work",
+          category: "in_progress",
+          entry: { op: "always" },
+          acceptance: [{ kind: "fileExists", description: "missing", path: "never.txt" }],
+        },
+        {
+          id: "done",
+          category: "done",
+          entry: {
+            op: "and",
+            all: [
+              { op: "hasEvent", eventType: "transition.requested" },
+              { op: "acceptancePassed" },
+            ],
+          },
+        },
+      ],
+    };
+
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop: () => {
+        wakeCount++;
+        return mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } });
+      },
+    });
+    engine["o"].registry.register(ACC_WF);
+
+    await engine.createTask({ projectId: "p", workflowId: "acc-corr", taskId: "acc-corr-1" });
+    await engine.idle();
+
+    // First wake fails acceptance → correction wake scheduled → second wake also fails → no more
+    expect(wakeCount).toBe(2);
+    const task = await engine.getTask("acc-corr-1");
+    expect(task?.stageId).toBe("work");
+    expect(task?.status).toBe("in_progress");
+  });
+
+  test("acceptance checks are skipped for stages without acceptance", async () => {
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "noaccept" });
+    await engine.idle();
+
+    expect((await engine.getTask("noaccept"))?.status).toBe("done");
+    const log = await chronicle.recent({ taskId: "noaccept", limit: 50 });
+    expect(log.filter((e) => e.type === "wake.acceptance")).toHaveLength(0);
+  });
+
+  test("acceptance checks with projectGate check", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sikong-acc-gate-"));
+    // Create a minimal project with passing scripts
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({
+        name: "gate-test",
+        scripts: { typecheck: "true", test: "true" },
+      }),
+    );
+
+    const GATE_WF: WorkflowDef = {
+      id: "gate-wf",
+      version: "1",
+      name: "GateWf",
+      description: "",
+      fields: {},
+      stages: [
+        {
+          id: "build",
+          category: "in_progress",
+          entry: { op: "always" },
+          acceptance: [{ kind: "projectGate", description: "verify project" }],
+        },
+        {
+          id: "done",
+          category: "done",
+          entry: {
+            op: "and",
+            all: [
+              { op: "hasEvent", eventType: "transition.requested" },
+              { op: "acceptancePassed" },
+            ],
+          },
+        },
+      ],
+    };
+
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
+    });
+    engine["o"].registry.register(GATE_WF);
+
+    await engine.createTask({ projectId: "p", workflowId: "gate-wf", taskId: "gate-1" });
+    await engine.idle();
+
+    const task = await engine.getTask("gate-1");
+    expect(task?.status).toBe("done");
+    expect(task?.stageId).toBe("done");
+    const log = await chronicle.recent({ taskId: "gate-1", limit: 50 });
+    expect(log.some((e) => e.type === "wake.acceptance")).toBe(true);
+  });
+});
+
 describe("DEVELOPMENT workflow (team delegation)", () => {
+  // Creates a temp project dir with passing typecheck+test scripts so the
+  // acceptance gate (projectGate) on the verify/review stage succeeds.
+  async function withProjectRoot(fn: (root: string) => Promise<void>): Promise<void> {
+    const root = await mkdtemp(join(tmpdir(), "sikong-dev-eng-"));
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ name: "dev-test", scripts: { typecheck: "true", test: "true" } }),
+    );
+    try {
+      await fn(root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
   test("a parent plans, delegates to a child, then reviews the team's result", async () => {
-    let parentReviewSystem = "";
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.workflow.id === "simple-commit") {
+    await withProjectRoot(async (root) => {
+      let parentReviewSystem = "";
+      const loop: LoopFactory = (ctx) =>
+        scriptLoop(async (input) => {
+          if (ctx.workflow.id === "simple-commit") {
           // a team member: do the work and report a structured summary
           await input.tools?.set_field?.execute?.({ field: "summary", value: "child handled part 1" }, {});
           await input.tools?.request_transition?.execute?.({ reason: "done part 1" }, {});
@@ -923,7 +1193,16 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
         await input.tools?.set_field?.execute?.({ field: "summary", value: "Team completed the effort." }, {});
         await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
       });
-    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW, SIMPLE_COMMIT]);
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_WORKFLOW);
+    registry.register(SIMPLE_COMMIT);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      registry,
+      loop,
+    });
 
     await engine.createTask({
       projectId: "p",
@@ -943,184 +1222,202 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
     expect(parentReviewSystem).toContain("## Team (your subtasks)");
     expect(parentReviewSystem).toContain(childId);
     expect(parentReviewSystem).toContain("child handled part 1");
+    });
   });
 
   test("a parent can run another round in verify before finishing (multi-round)", async () => {
-    let verifyPasses = 0;
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.workflow.id === "simple-commit") {
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "child finished" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "child done" }, {});
-          return;
-        }
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
-          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
-          return;
-        }
-        if (ctx.stageId === "plan") {
-          await input.tools?.set_field?.execute?.({ field: "plan", value: "Part A first, then maybe a follow-up." }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
-          return;
-        }
-        if (ctx.stageId === "build") {
-          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part A" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
-          return;
-        }
-        // verify
-        verifyPasses++;
-        if (verifyPasses === 1) {
-          // need another round: spawn a follow-up, do NOT set summary yet
-          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part B" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "another round" }, {});
-          return;
-        }
-        await input.tools?.set_field?.execute?.({ field: "verification", value: "Verified all rounds." }, {});
-        await input.tools?.set_field?.execute?.({ field: "summary", value: "All rounds complete." }, {});
-        await input.tools?.request_transition?.execute?.({ reason: "complete" }, {});
+    await withProjectRoot(async (root) => {
+      let verifyPasses = 0;
+      const loop: LoopFactory = (ctx) =>
+        scriptLoop(async (input) => {
+          if (ctx.workflow.id === "simple-commit") {
+            await input.tools?.set_field?.execute?.({ field: "summary", value: "child finished" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "child done" }, {});
+            return;
+          }
+          if (ctx.stageId === "design") {
+            await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+            await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+            return;
+          }
+          if (ctx.stageId === "plan") {
+            await input.tools?.set_field?.execute?.({ field: "plan", value: "Part A first, then maybe a follow-up." }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+            return;
+          }
+          if (ctx.stageId === "build") {
+            await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part A" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+            return;
+          }
+          // verify
+          verifyPasses++;
+          if (verifyPasses === 1) {
+            // need another round: spawn a follow-up, do NOT set summary yet
+            await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part B" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "another round" }, {});
+            return;
+          }
+          await input.tools?.set_field?.execute?.({ field: "verification", value: "Verified all rounds." }, {});
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "All rounds complete." }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "complete" }, {});
+        });
+      const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+      registry.register(DEVELOPMENT_WORKFLOW);
+      registry.register(SIMPLE_COMMIT);
+      const engine = new WorkflowEngine({
+        events: new MemoryEventStore(() => 1),
+        projections: new MemoryProjectionStore(),
+        projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+        registry,
+        loop,
       });
-    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW, SIMPLE_COMMIT]);
 
-    await engine.createTask({
-      projectId: "p",
-      workflowId: "development",
-      taskId: "parent-multi",
-      fields: { request: "two-round effort" },
+      await engine.createTask({
+        projectId: "p",
+        workflowId: "development",
+        taskId: "parent-multi",
+        fields: { request: "two-round effort" },
+      });
+      await engine.idle();
+
+      const task = await engine.getTask("parent-multi");
+      expect(verifyPasses).toBe(2); // re-woken for a second verify round after the follow-up finished
+      expect(task?.status).toBe("done");
+      expect(task?.fields.summary).toBe("All rounds complete.");
+      expect(task?.childIds.length).toBe(2); // initial team member + the follow-up
+      for (const cid of task!.childIds) expect((await engine.getTask(cid))?.status).toBe("done");
     });
-    await engine.idle();
-
-    const task = await engine.getTask("parent-multi");
-    expect(verifyPasses).toBe(2); // re-woken for a second verify round after the follow-up finished
-    expect(task?.status).toBe("done");
-    expect(task?.fields.summary).toBe("All rounds complete.");
-    expect(task?.childIds.length).toBe(2); // initial team member + the follow-up
-    for (const cid of task!.childIds) expect((await engine.getTask(cid))?.status).toBe("done");
   });
 
   test("an isolated subtask marks the child and runs the worker-boundary hooks (ADR 0010)", async () => {
-    const isolated: string[] = [];
-    const released: string[] = [];
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.workflow.id === "simple-commit") {
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "isolated child done" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
-          return;
-        }
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
-          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
-          return;
-        }
-        if (ctx.stageId === "plan") {
-          await input.tools?.set_field?.execute?.({ field: "plan", value: "one isolated piece" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
-          return;
-        }
-        if (ctx.stageId === "build") {
-          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part X", isolate: true }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
-          return;
-        }
-        await input.tools?.set_field?.execute?.({ field: "summary", value: "done" }, {});
-        await input.tools?.request_transition?.execute?.({ reason: "reviewed" }, {});
+    await withProjectRoot(async (root) => {
+      const isolated: string[] = [];
+      const released: string[] = [];
+      const loop: LoopFactory = (ctx) =>
+        scriptLoop(async (input) => {
+          if (ctx.workflow.id === "simple-commit") {
+            await input.tools?.set_field?.execute?.({ field: "summary", value: "isolated child done" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+            return;
+          }
+          if (ctx.stageId === "design") {
+            await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+            await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+            return;
+          }
+          if (ctx.stageId === "plan") {
+            await input.tools?.set_field?.execute?.({ field: "plan", value: "one isolated piece" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+            return;
+          }
+          if (ctx.stageId === "build") {
+            await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "part X", isolate: true }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+            return;
+          }
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "done" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "reviewed" }, {});
+        });
+      const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+      registry.register(DEVELOPMENT_WORKFLOW);
+      registry.register(SIMPLE_COMMIT);
+      const engine = new WorkflowEngine({
+        events: new MemoryEventStore(() => 1),
+        projections: new MemoryProjectionStore(),
+        projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+        registry,
+        loop,
+        isolateWorkspace: (ctx, project) => {
+          isolated.push(ctx.task.id);
+          return project;
+        },
+        releaseWorkspace: (task) => {
+          released.push(task.id);
+        },
       });
-    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_WORKFLOW);
-    registry.register(SIMPLE_COMMIT);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "P", root: "/sandbox" }]),
-      registry,
-      loop,
-      isolateWorkspace: (ctx, project) => {
-        isolated.push(ctx.task.id);
-        return project;
-      },
-      releaseWorkspace: (task) => {
-        released.push(task.id);
-      },
+
+      await engine.createTask({ projectId: "p", workflowId: "development", taskId: "iso-parent", fields: { request: "x" } });
+      await engine.idle();
+
+      const parent = await engine.getTask("iso-parent");
+      expect(parent?.status).toBe("done");
+      expect(parent?.childIds.length).toBe(1);
+      const childId = parent!.childIds[0]!;
+      const child = await engine.getTask(childId);
+      expect(child?.isolate).toBe(true); // the child carries the isolation flag
+      expect(child?.status).toBe("done");
+      // the worker boundary saw the isolated child on its wake, and released it on terminal
+      expect(isolated).toContain(childId);
+      expect(released).toContain(childId);
+      // the parent itself was never isolated
+      expect(isolated).not.toContain("iso-parent");
     });
-
-    await engine.createTask({ projectId: "p", workflowId: "development", taskId: "iso-parent", fields: { request: "x" } });
-    await engine.idle();
-
-    const parent = await engine.getTask("iso-parent");
-    expect(parent?.status).toBe("done");
-    expect(parent?.childIds.length).toBe(1);
-    const childId = parent!.childIds[0]!;
-    const child = await engine.getTask(childId);
-    expect(child?.isolate).toBe(true); // the child carries the isolation flag
-    expect(child?.status).toBe("done");
-    // the worker boundary saw the isolated child on its wake, and released it on terminal
-    expect(isolated).toContain(childId);
-    expect(released).toContain(childId);
-    // the parent itself was never isolated
-    expect(isolated).not.toContain("iso-parent");
   });
 
   test("a child whose wakes keep failing is auto-failed so the parent unblocks (ADR 0010 #2)", async () => {
-    let childWakes = 0;
-    const loop: LoopFactory = (ctx) => {
-      if (ctx.workflow.id === "simple-commit") {
-        // a stuck/failing child: its wake errors every time (e.g. a build that times out)
-        return scriptLoop(async () => {
-          childWakes++;
-          throw new Error("simulated build failure");
-        }, "ai-sdk");
-      }
-      return scriptLoop(async (input) => {
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
-          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
-          return;
+    await withProjectRoot(async (root) => {
+      let childWakes = 0;
+      const loop: LoopFactory = (ctx) => {
+        if (ctx.workflow.id === "simple-commit") {
+          // a stuck/failing child: its wake errors every time (e.g. a build that times out)
+          return scriptLoop(async () => {
+            childWakes++;
+            throw new Error("simulated build failure");
+          }, "ai-sdk");
         }
-        if (ctx.stageId === "plan") {
-          await input.tools?.set_field?.execute?.({ field: "plan", value: "one piece" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
-          return;
-        }
-        if (ctx.stageId === "build") {
-          await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "do x" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
-          return;
-        }
-        // verify
-        await input.tools?.set_field?.execute?.({ field: "verification", value: "Child failed; effort closed." }, {});
-        await input.tools?.set_field?.execute?.({ field: "summary", value: "child failed; effort closed" }, {});
-        await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+        return scriptLoop(async (input) => {
+          if (ctx.stageId === "design") {
+            await input.tools?.set_field?.execute?.({ field: "design", value: "decisions" }, {});
+            await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "B", pros: "simpler", why_rejected: "weaker fit" }] }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+            return;
+          }
+          if (ctx.stageId === "plan") {
+            await input.tools?.set_field?.execute?.({ field: "plan", value: "one piece" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "planned" }, {});
+            return;
+          }
+          if (ctx.stageId === "build") {
+            await input.tools?.create_subtask?.execute?.({ workflowId: "simple-commit", input: "do x" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "delegated" }, {});
+            return;
+          }
+          // verify
+          await input.tools?.set_field?.execute?.({ field: "verification", value: "Child failed; effort closed." }, {});
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "child failed; effort closed" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+        });
+      };
+      const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+      registry.register(DEVELOPMENT_WORKFLOW);
+      registry.register(SIMPLE_COMMIT);
+      const engine = new WorkflowEngine({
+        events: new MemoryEventStore(() => 1),
+        projections: new MemoryProjectionStore(),
+        projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+        registry,
+        loop,
+        maxWakeRetries: 1, // one retry, then terminal-fail
       });
-    };
-    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
-    registry.register(DEVELOPMENT_WORKFLOW);
-    registry.register(SIMPLE_COMMIT);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      registry,
-      loop,
-      maxWakeRetries: 1, // one retry, then terminal-fail
+
+      await engine.createTask({ projectId: "p", workflowId: "development", taskId: "fail-parent", fields: { request: "x" } });
+      await engine.idle();
+
+      const parent = await engine.getTask("fail-parent");
+      expect(childWakes).toBeGreaterThanOrEqual(2); // initial + one retry before auto-fail
+      const childId = parent!.childIds[0]!;
+      expect((await engine.getTask(childId))?.status).toBe("cancelled"); // auto-failed → terminal
+      expect(parent?.status).toBe("done"); // childrenDone resolved — the parent was NOT wedged
     });
-
-    await engine.createTask({ projectId: "p", workflowId: "development", taskId: "fail-parent", fields: { request: "x" } });
-    await engine.idle();
-
-    const parent = await engine.getTask("fail-parent");
-    expect(childWakes).toBeGreaterThanOrEqual(2); // initial + one retry before auto-fail
-    const childId = parent!.childIds[0]!;
-    expect((await engine.getTask(childId))?.status).toBe("cancelled"); // auto-failed → terminal
-    expect(parent?.status).toBe("done"); // childrenDone resolved — the parent was NOT wedged
   });
 
   test("the parent can order subtasks with dependsOn — a dependent runs only after its prerequisite (ADR 0011)", async () => {
-    const order: string[] = [];
-    const loop: LoopFactory = (ctx) =>
+    await withProjectRoot(async (root) => {
+      const order: string[] = [];
+      const loop: LoopFactory = (ctx) =>
       scriptLoop(async (input) => {
         if (ctx.workflow.id === "general") {
           order.push(String(ctx.task.fields.request)); // record run order
@@ -1155,6 +1452,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
       registry,
       loop,
     });
@@ -1172,20 +1470,22 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
     const b = tasks.find((t) => t?.fields.request === "B");
     const a = tasks.find((t) => t?.fields.request === "A");
     expect(b?.dependsOn).toEqual([a?.id]);
+    });
   });
 
   test("DEVELOPMENT_LEAD_WORKFLOW alias still delegates and completes end-to-end", async () => {
-    const loop: LoopFactory = (ctx) =>
-      scriptLoop(async (input) => {
-        if (ctx.workflow.id === SIMPLE_COMMIT.id) {
-          await input.tools?.set_field?.execute?.({ field: "summary", value: "alias child done" }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
-          return;
-        }
-        if (ctx.stageId === "design") {
-          await input.tools?.set_field?.execute?.({ field: "design", value: "alias test" }, {});
-          await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "A", pros: "fast", why_rejected: "weaker fit" }] }, {});
-          await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
+    await withProjectRoot(async (root) => {
+      const loop: LoopFactory = (ctx) =>
+        scriptLoop(async (input) => {
+          if (ctx.workflow.id === SIMPLE_COMMIT.id) {
+            await input.tools?.set_field?.execute?.({ field: "summary", value: "alias child done" }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+            return;
+          }
+          if (ctx.stageId === "design") {
+            await input.tools?.set_field?.execute?.({ field: "design", value: "alias test" }, {});
+            await input.tools?.set_field?.execute?.({ field: "alternatives", value: [{ option: "A", pros: "fast", why_rejected: "weaker fit" }] }, {});
+            await input.tools?.request_transition?.execute?.({ reason: "designed" }, {});
           return;
         }
         if (ctx.stageId === "plan") {
@@ -1203,7 +1503,16 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
         await input.tools?.set_field?.execute?.({ field: "summary", value: "alias done" }, {});
         await input.tools?.request_transition?.execute?.({ reason: "verified" }, {});
       });
-    const engine = newEngine(loop, [DEVELOPMENT_LEAD_WORKFLOW, SIMPLE_COMMIT]);
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    registry.register(DEVELOPMENT_LEAD_WORKFLOW);
+    registry.register(SIMPLE_COMMIT);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
+      registry,
+      loop,
+    });
 
     await engine.createTask({
       projectId: "p",
@@ -1217,6 +1526,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
     expect(task?.status).toBe("done");
     expect(task?.childIds).toHaveLength(1);
     expect((await engine.getTask(task!.childIds[0]!))?.status).toBe("done");
+    });
   });
 
   test("depth propagates from parent to child subtask", async () => {

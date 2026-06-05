@@ -1,5 +1,5 @@
 import { WorkflowValidationError } from "./errors";
-import type { Guard, StageCategory, StageDef, WorkflowDef } from "./types";
+import type { AcceptanceCheck, Guard, StageCategory, StageDef, WorkflowDef } from "./types";
 
 export interface ValidationIssue {
   code: string;
@@ -104,6 +104,20 @@ export function validateWorkflow(def: WorkflowDef, opts: ValidateOptions = {}): 
       );
   }
 
+  // Cross-stage: a stage with `acceptancePassed` in its entry requires the
+  // PREVIOUS stage to have acceptance checks defined.
+  def.stages.forEach((stage, idx) => {
+    if (idx > 0 && guardContainsAcceptancePassed(stage.entry)) {
+      const prev = def.stages[idx - 1];
+      if (!prev || !prev.acceptance?.length)
+        push(
+          "missing-acceptance-checks",
+          `stage "${stage.id}" uses acceptancePassed guard but preceding stage "${prev?.id ?? "(none)"}" has no acceptance checks`,
+          { stageId: stage.id },
+        );
+    }
+  });
+
   // Guards + reachability + ref resolution
   def.stages.forEach((stage, idx) => {
     validateGuard(stage.entry, def, stage, push);
@@ -132,6 +146,7 @@ export function validateWorkflow(def: WorkflowDef, opts: ValidateOptions = {}): 
           stageId: stage.id,
           field,
         });
+    for (const check of stage.acceptance ?? []) validateAcceptanceCheck(check, stage, def, push);
   });
 
   return issues;
@@ -155,6 +170,7 @@ function validateGuard(
     case "hasEvent":
     case "childrenDone":
     case "childrenSucceeded":
+    case "acceptancePassed":
       return;
     case "field": {
       if (!def.fields[guard.field])
@@ -198,5 +214,68 @@ function isUnsatisfiable(guard: Guard): boolean {
       return guard.guard.op === "always";
     default:
       return false;
+  }
+}
+
+/** Whether a guard expression (or any nested sub-guard) contains `acceptancePassed`. */
+function guardContainsAcceptancePassed(guard: Guard): boolean {
+  switch (guard.op) {
+    case "acceptancePassed":
+      return true;
+    case "and":
+      return guard.all.some(guardContainsAcceptancePassed);
+    case "or":
+      return guard.any.some(guardContainsAcceptancePassed);
+    case "not":
+      return guardContainsAcceptancePassed(guard.guard);
+    default:
+      return false;
+  }
+}
+
+/** Validate a single acceptance check for structural correctness. */
+function validateAcceptanceCheck(
+  check: AcceptanceCheck,
+  stage: StageDef,
+  def: WorkflowDef,
+  push: (code: string, message: string, extra?: Partial<ValidationIssue>) => void,
+): void {
+  const stageId = stage.id;
+  switch (check.kind) {
+    case "command":
+      if (!check.cmd?.trim())
+        push("acceptance-command-without-cmd", `stage "${stageId}" has a command acceptance check with no cmd`, {
+          stageId,
+        });
+      if (check.expectExit !== undefined && (typeof check.expectExit !== "number" || !Number.isInteger(check.expectExit)))
+        push("acceptance-invalid-exit-code", `stage "${stageId}" command check has non-integer expectExit`, { stageId });
+      return;
+    case "fileExists":
+      if (!check.path?.trim())
+        push("acceptance-without-path", `stage "${stageId}" has a fileExists acceptance check with no path`, {
+          stageId,
+        });
+      return;
+    case "grep":
+      if (!check.path?.trim())
+        push("acceptance-without-path", `stage "${stageId}" has a grep acceptance check with no path`, { stageId });
+      if (!check.pattern?.trim())
+        push("acceptance-grep-without-pattern", `stage "${stageId}" has a grep acceptance check with no pattern`, {
+          stageId,
+        });
+      if (typeof check.expectMatch !== "boolean")
+        push("acceptance-grep-without-expect", `stage "${stageId}" grep acceptance check must specify expectMatch`, {
+          stageId,
+        });
+      return;
+    case "projectGate":
+      // projectGate needs only a description — no further validation at M0.
+      return;
+    default:
+      push(
+        "invalid-acceptance-kind",
+        `stage "${stageId}" has an acceptance check with unknown kind "${(check as AcceptanceCheck & { kind: string }).kind}"`,
+        { stageId },
+      );
   }
 }

@@ -3,6 +3,9 @@
  * that drive it. No persistence, no LLM, no engine — those are M0.5/M1.
  */
 export type {
+  AcceptanceCheck,
+  AcceptanceVerdict,
+  AcceptanceVerdictDetail,
   Command,
   EventSource,
   FieldCmp,
@@ -21,10 +24,11 @@ export type {
   WorkflowDef,
 } from "./types";
 
-export { evalGuard, type GuardEnv } from "./guard";
+export { evalGuard, type AcceptanceStatus, type GuardEnv } from "./guard";
 export {
   apply,
   applyEventsToTask,
+  deriveAcceptanceStatus,
   filterValidFields,
   initTask,
   project,

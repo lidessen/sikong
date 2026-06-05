@@ -369,6 +369,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
+      acceptance: [{ kind: "projectGate", description: "Type-check and tests pass" }],
       outputFields: ["verification", "summary"],
       instructions:
         "Verify the implementation adversarially (ADR 0015) AND/OR review+merge the team's results. Run the project's full checks (build, vet/lint, tests) covering EDGE CASES and real-user-path smokes — not only happy-path values. If the team used isolated worktrees, merge each branch with git now. You MAY create follow-up subtasks with `create_subtask` for multi-round efforts (set no summary to be re-woken). Record `verification` (what you checked, exact commands, and results) and set `summary` as a one-line outcome, then request transition. Block if verification fails or cannot run.",
@@ -382,6 +383,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
           { op: "field", field: "summary", cmp: "exists" },
           { op: "childrenDone" },
           { op: "hasEvent", eventType: "transition.requested" },
+          { op: "acceptancePassed" },
         ],
       },
     },
@@ -594,6 +596,7 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
       category: "in_progress",
       effort: "medium",
       tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
+      acceptance: [{ kind: "projectGate", description: "Type-check and tests pass across the merged project" }],
       outputFields: ["summary"],
       entry: {
         op: "and",
@@ -616,6 +619,7 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
           { op: "childrenDone" },
           { op: "field", field: "summary", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
+          { op: "acceptancePassed" },
         ],
       },
     },

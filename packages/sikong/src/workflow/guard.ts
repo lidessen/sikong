@@ -1,5 +1,8 @@
 import type { FieldCmp, Guard, TaskStatus } from "./types";
 
+/** Acceptance-verification state for the current stage (ADR 0024). */
+export type AcceptanceStatus = "none" | "pending" | "passed" | "failed" | "abandon";
+
 /** The slice of state a guard is evaluated against. */
 export interface GuardEnv {
   /** The task's current projected fields. */
@@ -8,6 +11,13 @@ export interface GuardEnv {
   eventTypes: ReadonlySet<string>;
   /** Statuses of this task's children (for `childrenDone`). */
   children: readonly TaskStatus[];
+  /**
+   * Acceptance-verification state for the current stage (ADR 0024).
+   * - `"none"` — current stage has no acceptance checks defined (vacuously true).
+   * - `"pending"` — checks defined but no verdict yet.
+   * - `"passed"` / `"failed"` / `"abandon"` — verifier has reported.
+   */
+  acceptanceStatus: AcceptanceStatus;
 }
 
 const TERMINAL: ReadonlySet<TaskStatus> = new Set<TaskStatus>(["done", "cancelled"]);
@@ -37,6 +47,11 @@ export function evalGuard(guard: Guard, env: GuardEnv): boolean {
       // Stricter join: every child finished SUCCESSFULLY (done); a cancelled child
       // makes this false. Vacuously true with zero children.
       return env.children.every((s) => s === "done");
+    case "acceptancePassed":
+      // Not vacuously true: only passes when the verifier has actually returned
+      // "passed". "none" (no checks defined) does NOT pass — if no acceptance
+      // checks exist, don't use this guard. Static validation catches misuse.
+      return env.acceptanceStatus === "passed";
     case "and":
       return guard.all.every((g) => evalGuard(g, env));
     case "or":

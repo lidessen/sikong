@@ -11,6 +11,7 @@ import {
   type ToolSet,
 } from "agent-loop";
 import {
+  deriveAcceptanceStatus,
   filterValidFields,
   initTask,
   project,
@@ -19,6 +20,7 @@ import {
   tryAdvance,
 } from "../workflow/reducer";
 import type {
+  AcceptanceVerdict,
   Command,
   EventSource,
   FieldDef,
@@ -26,6 +28,7 @@ import type {
   TaskStatus,
   WorkflowDef,
 } from "../workflow/types";
+import { evalAcceptanceCheck } from "./eval-acceptance";
 import type {
   ChronicleEntry,
   ChronicleStore,
@@ -985,6 +988,83 @@ export class WorkflowEngine {
       if (events.length) {
         await this.o.events.append(taskId, events);
         await this.persist(taskId, wf); // re-sync the projection even with no transition
+      }
+    }
+
+    // (3b) Acceptance verifier (ADR 0024 Layers 3+4): run the stage's deterministic
+    // acceptance checks after the worker's commands are applied but before advance,
+    // so the verdict feeds the guard evaluation. The verifier is pure I/O (no LLM):
+    // it runs shell commands, file checks, and project gates, then records a
+    // structured verdict as an `acceptance.verdict` event on the task timeline.
+    //
+    // Layer 4 (correction loop): a first-time acceptance failure schedules one
+    // correction wake on the same stage so the worker can fix the issues. If the
+    // correction wake also fails, no further correction is scheduled — the stage
+    // stays in_progress for the worker or lead to address.
+    {
+      const fresh = (await this.loadPinned(taskId)).task;
+      const curStage = stageById(wf, fresh.stageId);
+      if (
+        curStage?.acceptance?.length &&
+        !isTerminal(fresh.status) &&
+        fresh.status !== "blocked"
+      ) {
+        const allEvents = await this.o.events.load(taskId);
+        const currentAccStatus = deriveAcceptanceStatus(curStage, allEvents);
+        const isCorrection = currentAccStatus === "failed";
+
+        if (currentAccStatus === "pending" || currentAccStatus === "failed") {
+          const accCwd = project?.root ?? ".";
+          const details = await Promise.all(
+            curStage.acceptance.map((check) => evalAcceptanceCheck(check, { cwd: accCwd })),
+          );
+          const anyFailed = details.some((d) => !d.passed);
+          const verdict: AcceptanceVerdict = anyFailed ? "failed" : "passed";
+          const failedCount = details.filter((d) => !d.passed).length;
+          const passedCount = details.length - failedCount;
+
+          const verdictCmd: Command = {
+            kind: "acceptance_verdict",
+            verdict,
+            details,
+            summary: anyFailed
+              ? `Acceptance: ${failedCount}/${details.length} checks failed`
+              : `Acceptance: all ${details.length} checks passed`,
+          };
+          const verdictEvents = reduceCommands(fresh, wf, [verdictCmd], { source: "engine", wakeId });
+          if (verdictEvents.length) {
+            await this.o.events.append(taskId, verdictEvents);
+            await this.persist(taskId, wf);
+          }
+
+          await this.chron({
+            type: "wake.acceptance",
+            taskId,
+            wakeId,
+            summary: verdict === "passed"
+              ? `acceptance: all ${details.length} checks passed`
+              : `acceptance: ${failedCount}/${details.length} checks failed`,
+            data: {
+              verdict,
+              checkCount: details.length,
+              passedCount,
+              failedCount,
+              checks: details.map((d) => ({
+                checkDescription: d.checkDescription,
+                passed: d.passed,
+                ...(d.suggestion ? { suggestion: d.suggestion.slice(0, 200) } : {}),
+              })),
+            },
+          });
+
+          // Layer 4: Correction loop — schedule one retry on first failure.
+          // isCorrection is false on first check (no prior verdict), so only the
+          // first failure schedules a correction. A correction wake's re-verification
+          // that also fails does not schedule another.
+          if (!isCorrection && verdict === "failed") {
+            this.schedule(taskId);
+          }
+        }
       }
     }
 
