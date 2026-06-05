@@ -58,3 +58,4 @@ Files use a monotonic four-digit prefix:
 | [0026](0026-worker-sandbox-escalation.md) | Accepted | Worker sandbox + auto-mode privilege escalation (Claude Code model: sandbox-default + escalate-on-failure) so the worker can run the real toolchain and self-verify |
 | [0027](0027-lead-authored-task-acceptance.md) | Accepted | Lead-authored per-task acceptance checks (Task.acceptance + create_subtask/CLI; merged with stage acceptance at the gate) — a worker can't test around the spec |
 | [0028](0028-target-aware-design-workflow.md) | Accepted | Target-aware design workflow — native/SwiftUI support (target field; assemble/review branch web-semajsx vs swiftui; tokens stay universal) |
+| [0029](0029-interactive-monitor-dashboard.md) | Accepted | Interactive monitor dashboard — semajsx hydration + live SSE (filter/sort/drill-down, in-place updates) replacing the SSR meta-refresh snapshot |
