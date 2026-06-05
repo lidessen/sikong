@@ -1,9 +1,14 @@
 /**
  * src/site/components.ts — sikong.dev production homepage
  *
- * Converged design: "Sikong (司空)" — Terminal-Meets-SaaS Landing Page.
- * Flow's clean SaaS structure with Architect's terminal hero, stats,
- * comparison table, and terminal-themed installation.
+ * Design language: Precision Product Craft (Linear · Vercel · Stripe lineage).
+ * Philosophy: earn trust through craft and restraint — "we are infrastructure
+ * built by engineers who care about detail."
+ *
+ * Omits: stock illustration, rounded softness, multi-color palettes,
+ * marketing fluff, terminal chrome, decorative glow, slow motion.
+ * Elevates: monochrome + one hard-working accent, generous whitespace,
+ * real product UI, motion that demonstrates speed, dark mode.
  *
  * Built with semajsx: h (jsx), css (scoped styles), fragment.
  *
@@ -13,43 +18,59 @@
 import { jsx as h, Fragment as fragment } from "semajsx/core"
 import { css } from "semajsx/style"
 import type { JSXNode } from "semajsx/html"
-import type { StyleRef } from "semajsx/style"
 
 // ── Design tokens ────────────────────────────────────────────────────────────
+// Precision Product Craft: near-monochrome dark canvas + single blue accent.
+// 4px base grid; Inter/Geist sans + JetBrains Mono; 6px precise radii.
 
 const T = {
-  bg: "#0b0f19",
-  bgAlt: "#0f172a",
-  surface: "#131a2b",
-  surfaceAlt: "#1a2332",
-  border: "#1e293b",
-  borderHover: "#334155",
-  text: "#f1f5f9",
-  textDim: "#94a3b8",
-  textMuted: "#64748b",
-  blue: "#60a5fa",
-  blueBg: "rgba(96, 165, 250, 0.08)",
-  blueGlow: "rgba(96, 165, 250, 0.15)",
-  purple: "#a78bfa",
-  purpleBg: "rgba(167, 139, 250, 0.08)",
-  green: "#34d399",
-  red: "#f87171",
-  amber: "#fbbf24",
-  fontMono: '"SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace',
+  // Canvas — deep, nearly black. Not #000 (too harsh), not navy (too terminal).
+  bg: "#0a0a0b",
+  bgAlt: "#111113",
+  surface: "#161618",
+  surfaceHover: "#1c1c1f",
+
+  // Borders — hairline, low contrast. Precision over decoration.
+  border: "#2a2a2e",
+  borderHover: "#3a3a3f",
+
+  // Type
+  text: "#fafafa",
+  textDim: "#a0a0a6",
+  textMuted: "#6e6e73",
+
+  // Accent — the ONE hard-working color. Used only for primary actions and key signals.
+  accent: "#3b82f6",
+  accentHover: "#2563eb",
+  accentBg: "rgba(59, 130, 246, 0.06)",
+  accentBorder: "rgba(59, 130, 246, 0.15)",
+
+  // Semantic — minimal, functional
+  success: "#22c55e",
+  warning: "#f59e0b",
+  error: "#ef4444",
+
+  // Typography — Inter/Geist lineage (geometric, slightly cold, high contrast)
   fontSans:
-    '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Helvetica, Arial, sans-serif',
+    "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif",
+  fontMono: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace",
+
+  // Shape — small, precise radii; not rounded/friendly
+  radius: "6px",
+  radiusLg: "8px",
 } as const
 
-// ── Keyframe animations ──────────────────────────────────────────────────────
+// ── Keyframes ────────────────────────────────────────────────────────────────
+// Motion: fast, functional. No decorative animations.
 
 const KEYFRAMES = `
-@keyframes sk-blink { 50% { opacity: 0; } }
-@keyframes sk-fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes sk-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-@keyframes sk-slideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes sk-fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 `
 
-// ── Global CSS (injected into build.ts <head>) ──────────────────────────────
+// ── Global CSS ───────────────────────────────────────────────────────────────
 
 export const GLOBAL_CSS = `
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -62,28 +83,16 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-a { color: ${T.blue}; text-decoration: none; transition: color 0.15s ease; }
-a:hover { color: #93c5fd; }
-::selection { background: rgba(96, 165, 250, 0.3); }
+a { color: ${T.accent}; text-decoration: none; transition: color 0.12s ease; }
+a:hover { color: #60a5fa; }
+::selection { background: rgba(59, 130, 246, 0.25); }
 code, pre { font-family: ${T.fontMono}; }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 8px; }
-::-webkit-scrollbar-track { background: ${T.bg}; }
-::-webkit-scrollbar-thumb { background: ${T.border}; border-radius: 4px; }
+/* Scrollbar — subtle, functional */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: ${T.border}; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: ${T.borderHover}; }
-
-/* Interaction classes */
-.sk-card:hover { border-color: ${T.blue} !important; transform: translateY(-2px); }
-.sk-btn-primary:hover { background: #2563eb !important; transform: translateY(-1px); }
-.sk-btn-secondary:hover { border-color: ${T.borderHover} !important; background: ${T.surface} !important; }
-.sk-foot-link:hover { color: ${T.textDim} !important; }
-
-/* Responsive utilities */
-@media (max-width: 640px) {
-  .sk-card { padding: 20px !important; }
-  .sk-hide-mobile { display: none !important; }
-}
 `
 
 // ── Utility styles ───────────────────────────────────────────────────────────
@@ -94,33 +103,33 @@ const container = css`
   padding: 0 24px;
 `
 
-const sectionPad = css`
-  padding: 100px 0;
+const section = css`
+  padding: 120px 0;
 
   @media (max-width: 640px) {
-    padding: 64px 0;
+    padding: 80px 0;
   }
 `
 
 const sectionTitle = css`
-  font-size: clamp(1.75rem, 3vw, 2.25rem);
-  font-weight: 800;
-  color: #f1f5f9;
+  font-size: clamp(1.625rem, 3vw, 2rem);
+  font-weight: 700;
+  color: ${T.text};
   text-align: center;
-  margin-bottom: 12px;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
 `
 
 const sectionSub = css`
-  font-size: 1rem;
+  font-size: 0.9375rem;
   color: ${T.textDim};
   text-align: center;
-  max-width: 600px;
-  margin: 0 auto 56px;
-  line-height: 1.7;
+  max-width: 560px;
+  margin: 12px auto 64px;
+  line-height: 1.65;
 
   @media (max-width: 640px) {
-    margin-bottom: 40px;
+    margin-bottom: 48px;
   }
 `
 
@@ -132,9 +141,9 @@ const nav = css`
   left: 0;
   right: 0;
   z-index: 100;
-  background: rgba(11, 15, 25, 0.88);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(10, 10, 11, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid ${T.border};
 `
 
@@ -142,274 +151,172 @@ const navInner = css`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 64px;
+  height: 56px;
+`
+
+const navLeft = css`
+  display: flex;
+  align-items: center;
+  gap: 12px;
 `
 
 const navBrand = css`
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-weight: 700;
-  font-size: 1.1rem;
-  color: #f1f5f9;
+  gap: 8px;
+  font-weight: 650;
+  font-size: 0.9375rem;
+  color: ${T.text};
   letter-spacing: -0.02em;
 `
 
 const navLogo = css`
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-  background: linear-gradient(135deg, ${T.blue}, ${T.purple});
+  width: 26px;
+  height: 26px;
+  border-radius: ${T.radius};
+  background: ${T.accent};
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.75rem;
-  font-weight: 800;
+  font-size: 0.7rem;
+  font-weight: 750;
   color: #fff;
 `
 
-const navLinks = css`
+const navVersion = css`
+  font-family: ${T.fontMono};
+  font-size: 0.6875rem;
+  color: ${T.textMuted};
+  padding: 2px 7px;
+  border: 1px solid ${T.border};
+  border-radius: 4px;
+  line-height: 1.4;
+`
+
+const navRight = css`
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: 24px;
+
+  @media (max-width: 640px) {
+    gap: 16px;
+  }
+`
+
+const navLink = css`
+  font-size: 0.8125rem;
+  color: ${T.textDim};
+  transition: color 0.12s ease;
+
+  &:hover {
+    color: ${T.text};
+  }
 
   @media (max-width: 640px) {
     display: none;
   }
 `
 
-const navLink = css`
-  font-size: 0.85rem;
-  color: ${T.textDim};
-  transition: color 0.15s ease;
-  cursor: pointer;
-
-  &:hover {
-    color: #e2e8f0;
-  }
-`
-
 const navCta = css`
-  padding: 8px 20px;
-  background: ${T.blue};
+  padding: 7px 18px;
+  background: ${T.accent};
   color: #fff;
-  border-radius: 6px;
-  font-size: 0.85rem;
+  border-radius: ${T.radius};
+  font-size: 0.8125rem;
   font-weight: 600;
-  transition: background 0.15s ease, transform 0.15s ease;
+  transition: background 0.12s ease;
+  line-height: 1.4;
 
   &:hover {
-    background: #2563eb;
+    background: ${T.accentHover};
     color: #fff;
-    transform: translateY(-1px);
   }
 `
 
-const navVersion = css`
-  font-family: ${T.fontMono};
-  font-size: 0.7rem;
-  color: ${T.textMuted};
-  padding: 2px 8px;
-  border: 1px solid ${T.border};
-  border-radius: 4px;
-`
-
-// ── Hero section ─────────────────────────────────────────────────────────────
+// ── Hero ─────────────────────────────────────────────────────────────────────
+// No glow, no grid background, no terminal chrome. Just confident typography
+// and a real product code block. Whitespace is the hero's texture.
 
 const hero = css`
-  min-height: 100vh;
+  min-height: 90vh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 120px 24px 60px;
-  position: relative;
-  overflow: hidden;
+  padding: 120px 24px 80px;
   text-align: center;
 `
 
-const heroBg = css`
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(96, 165, 250, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(96, 165, 250, 0.03) 1px, transparent 1px);
-  background-size: 56px 56px;
-  pointer-events: none;
-`
-
-const heroGlow = css`
-  position: absolute;
-  top: -15%;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 900px;
-  height: 700px;
-  background: radial-gradient(ellipse, rgba(96, 165, 250, 0.06) 0%, rgba(167, 139, 250, 0.03) 40%, transparent 70%);
-  pointer-events: none;
-`
-
-const heroTopGlow = css`
-  position: absolute;
-  top: -20%;
-  right: -10%;
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(167, 139, 250, 0.04) 0%, transparent 60%);
-  pointer-events: none;
+const heroEyebrow = css`
+  font-family: ${T.fontMono};
+  font-size: 0.75rem;
+  color: ${T.textMuted};
+  letter-spacing: 0.04em;
+  margin-bottom: 20px;
+  animation: sk-fadeUp 0.35s ease both;
 `
 
 const heroH1 = css`
-  font-size: clamp(2.75rem, 6vw, 4.25rem);
-  font-weight: 900;
-  line-height: 1.1;
+  font-size: clamp(2.5rem, 5.5vw, 3.75rem);
+  font-weight: 750;
+  line-height: 1.08;
   letter-spacing: -0.04em;
-  margin-bottom: 8px;
-  position: relative;
+  margin-bottom: 16px;
+  max-width: 720px;
+  animation: sk-fadeUp 0.35s 0.06s ease both;
 `
 
-const heroGradient = css`
-  background: linear-gradient(135deg, ${T.blue}, ${T.purple});
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+const heroAccent = css`
+  color: ${T.accent};
 `
 
-const heroVersion = css`
-  font-family: ${T.fontMono};
-  font-size: 0.8rem;
-  color: ${T.textMuted};
-  margin-bottom: 20px;
-`
-
-const heroTagline = css`
-  font-size: clamp(1.05rem, 2vw, 1.25rem);
+const heroP = css`
+  font-size: clamp(0.9375rem, 1.5vw, 1.0625rem);
   color: ${T.textDim};
-  max-width: 560px;
-  line-height: 1.7;
-  margin-bottom: 40px;
-  position: relative;
+  max-width: 520px;
+  line-height: 1.6;
+  margin-bottom: 36px;
+  animation: sk-fadeUp 0.35s 0.12s ease both;
 `
-
-// ── Terminal window ──────────────────────────────────────────────────────────
-
-const termWindow = css`
-  background: #0a0f1e;
-  border: 1px solid ${T.border};
-  border-radius: 10px;
-  overflow: hidden;
-  max-width: 660px;
-  width: 100%;
-  text-align: left;
-  box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.3),
-    0 0 60px rgba(96, 165, 250, 0.04);
-  position: relative;
-`
-
-const termHeader = css`
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: #111a2b;
-  border-bottom: 1px solid ${T.border};
-`
-
-const termTitle = css`
-  font-size: 0.75rem;
-  color: ${T.textMuted};
-  margin-left: auto;
-  font-family: ${T.fontMono};
-`
-
-const termDot = (color: string): StyleRef => css`
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: ${color};
-`
-
-const termBody = css`
-  padding: 20px 24px;
-  font-family: ${T.fontMono};
-  font-size: 0.82rem;
-  line-height: 1.85;
-  color: ${T.textDim};
-
-  @media (max-width: 640px) {
-    padding: 14px 16px;
-    font-size: 0.75rem;
-  }
-`
-
-const termPrompt = css`
-  color: ${T.green};
-`
-
-const termCmd = css`
-  color: #e2e8f0;
-`
-
-const termOutput = css`
-  color: ${T.textDim};
-  padding-left: 16px;
-`
-
-const termSuccess = css`
-  color: ${T.green};
-  padding-left: 16px;
-`
-
-const termCursor = css`
-  display: inline-block;
-  width: 8px;
-  height: 16px;
-  background: ${T.blue};
-  animation: sk-blink 1s step-end infinite;
-  vertical-align: text-bottom;
-  margin-left: 2px;
-`
-
-// ── Hero actions ─────────────────────────────────────────────────────────────
 
 const heroActions = css`
   display: flex;
-  gap: 12px;
+  gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
-  margin-top: 32px;
-  position: relative;
+  margin-bottom: 48px;
+  animation: sk-fadeUp 0.35s 0.18s ease both;
 `
 
-const btn = css`
+// ── Buttons — two variants, precise, fast hover ──────────────────────────────
+
+const btnBase = css`
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 28px;
-  border-radius: 8px;
-  font-size: 0.95rem;
+  gap: 6px;
+  padding: 12px 26px;
+  border-radius: ${T.radius};
+  font-size: 0.875rem;
   font-weight: 600;
-  transition: all 0.15s ease;
-  cursor: pointer;
+  transition: all 0.12s ease;
   line-height: 1;
+  cursor: pointer;
 `
 
 const btnSolid = css`
-  background: ${T.blue};
+  background: ${T.accent};
   color: #fff;
   border: none;
 
   &:hover {
-    background: #2563eb;
+    background: ${T.accentHover};
     color: #fff;
-    transform: translateY(-1px);
   }
 `
 
 const btnOutline = css`
   background: transparent;
-  color: #e2e8f0;
+  color: ${T.text};
   border: 1px solid ${T.border};
 
   &:hover {
@@ -418,35 +325,82 @@ const btnOutline = css`
   }
 `
 
-// ── Install command below hero ───────────────────────────────────────────────
+// ── Hero code block — real product output, not a simulated terminal ──────────
 
-const heroInstallRow = css`
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 48px;
-  padding: 12px 24px;
+const heroCode = css`
   background: ${T.surface};
   border: 1px solid ${T.border};
-  border-radius: 8px;
+  border-radius: ${T.radiusLg};
+  overflow: hidden;
+  max-width: 600px;
+  width: 100%;
+  text-align: left;
+  animation: sk-fadeUp 0.35s 0.26s ease both;
+`
+
+const heroCodeLabel = css`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  background: ${T.bgAlt};
+  border-bottom: 1px solid ${T.border};
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: ${T.textMuted};
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   font-family: ${T.fontMono};
-  font-size: 0.85rem;
-  position: relative;
+`
+
+const heroCodeBody = css`
+  padding: 18px 20px;
+  font-family: ${T.fontMono};
+  font-size: 0.8rem;
+  line-height: 1.9;
+  color: ${T.textDim};
+  overflow-x: auto;
+
+  @media (max-width: 640px) {
+    padding: 14px 16px;
+    font-size: 0.72rem;
+  }
+`
+
+// Syntax-token styles for code output — restrained, functional
+const codeDim = css`color: ${T.textMuted};`
+const codeKw = css`color: ${T.accent};`
+const codeOk = css`color: ${T.success};`
+const codeOut = css`color: ${T.textDim};`
+
+// ── Install row below hero ───────────────────────────────────────────────────
+
+const heroInstall = css`
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 40px;
+  padding: 10px 22px;
+  background: ${T.surface};
+  border: 1px solid ${T.border};
+  border-radius: ${T.radius};
+  font-family: ${T.fontMono};
+  font-size: 0.8rem;
 
   @media (max-width: 640px) {
     flex-direction: column;
-    padding: 12px 16px;
-    font-size: 0.78rem;
+    text-align: center;
+    font-size: 0.72rem;
   }
 `
 
 const heroInstallLabel = css`
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   color: ${T.textMuted};
-  background: ${T.surfaceAlt};
+  background: ${T.bgAlt};
   padding: 3px 8px;
   border-radius: 4px;
   border: 1px solid ${T.border};
@@ -454,53 +408,8 @@ const heroInstallLabel = css`
 `
 
 const heroInstallCmd = css`
-  color: ${T.blue};
+  color: ${T.accent};
   user-select: all;
-`
-
-const heroInstallArrow = css`
-  color: ${T.green};
-  margin-left: auto;
-  flex-shrink: 0;
-
-  @media (max-width: 640px) {
-    margin-left: 0;
-  }
-`
-
-// ── Stats bar ────────────────────────────────────────────────────────────────
-
-const statsBar = css`
-  display: flex;
-  justify-content: center;
-  gap: 56px;
-  padding: 48px 24px;
-  flex-wrap: wrap;
-  border-top: 1px solid ${T.border};
-  border-bottom: 1px solid ${T.border};
-  background: ${T.bgAlt};
-
-  @media (max-width: 640px) {
-    gap: 32px;
-    padding: 36px 24px;
-  }
-`
-
-const statItem = css`
-  text-align: center;
-`
-
-const statValue = css`
-  font-size: 1.75rem;
-  font-weight: 800;
-  color: #f1f5f9;
-  font-family: ${T.fontMono};
-`
-
-const statLabel = css`
-  font-size: 0.8rem;
-  color: ${T.textDim};
-  margin-top: 4px;
 `
 
 // ── Features grid ────────────────────────────────────────────────────────────
@@ -508,7 +417,7 @@ const statLabel = css`
 const featGrid = css`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 20px;
+  gap: 16px;
 
   @media (max-width: 640px) {
     grid-template-columns: 1fr;
@@ -518,63 +427,66 @@ const featGrid = css`
 const featCard = css`
   background: ${T.surface};
   border: 1px solid ${T.border};
-  border-radius: 12px;
-  padding: 28px;
-  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  border-radius: ${T.radiusLg};
+  padding: 26px 28px;
+  transition: border-color 0.15s ease, background 0.15s ease;
   position: relative;
   overflow: hidden;
 
   &:hover {
-    border-color: ${T.blue};
-    transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    border-color: ${T.borderHover};
+    background: ${T.surfaceHover};
   }
 `
 
-const featCardGlow = css`
+const featCardLine = css`
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, ${T.blue}, transparent);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, ${T.accent}, transparent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
 `
 
 const featTop = css`
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  margin-bottom: 12px;
+  gap: 12px;
+  margin-bottom: 10px;
 `
 
-const featIconHolder = (bg: string): StyleRef => css`
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+const featIcon = css`
+  font-size: 1.1rem;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  border-radius: ${T.radius};
+  background: ${T.accentBg};
   flex-shrink: 0;
-  background: ${bg};
 `
 
 const featTitle = css`
-  font-size: 1rem;
-  font-weight: 600;
-  color: #f1f5f9;
-  padding-top: 8px;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  color: ${T.text};
+  padding-top: 6px;
+  letter-spacing: -0.01em;
 `
 
 const featDesc = css`
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   color: ${T.textDim};
-  line-height: 1.7;
+  line-height: 1.65;
 `
 
-// ── Architecture flow ────────────────────────────────────────────────────────
+// ── Architecture pipeline ────────────────────────────────────────────────────
 
-const archSection = css`
+const archBg = css`
   background: ${T.bgAlt};
 `
 
@@ -582,31 +494,27 @@ const archPipeline = css`
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0;
   max-width: 960px;
   margin: 0 auto;
-  padding: 12px 0;
 
   @media (max-width: 768px) {
     flex-direction: column;
-    gap: 4px;
+    gap: 0;
   }
 `
 
 const archNode = css`
   flex: 1;
-  min-width: 160px;
+  min-width: 150px;
   text-align: center;
-  padding: 28px 20px;
+  padding: 24px 18px;
   background: ${T.surface};
   border: 1px solid ${T.border};
-  border-radius: 10px;
-  position: relative;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  border-radius: ${T.radiusLg};
+  transition: border-color 0.15s ease;
 
   &:hover {
-    border-color: ${T.blue};
-    box-shadow: 0 0 24px ${T.blueBg};
+    border-color: ${T.borderHover};
   }
 
   @media (max-width: 768px) {
@@ -615,31 +523,24 @@ const archNode = css`
   }
 `
 
-const archNodeHighlight = css`
-  border-color: ${T.blue};
-  box-shadow: 0 0 20px ${T.blueBg};
-`
-
-const archNodeIcon = css`
-  font-size: 1.3rem;
-  margin-bottom: 8px;
-  line-height: 1;
+const archNodeActive = css`
+  border-color: ${T.accent};
 `
 
 const archNodeLabel = css`
-  font-size: 0.65rem;
-  font-weight: 600;
+  font-size: 0.6rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   color: ${T.textMuted};
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 `
 
 const archNodeTitle = css`
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: #f1f5f9;
-  margin-bottom: 2px;
+  font-size: 0.9rem;
+  font-weight: 650;
+  color: ${T.text};
+  margin-bottom: 4px;
 `
 
 const archNodeDesc = css`
@@ -649,23 +550,21 @@ const archNodeDesc = css`
 `
 
 const archArrow = css`
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  color: ${T.blue};
-  font-size: 1.1rem;
+  color: ${T.textMuted};
+  font-size: 1rem;
+  padding: 0 10px;
   flex-shrink: 0;
 
   @media (max-width: 768px) {
     transform: rotate(90deg);
-    padding: 4px 0;
+    padding: 6px 0;
   }
 `
 
 const archNote = css`
   text-align: center;
   margin-top: 28px;
-  font-size: 0.82rem;
+  font-size: 0.8125rem;
   color: ${T.textMuted};
   font-family: ${T.fontMono};
 `
@@ -673,39 +572,39 @@ const archNote = css`
 // ── Runtime comparison table ─────────────────────────────────────────────────
 
 const compWrap = css`
-  max-width: 960px;
+  max-width: 880px;
   margin: 0 auto;
   overflow-x: auto;
-  border-radius: 12px;
   border: 1px solid ${T.border};
+  border-radius: ${T.radiusLg};
 `
 
 const compTable = css`
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.88rem;
+  font-size: 0.8125rem;
 `
 
 const compTh = css`
-  padding: 16px 18px;
+  padding: 13px 16px;
   text-align: left;
   font-weight: 600;
-  color: #f1f5f9;
-  background: ${T.surfaceAlt};
+  color: ${T.text};
+  background: ${T.surface};
   border-bottom: 1px solid ${T.border};
   white-space: nowrap;
+  font-size: 0.75rem;
 `
 
-const compThRuntime = css`
+const compThRt = css`
   font-family: ${T.fontMono};
-  font-size: 0.82rem;
 `
 
 const compTd = css`
-  padding: 14px 18px;
-  border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(42, 42, 46, 0.5);
   color: ${T.textDim};
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
 `
 
 const compTdLabel = css`
@@ -714,38 +613,30 @@ const compTdLabel = css`
   white-space: nowrap;
 `
 
-const compCheck = css`
-  color: ${T.green};
-`
-
-const compCross = css`
-  color: ${T.textMuted};
-`
-
-const compPartial = css`
-  color: ${T.amber};
-`
+const compYes = css`color: ${T.success};`
+const compNo = css`color: ${T.textMuted};`
+const compPartial = css`color: ${T.warning};`
 
 // ── Install section ──────────────────────────────────────────────────────────
 
 const installGrid = css`
   display: flex;
-  gap: 20px;
+  gap: 16px;
   justify-content: center;
   flex-wrap: wrap;
-  max-width: 860px;
+  max-width: 800px;
   margin: 0 auto;
 `
 
 const codeBlock = css`
-  background: #080d1a;
+  background: ${T.surface};
   border: 1px solid ${T.border};
-  border-radius: 10px;
+  border-radius: ${T.radiusLg};
   overflow: hidden;
   flex: 1;
   min-width: 280px;
-  max-width: 420px;
-  transition: border-color 0.2s ease;
+  max-width: 400px;
+  transition: border-color 0.15s ease;
 
   &:hover {
     border-color: ${T.borderHover};
@@ -756,82 +647,66 @@ const codeHeader = css`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  background: #0f1629;
+  padding: 9px 14px;
+  background: ${T.bgAlt};
   border-bottom: 1px solid ${T.border};
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: ${T.textMuted};
 `
 
 const codeLabel = css`
-  font-weight: 600;
+  font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  font-family: ${T.fontMono};
 `
 
 const codeBody = css`
-  padding: 16px 20px;
+  padding: 16px 18px;
   font-family: ${T.fontMono};
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   line-height: 1.9;
   color: ${T.textDim};
   overflow-x: auto;
   user-select: all;
 
   @media (max-width: 640px) {
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     padding: 12px 14px;
   }
 `
 
-const codeComment = css`
-  color: ${T.textMuted};
-`
-
-const codePrompt = css`
-  color: ${T.green};
-`
-
-const codeCmd = css`
-  color: #e2e8f0;
-`
-
-const codeOutput = css`
-  color: ${T.textDim};
-`
-
 const installHint = css`
   text-align: center;
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   color: ${T.textDim};
-  margin-top: 28px;
+  margin-top: 24px;
 `
 
-// ── CTA section ──────────────────────────────────────────────────────────────
+// ── CTA ──────────────────────────────────────────────────────────────────────
 
 const ctaSection = css`
-  text-align: center;
-  background: linear-gradient(180deg, ${T.bg} 0%, ${T.bgAlt} 50%, ${T.bg} 100%);
+  background: ${T.bgAlt};
   border-top: 1px solid ${T.border};
   border-bottom: 1px solid ${T.border};
 `
 
 const ctaActions = css`
   display: flex;
-  gap: 16px;
+  gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
-  margin-top: 32px;
+  margin-top: 28px;
 `
 
 // ── Footer ───────────────────────────────────────────────────────────────────
 
 const footerMain = css`
   border-top: 1px solid ${T.border};
-  padding: 60px 24px 24px;
+  padding: 56px 24px 24px;
 `
 
-const footerInner = css`
+const footerGrid = css`
   max-width: 1120px;
   margin: 0 auto;
   display: grid;
@@ -849,243 +724,190 @@ const footerInner = css`
 `
 
 const footerBrand = css`
-  font-weight: 700;
-  font-size: 1.05rem;
-  color: #f1f5f9;
+  font-weight: 650;
+  font-size: 0.9375rem;
+  color: ${T.text};
   margin-bottom: 8px;
+  letter-spacing: -0.01em;
 `
 
 const footerDesc = css`
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   color: ${T.textDim};
   line-height: 1.6;
   max-width: 280px;
 `
 
 const footerColTitle = css`
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-size: 0.6875rem;
+  font-weight: 650;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: ${T.textMuted};
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 `
 
-const footerColList = css`
+const footerLinks = css`
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 `
 
 const footerLink = css`
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
   color: ${T.textDim};
-  transition: color 0.15s ease;
+  transition: color 0.12s ease;
 
   &:hover {
-    color: #94a3b8;
+    color: ${T.text};
   }
 `
 
 const footerBottom = css`
   text-align: center;
-  margin-top: 48px;
-  padding-top: 20px;
+  margin-top: 44px;
+  padding-top: 18px;
   border-top: 1px solid ${T.border};
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: ${T.textMuted};
 `
 
-// ── Components ───────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// Components
+// ═══════════════════════════════════════════════════════════════════════════════
 
-/** Sticky navigation bar with brand, links, version badge, and GitHub CTA. */
+/** Sticky navigation — brand, version badge, anchor links, GitHub CTA. */
 export function Nav(): JSXNode {
   return h("nav", { class: nav },
     h("div", { class: [container, navInner] },
-      h("a", { class: navBrand, href: "#" },
-        h("span", { class: navLogo }, "S"),
-        "sikong",
+      h("div", { class: navLeft },
+        h("a", { class: navBrand, href: "#" },
+          h("span", { class: navLogo }, "司"),
+          "sikong",
+        ),
         h("span", { class: navVersion }, "v0.1.7"),
       ),
-      h("div", { class: navLinks },
+      h("div", { class: navRight },
         h("a", { class: navLink, href: "#features" }, "Features"),
         h("a", { class: navLink, href: "#architecture" }, "Architecture"),
         h("a", { class: navLink, href: "#comparison" }, "Comparison"),
         h("a", { class: navLink, href: "#install" }, "Install"),
-        h("a",
-          {
-            class: navCta,
-            href: "https://github.com/lidessen/sikong",
-            target: "_blank",
-            rel: "noopener noreferrer",
-          },
-          "GitHub",
-        ),
-      ),
-    ),
-  )
-}
-
-/** Terminal emulator window — renders inside the hero section. */
-function TerminalWindow(): JSXNode {
-  return h("div", { class: termWindow },
-    h("div", { class: termHeader },
-      h("span", { class: termDot(T.red) }),
-      h("span", { class: termDot(T.amber) }),
-      h("span", { class: termDot(T.green) }),
-      h("span", { class: termTitle }, "sikong run — my-project"),
-    ),
-    h("div", { class: termBody },
-      h("span", { class: termPrompt }, "$ "),
-      h("span", { class: termCmd }, "sikong init my-project"),
-      h("br", {}),
-      h("span", { class: termSuccess }, "  ✔ Created project workspace"),
-      h("br", {}),
-      h("span", { class: termOutput }, "  ✔ Configured default worker (dev)"),
-      h("br", {}),
-      h("span", { class: termOutput }, "  ✔ Initialized JSONL event store"),
-      h("br", {}),
-      h("span", { class: termPrompt }, "$ "),
-      h("span", { class: termCmd }, "sikong run"),
-      h("br", {}),
-      h("span", { class: termSuccess }, "  ├─ [dev]     Generated README … done"),
-      h("br", {}),
-      h("span", { class: termSuccess }, "  ├─ [test]    Assertions … passed"),
-      h("br", {}),
-      h("span", { class: termOutput }, "  ├─ [review]  Code review … "),
-      h("span", { class: termCursor }),
-      h("br", {}),
-      h("span", { class: termOutput }, "", "            Agent: 3 tasks, effort: high → medium → low"),
-    ),
-  )
-}
-
-/** Hero section — headline, terminal window, actions, quick install command. */
-export function Hero(): JSXNode {
-  return h("section", { class: hero },
-    h("div", { class: heroBg }),
-    h("div", { class: heroGlow }),
-    h("div", { class: heroTopGlow }),
-    h("span", { class: heroVersion }, "v0.1.7 — MIT — 100% TypeScript"),
-    h("h1", { class: heroH1 },
-      h("span", {}, "Build with "),
-      h("span", { class: heroGradient }, "agent workflows"),
-      h("br", {}),
-      "across any runtime",
-    ),
-    h("p", { class: heroTagline },
-      "A unified coordination layer for multi-agent, multi-runtime development. ",
-      "One config, four backends, full observability.",
-    ),
-    h("div", { class: heroActions },
-      h("a",
-        {
-          class: [btn, btnSolid, "sk-btn-primary"],
+        h("a", {
+          class: navCta,
           href: "https://github.com/lidessen/sikong",
           target: "_blank",
           rel: "noopener noreferrer",
-        },
-        "Get Started",
+        }, "GitHub"),
       ),
-      h("a", { class: [btn, btnOutline, "sk-btn-secondary"], href: "#install" }, "Quick Install"),
     ),
-    TerminalWindow(),
-    h("div", { class: heroInstallRow },
-      h("span", { class: heroInstallLabel }, "install"),
+  )
+}
+
+/** Hero — confident typography, real product code block, no terminal chrome. */
+export function Hero(): JSXNode {
+  return h("section", { class: hero },
+    h("div", { class: heroEyebrow }, "Open source · MIT · TypeScript"),
+    h("h1", { class: heroH1 },
+      "Build with ",
+      h("span", { class: heroAccent }, "agent workflows"),
+      " across any runtime",
+    ),
+    h("p", { class: heroP },
+      "A coordination layer for multi-agent, multi-runtime development. ",
+      "One config, four backends, full observability.",
+    ),
+    h("div", { class: heroActions },
+      h("a", {
+        class: [btnBase, btnSolid],
+        href: "https://github.com/lidessen/sikong",
+        target: "_blank",
+        rel: "noopener noreferrer",
+      }, "Get Started"),
+      h("a", { class: [btnBase, btnOutline], href: "#install" }, "Install"),
+    ),
+
+    // Real product output — code block, not terminal window
+    h("div", { class: heroCode },
+      h("div", { class: heroCodeLabel },
+        h("span", {}, "sikong run"),
+        h("span", { style: { textTransform: "none", fontWeight: "400" } }, "3 tasks · 12.4s"),
+      ),
+      h("div", { class: heroCodeBody },
+        h("span", { class: codeDim }, "$ "),
+        h("span", { class: codeKw }, "sikong"),
+        " run my-project",
+        h("br", {}),
+        h("span", { class: codeOk }, "  ✓"),
+        h("span", { class: codeOut }, " [dev]    Implement feature … done"),
+        h("br", {}),
+        h("span", { class: codeOk }, "  ✓"),
+        h("span", { class: codeOut }, " [test]   Assertions passed (14/14)"),
+        h("br", {}),
+        h("span", { class: codeOk }, "  ✓"),
+        h("span", { class: codeOut }, " [review] Code review … approved"),
+        h("br", {}),
+        h("span", { class: codeDim }, "  ─────────────────────────────"),
+        h("br", {}),
+        h("span", { class: codeOut }, "  3 stages · 14.2k tokens · $0.04"),
+      ),
+    ),
+
+    // Quick install — one-liner
+    h("div", { class: heroInstall },
+      h("span", { class: heroInstallLabel }, "Install"),
       h("span", { class: heroInstallCmd }, "curl -fsSL https://sikong.dev/install.sh | sh"),
-      h("span", { class: heroInstallArrow }, "→ ready in seconds"),
     ),
   )
 }
 
-/** Stats bar — social proof metrics across the project. */
-export function StatsBar(): JSXNode {
-  return h("div", { class: statsBar },
-    h("div", { class: statItem },
-      h("div", { class: statValue }, "30k+"),
-      h("div", { class: statLabel }, "Runs Executed"),
-    ),
-    h("div", { class: statItem },
-      h("div", { class: statValue }, "4"),
-      h("div", { class: statLabel }, "Runtime Backends"),
-    ),
-    h("div", { class: statItem },
-      h("div", { class: statValue }, "MIT"),
-      h("div", { class: statLabel }, "Open Source License"),
-    ),
-    h("div", { class: statItem },
-      h("div", { class: statValue }, "100%"),
-      h("div", { class: statLabel }, "TypeScript"),
-    ),
-  )
-}
-
-/** Features grid — 8 expanded cards covering Sikong capabilities. */
+/** Features — 6-card grid. Clean geometric cards with restrained hover. */
 export function Features(): JSXNode {
-  const FEATURES = [
+  const items = [
     {
       icon: "⚙️",
       title: "Task Orchestration",
       desc: "Declarative multi-step agent workflows with automatic retries, timeouts, and handoff-based state management across runs.",
-      iconBg: "#1a2340",
     },
     {
       icon: "📡",
       title: "Cost-aware Routing",
-      desc: "Route simple tasks to fast, cheap models and escalate complex reasoning to capable ones — configured per stage, not hard-coded.",
-      iconBg: "#1a2e22",
+      desc: "Route simple tasks to fast, cheap models and escalate complex reasoning to capable ones — configured per stage.",
     },
     {
       icon: "🔄",
       title: "Multi-runtime",
-      desc: "Claude Code, Codex, Cursor Agent SDK, Vercel AI SDK — one orchestration layer abstracts across all major agent runtimes.",
-      iconBg: "#1a2234",
+      desc: "Claude Code, Codex, Cursor Agent SDK, Vercel AI SDK — one orchestration layer across all major agent runtimes.",
     },
     {
       icon: "💾",
       title: "Durable State",
-      desc: "Append-only JSONL event log for every workspace session. Inspect, replay, and recover any past workflow exactly as it ran.",
-      iconBg: "#2a1a22",
+      desc: "Append-only JSONL event log for every workspace. Inspect, replay, and recover any past workflow exactly as it ran.",
     },
     {
       icon: "📊",
       title: "Live Monitor",
-      desc: "Real-time terminal dashboard showing project overview, task progress, token usage, and cost breakdowns with auto-refresh.",
-      iconBg: "#1a2a2a",
-    },
-    {
-      icon: "⌨️",
-      title: "CLI-native",
-      desc: "Git workspace isolation, JSON output for scripting, minimal ceremony. Designed from the ground up for the terminal.",
-      iconBg: "#2a1a2a",
+      desc: "Real-time dashboard showing project overview, task progress, token usage, and cost breakdowns.",
     },
     {
       icon: "🔌",
       title: "Provider-agnostic",
       desc: "Swap LLM providers per runtime — DeepSeek, Anthropic, OpenAI, or any compatible gateway. No vendor lock-in.",
-      iconBg: "#1a1a3a",
-    },
-    {
-      icon: "🔬",
-      title: "Deterministic Replay",
-      desc: "Every session writes a JSONL replay log. Re-run, debug, or audit any past workflow with exact step-by-step reconstruction.",
-      iconBg: "#2a2a1a",
     },
   ]
 
-  return h("section", { id: "features", class: [sectionPad, css({ background: T.bgAlt })] },
+  return h("section", { id: "features", class: [section, archBg] },
     h("div", { class: container },
       h("h2", { class: sectionTitle }, "Everything you need for agent-driven development"),
       h("p", { class: sectionSub },
-        "From task orchestration to cost management — Sikong provides the complete coordination layer.",
+        "From orchestration to cost management — the complete coordination layer.",
       ),
       h("div", { class: featGrid },
-        ...FEATURES.map((f) =>
-          h("div", { class: [featCard, "sk-card"] },
-            h("div", { class: featCardGlow }),
+        ...items.map((f) =>
+          h("div", { class: featCard },
+            h("div", { class: featCardLine }),
             h("div", { class: featTop },
-              h("div", { class: featIconHolder(f.iconBg) }, f.icon),
+              h("div", { class: featIcon }, f.icon),
               h("div", { class: featTitle }, f.title),
             ),
             h("p", { class: featDesc }, f.desc),
@@ -1096,16 +918,16 @@ export function Features(): JSXNode {
   )
 }
 
-/** Architecture — pipeline flow diagram showing the system layers. */
+/** Architecture — pipeline flow showing the four system layers. */
 export function Architecture(): JSXNode {
   const nodes = [
-    { icon: "📋", title: "CLI & Dashboard", desc: "User interface, project management, live monitor", layer: "Interface" },
-    { icon: "⚡", title: "Workflow Engine", desc: "Task orchestration, state machine, handoff management", layer: "Orchestration", highlight: true },
-    { icon: "🔗", title: "Runtime Adapters", desc: "Claude · Codex · Cursor · Vercel AI SDK", layer: "Runtime" },
-    { icon: "🤖", title: "Model Providers", desc: "DeepSeek · Anthropic · OpenAI · Custom gateways", layer: "Models" },
+    { label: "Interface", title: "CLI & Dashboard", desc: "User interface, project management, live monitor" },
+    { label: "Orchestration", title: "Workflow Engine", desc: "Task orchestration, state machine, handoff management", active: true },
+    { label: "Runtime", title: "Runtime Adapters", desc: "Claude · Codex · Cursor · Vercel AI SDK" },
+    { label: "Models", title: "Model Providers", desc: "DeepSeek · Anthropic · OpenAI · Custom gateways" },
   ]
 
-  return h("section", { id: "architecture", class: [sectionPad, archSection] },
+  return h("section", { id: "architecture", class: section },
     h("div", { class: container },
       h("h2", { class: sectionTitle }, "Architecture"),
       h("p", { class: sectionSub },
@@ -1114,9 +936,8 @@ export function Architecture(): JSXNode {
       h("div", { class: archPipeline },
         ...nodes.flatMap((n, i) => {
           const node = h("div",
-            { class: [archNode, n.highlight ? archNodeHighlight : null] },
-            h("div", { class: archNodeIcon }, n.icon),
-            h("div", { class: archNodeLabel }, n.layer),
+            { class: [archNode, n.active ? archNodeActive : null] },
+            h("div", { class: archNodeLabel }, n.label),
             h("div", { class: archNodeTitle }, n.title),
             h("div", { class: archNodeDesc }, n.desc),
           )
@@ -1130,7 +951,7 @@ export function Architecture(): JSXNode {
   )
 }
 
-/** Runtime comparison table — feature comparison across all four backends. */
+/** Runtime comparison — precise table with check/cross/partial markers. */
 export function RuntimeComparison(): JSXNode {
   interface Row {
     feature: string
@@ -1150,12 +971,12 @@ export function RuntimeComparison(): JSXNode {
   ]
 
   const cell = (v: string | boolean): JSXNode => {
-    if (v === true) return h("span", { class: compCheck }, "✓")
-    if (v === false) return h("span", { class: compCross }, "—")
+    if (v === true) return h("span", { class: compYes }, "✓")
+    if (v === false) return h("span", { class: compNo }, "—")
     return h("span", { class: compPartial }, v)
   }
 
-  return h("section", { id: "comparison", class: [sectionPad] },
+  return h("section", { id: "comparison", class: [section, archBg] },
     h("div", { class: container },
       h("h2", { class: sectionTitle }, "Runtime comparison"),
       h("p", { class: sectionSub },
@@ -1166,10 +987,10 @@ export function RuntimeComparison(): JSXNode {
           h("thead", {},
             h("tr", {},
               h("th", { class: compTh }, ""),
-              h("th", { class: [compTh, compThRuntime] }, "Claude Code"),
-              h("th", { class: [compTh, compThRuntime] }, "Codex"),
-              h("th", { class: [compTh, compThRuntime] }, "Cursor"),
-              h("th", { class: [compTh, compThRuntime] }, "AI SDK"),
+              h("th", { class: [compTh, compThRt] }, "Claude Code"),
+              h("th", { class: [compTh, compThRt] }, "Codex"),
+              h("th", { class: [compTh, compThRt] }, "Cursor"),
+              h("th", { class: [compTh, compThRt] }, "AI SDK"),
             ),
           ),
           h("tbody", {},
@@ -1189,9 +1010,9 @@ export function RuntimeComparison(): JSXNode {
   )
 }
 
-/** Install section — terminal-style code blocks for curl and npm install methods. */
+/** Install — two side-by-side code blocks for curl and npm. */
 export function Install(): JSXNode {
-  return h("section", { id: "install", class: [sectionPad, archSection] },
+  return h("section", { id: "install", class: section },
     h("div", { class: container },
       h("h2", { class: sectionTitle }, "Get started in seconds"),
       h("p", { class: sectionSub },
@@ -1204,19 +1025,16 @@ export function Install(): JSXNode {
             h("span", {}, "macOS / Linux"),
           ),
           h("div", { class: codeBody },
-            h("span", { class: codeComment }, "# Install the latest release"),
+            h("span", { class: codeDim }, "# Install the latest release"),
             h("br", {}),
-            h("span", { class: codePrompt }, "$ "),
-            h("span", { class: codeCmd }, "curl -fsSL https://sikong.dev/install.sh | sh"),
+            "curl -fsSL https://sikong.dev/install.sh | sh",
             h("br", {}),
             h("br", {}),
-            h("span", { class: codeComment }, "# Start your first project"),
+            h("span", { class: codeDim }, "# Start your first project"),
             h("br", {}),
-            h("span", { class: codePrompt }, "$ "),
-            h("span", { class: codeCmd }, "sikong init my-project && cd my-project"),
+            "sikong init my-project && cd my-project",
             h("br", {}),
-            h("span", { class: codePrompt }, "$ "),
-            h("span", { class: codeCmd }, "sikong run"),
+            "sikong run",
           ),
         ),
         h("div", { class: codeBlock },
@@ -1225,64 +1043,56 @@ export function Install(): JSXNode {
             h("span", {}, "Any platform"),
           ),
           h("div", { class: codeBody },
-            h("span", { class: codeComment }, "# Install globally via npm"),
+            h("span", { class: codeDim }, "# Install globally via npm"),
             h("br", {}),
-            h("span", { class: codePrompt }, "$ "),
-            h("span", { class: codeCmd }, "npm install -g sikong"),
+            "npm install -g sikong",
             h("br", {}),
             h("br", {}),
-            h("span", { class: codeComment }, "# Or run from source"),
+            h("span", { class: codeDim }, "# Or run from source"),
             h("br", {}),
-            h("span", { class: codePrompt }, "$ "),
-            h("span", { class: codeCmd }, "git clone https://github.com/lidessen/sikong"),
+            "git clone https://github.com/lidessen/sikong",
             h("br", {}),
-            h("span", { class: codePrompt }, "$ "),
-            h("span", { class: codeCmd }, "cd sikong && bun install && bun run build"),
-            h("br", {}),
-            h("span", { class: codePrompt }, "$ "),
-            h("span", { class: codeCmd }, "sikong --version"),
+            "cd sikong && bun install && bun run build",
           ),
         ),
       ),
       h("p", { class: installHint },
         "Requires Bun ≥1.2 · macOS / Linux / WSL · ",
-        h("a", { href: "https://github.com/lidessen/sikong/blob/main/README.md", target: "_blank", rel: "noopener noreferrer" }, "View README"),
+        h("a", {
+          href: "https://github.com/lidessen/sikong/blob/main/README.md",
+          target: "_blank",
+          rel: "noopener noreferrer",
+        }, "View README"),
       ),
     ),
   )
 }
 
-/** CTA section — open source community call-to-action. */
+/** CTA — restrained community call-to-action. */
 export function CTA(): JSXNode {
-  return h("section", { class: [sectionPad, ctaSection] },
+  return h("section", { class: [section, ctaSection] },
     h("div", { class: container },
       h("h2", { class: sectionTitle }, "Built in the open, for the community"),
       h("p", { class: sectionSub },
         "Sikong is MIT-licensed and developed in public. Contributions, issues, and ideas are welcome.",
       ),
       h("div", { class: ctaActions },
-        h("a",
-          {
-            class: [btn, btnSolid, "sk-btn-primary"],
-            href: "https://github.com/lidessen/sikong",
-            target: "_blank",
-            rel: "noopener noreferrer",
-          },
-          "Star on GitHub",
-        ),
-        h("a",
-          { class: [btn, btnOutline, "sk-btn-secondary"], href: "https://sikong.dev/docs" },
-          "Read the Docs",
-        ),
-        h("a",
-          {
-            class: [btn, btnOutline, "sk-btn-secondary"],
-            href: "https://github.com/lidessen/sikong/issues",
-            target: "_blank",
-            rel: "noopener noreferrer",
-          },
-          "Report Issue",
-        ),
+        h("a", {
+          class: [btnBase, btnSolid],
+          href: "https://github.com/lidessen/sikong",
+          target: "_blank",
+          rel: "noopener noreferrer",
+        }, "Star on GitHub"),
+        h("a", {
+          class: [btnBase, btnOutline],
+          href: "https://sikong.dev/docs",
+        }, "Read the Docs"),
+        h("a", {
+          class: [btnBase, btnOutline],
+          href: "https://github.com/lidessen/sikong/issues",
+          target: "_blank",
+          rel: "noopener noreferrer",
+        }, "Report Issue"),
       ),
     ),
   )
@@ -1291,43 +1101,42 @@ export function CTA(): JSXNode {
 /** Footer — 4-column sitemap with copyright. */
 export function Footer(): JSXNode {
   return h("footer", { class: footerMain },
-    h("div", { class: footerInner },
+    h("div", { class: footerGrid },
       h("div", {},
         h("div", { class: footerBrand }, "Sikong (司空)"),
         h("p", { class: footerDesc },
-          "Durable wake-loop workspaces for agent-driven development. ",
+          "Durable agent workspaces for multi-runtime development. ",
           "MIT licensed. Built with Bun, semajsx, and agent-loop.",
         ),
       ),
       h("div", {},
         h("div", { class: footerColTitle }, "Product"),
-        h("ul", { class: footerColList },
+        h("ul", { class: footerLinks },
           h("li", {}, h("a", { class: footerLink, href: "#features" }, "Features")),
           h("li", {}, h("a", { class: footerLink, href: "#architecture" }, "Architecture")),
-          h("li", {}, h("a", { class: "sk-foot-link", href: "#install" }, "Install")),
-          h("li", {}, h("a", { class: "sk-foot-link", href: "/changelog" }, "Changelog")),
+          h("li", {}, h("a", { class: footerLink, href: "#install" }, "Install")),
+          h("li", {}, h("a", { class: footerLink, href: "/changelog" }, "Changelog")),
         ),
       ),
       h("div", {},
         h("div", { class: footerColTitle }, "Community"),
-        h("ul", { class: footerColList },
-          h("li", {}, h("a", { class: "sk-foot-link", href: "https://github.com/lidessen/sikong", target: "_blank", rel: "noopener noreferrer" }, "GitHub")),
-          h("li", {}, h("a", { class: "sk-foot-link", href: "https://github.com/lidessen/sikong/issues", target: "_blank", rel: "noopener noreferrer" }, "Issues")),
-          h("li", {}, h("a", { class: "sk-foot-link", href: "https://sikong.dev/community" }, "Community")),
+        h("ul", { class: footerLinks },
+          h("li", {}, h("a", { class: footerLink, href: "https://github.com/lidessen/sikong", target: "_blank", rel: "noopener noreferrer" }, "GitHub")),
+          h("li", {}, h("a", { class: footerLink, href: "https://github.com/lidessen/sikong/issues", target: "_blank", rel: "noopener noreferrer" }, "Issues")),
+          h("li", {}, h("a", { class: footerLink, href: "https://sikong.dev/community" }, "Community")),
         ),
       ),
       h("div", {},
         h("div", { class: footerColTitle }, "Resources"),
-        h("ul", { class: footerColList },
-          h("li", {}, h("a", { class: "sk-foot-link", href: "https://sikong.dev/docs" }, "Documentation")),
-          h("li", {}, h("a", { class: "sk-foot-link", href: "https://github.com/lidessen/sikong/blob/main/README.md", target: "_blank", rel: "noopener noreferrer" }, "README")),
-          h("li", {}, h("a", { class: "sk-foot-link", href: "https://sikong.dev/install.sh" }, "install.sh")),
+        h("ul", { class: footerLinks },
+          h("li", {}, h("a", { class: footerLink, href: "https://sikong.dev/docs" }, "Documentation")),
+          h("li", {}, h("a", { class: footerLink, href: "https://github.com/lidessen/sikong/blob/main/README.md", target: "_blank", rel: "noopener noreferrer" }, "README")),
+          h("li", {}, h("a", { class: footerLink, href: "https://sikong.dev/install.sh" }, "install.sh")),
         ),
       ),
     ),
     h("div", { class: footerBottom },
-      "Copyright ", String(new Date().getFullYear()), " — Sikong. MIT License. ",
-      "Built with Bun, semajsx, and agent-loop.",
+      `Copyright ${new Date().getFullYear()} — Sikong. MIT License. Built with Bun, semajsx, and agent-loop.`,
     ),
   )
 }
@@ -1338,7 +1147,6 @@ export function Page(): JSXNode {
     h("style", {}, KEYFRAMES),
     Nav(),
     Hero(),
-    StatsBar(),
     Features(),
     Architecture(),
     RuntimeComparison(),
