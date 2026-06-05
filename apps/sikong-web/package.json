@@ -7,7 +7,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "true",
     "build:site": "bun src/site/build.ts",
-    "dashboard": "bun src/dashboard/server.ts"
+    "build:dashboard": "bun scripts/build-dashboard.ts",
+    "dashboard": "bun run build:dashboard && bun src/dashboard/server.ts"
   },
   "dependencies": {
     "semajsx": "file:./vendor/semajsx"

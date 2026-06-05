@@ -11,6 +11,7 @@
     "./style": "./style.ts",
     "./html": "./html.ts",
     "./jsx-runtime": "./jsx-runtime.ts",
-    "./jsx-dev-runtime": "./jsx-dev-runtime.ts"
+    "./jsx-dev-runtime": "./jsx-dev-runtime.ts",
+    "./dom": "./dom.ts"
   }
 }

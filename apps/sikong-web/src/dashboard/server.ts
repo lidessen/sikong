@@ -1,9 +1,10 @@
 /**
  * src/dashboard/server.ts — Local monitor dashboard HTTP server
  *
- * Bun.serve with <meta http-equiv="refresh" content="10"> auto-refresh.
- * Shells out to `sikong overview --json` and `sikong usage --json` for data.
- * Graceful fallback when CLI is unavailable.
+ * SSR first paint (semajsx renderToStringWithCSS) for no-JS fallback,
+ * plus an /events SSE endpoint for live incremental updates and a
+ * /client.js route serving the browser hydration bundle. The client
+ * hydrates the SSR DOM into a live reactive semajsx app.
  *
  * Run:  bun src/dashboard/server.ts
  *
@@ -17,12 +18,16 @@ import {
   GLOBAL_CSS,
 } from "./components"
 import type { OverviewData, UsageData } from "./components"
+import { join } from "path"
 
 const PORT = Number(process.env.SIKONG_WEB_PORT ?? 4317)
 // The sikong CLI to shell out to. Defaults to `sikong` on PATH; override with
 // SIKONG_BIN to point at a built binary (e.g. packages/sikong/dist/sikong) when
 // sikong isn't installed globally.
 const SIKONG_BIN = process.env.SIKONG_BIN ?? "sikong"
+
+// Path to the built client bundle (produced by `bun run build:dashboard`)
+const CLIENT_BUNDLE_PATH = join(import.meta.dir, "..", "..", "dist", "client.js")
 
 // ── Shell helpers ───────────────────────────────────────────────────────────
 
@@ -52,8 +57,6 @@ interface FetchResult {
 }
 
 async function fetchData(): Promise<FetchResult> {
-  // Probe by actually fetching overview — there is no `--version` flag, and a
-  // successful overview is the real signal that the CLI is usable.
   const [overview, usage] = await Promise.all([
     runJson<OverviewData>(SIKONG_BIN, ["overview", "--json"]),
     runJson<UsageData>(SIKONG_BIN, ["usage", "--json"]),
@@ -62,7 +65,7 @@ async function fetchData(): Promise<FetchResult> {
   return { overview, usage, available: overview !== undefined }
 }
 
-// ── HTML page builder ───────────────────────────────────────────────────────
+// ── HTML page builders ──────────────────────────────────────────────────────
 
 function renderDashboardPage(
   data: { overview: OverviewData; usage: UsageData },
@@ -76,10 +79,10 @@ function renderDashboardPage(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="refresh" content="10" />
   <title>Sikong Dashboard</title>
   <style>${GLOBAL_CSS}</style>
   ${styleTags}
+  <script src="/client.js" defer></script>
 </head>
 <body style="display:flex;min-height:100vh;">${html}</body>
 </html>
@@ -95,7 +98,6 @@ function renderErrorPage(): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="refresh" content="30" />
   <title>Sikong Dashboard — CLI Not Available</title>
   <style>${GLOBAL_CSS}</style>
   ${styleTags}
@@ -103,6 +105,80 @@ function renderErrorPage(): string {
 <body>${html}</body>
 </html>
 `
+}
+
+// ── SSE helpers ─────────────────────────────────────────────────────────────
+
+const SSE_POLL_MS = 10_000
+
+/**
+ * Create an SSE response that pushes overview+usage data every SSE_POLL_MS.
+ * The initial frame is sent immediately on connect.
+ */
+function createSSEResponse(signal: AbortSignal): Response {
+  let interval: ReturnType<typeof setInterval> | null = null
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const push = async () => {
+        try {
+          const data = await fetchData()
+          const payload = JSON.stringify({
+            overview: data.overview ?? null,
+            usage: data.usage ?? null,
+          })
+          controller.enqueue(`data: ${payload}\n\n`)
+        } catch {
+          // Silently skip a failed fetch — the client keeps its last-known state
+        }
+      }
+
+      // Push initial data immediately
+      await push()
+
+      // Then poll on an interval
+      interval = setInterval(push, SSE_POLL_MS)
+
+      // Clean up on abort (client disconnect)
+      signal.addEventListener("abort", () => {
+        if (interval !== null) clearInterval(interval)
+        controller.close()
+      })
+    },
+
+    cancel() {
+      if (interval !== null) clearInterval(interval)
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  })
+}
+
+// ── Static file serving ─────────────────────────────────────────────────────
+
+/** Serve the client bundle from dist/. Returns 404 if the file doesn't exist. */
+function serveClientBundle(): Response {
+  const file = Bun.file(CLIENT_BUNDLE_PATH)
+  // Bun.file is lazy — checking .size throws if the file doesn't exist
+  try {
+    // Use a synchronous check via stat-like behavior
+    return new Response(file, {
+      headers: {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
+    })
+  } catch {
+    return new Response("client.js not found — run `bun run build:dashboard`", {
+      status: 404,
+    })
+  }
 }
 
 // ── Server ──────────────────────────────────────────────────────────────────
@@ -114,6 +190,16 @@ const server = Bun.serve({
 
     if (url.pathname === "/health") {
       return new Response("OK", { status: 200 })
+    }
+
+    // SSE endpoint — live incremental data stream
+    if (url.pathname === "/events") {
+      return createSSEResponse(req.signal)
+    }
+
+    // Client JS bundle — browser hydration entry point
+    if (url.pathname === "/client.js") {
+      return serveClientBundle()
     }
 
     if (url.pathname === "/") {
@@ -144,3 +230,4 @@ const server = Bun.serve({
 
 console.log(`Sikong Dashboard running at http://localhost:${PORT}`)
 console.log(`Health check: http://localhost:${PORT}/health`)
+console.log(`SSE events:   http://localhost:${PORT}/events`)
