@@ -5,6 +5,7 @@ import {
   emptyUsage,
   type AgentLoop,
   type EffortLevel,
+  type Hooks,
   type LoopEvent,
   type RunResult,
   type TokenUsage,
@@ -330,6 +331,17 @@ export type LoopFactory = (ctx: WakeContext) => AgentLoop;
  */
 export type WorkerToolsFactory = (ctx: WakeContext, loop: AgentLoop) => ToolSet | Promise<ToolSet>;
 
+/**
+ * Supplies per-run lifecycle hooks for the worker loop (the worker boundary).
+ * Used to apply sandbox-escalation policy (ADR 0026) via `onToolUse` so a
+ * claude-code worker can auto-approve allow-listed build/test commands. Opaque to
+ * the engine — it just forwards the hooks to `loop.run`.
+ */
+export type WorkerHooksFactory = (
+  ctx: WakeContext,
+  loop: AgentLoop,
+) => Hooks | undefined | Promise<Hooks | undefined>;
+
 /** What worker a wake hired — recorded with usage so the report can cost it. */
 export interface WorkerInfo {
   model?: string;
@@ -380,6 +392,12 @@ export interface WorkflowEngineOptions {
    * worker that carries its own interface (a coding-agent runtime) needs none.
    */
   workerTools?: WorkerToolsFactory;
+  /**
+   * Supplies per-run worker hooks (the worker boundary). Optional: used to apply
+   * sandbox-escalation policy (ADR 0026) so a claude-code worker can auto-approve
+   * allow-listed build/test commands and self-verify.
+   */
+  workerHooks?: WorkerHooksFactory;
   /** Optional: describe the worker a wake hires (model/provider/billing) for usage costing. */
   describeWorker?: DescribeWorker;
   /** Provide an isolated workspace for `isolate` tasks (ADR 0010); opaque to the engine. */
@@ -724,6 +742,7 @@ export class WorkflowEngine {
     const workerTools = (await this.o.workerTools?.(ctx, loop)) ?? {};
     const workerToolNames = Object.keys(workerTools);
     const tools = { ...workerTools, ...commandTools };
+    const workerHooks = (await this.o.workerHooks?.(ctx, loop)) ?? undefined;
     this.o.hooks?.onWakeStart?.({ taskId, wakeId, stageId: task.stageId });
     await this.chron({ type: "wake.start", taskId, wakeId, summary: `wake @ "${task.stageId}"` });
 
@@ -744,6 +763,7 @@ export class WorkflowEngine {
       tools,
       signal: controller.signal,
       effort,
+      ...(workerHooks ? { hooks: workerHooks } : {}),
       ...(aiSdkRuntimeOptions ? { runtimeOptions: aiSdkRuntimeOptions } : {}),
     });
     workerRun = run;

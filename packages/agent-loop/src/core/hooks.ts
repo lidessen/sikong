@@ -17,7 +17,14 @@ export type ToolHookDecision =
   /** Block this tool call. */
   | { action: "deny"; reason?: string }
   /** Run the tool, but with these args instead. */
-  | { action: "replaceArgs"; args: Record<string, unknown> };
+  | { action: "replaceArgs"; args: Record<string, unknown> }
+  /**
+   * Affirmatively approve this tool call, bypassing the runtime's permission
+   * prompt (auto-mode escalation — e.g. auto-approving build/test commands on a
+   * claude-code worker in `acceptEdits`). On runtimes without a permission gate
+   * this is equivalent to `continue`.
+   */
+  | { action: "approve" };
 
 export interface RunStartContext {
   runtime: RuntimeId;

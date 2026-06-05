@@ -16,6 +16,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { Hooks, ToolHookDecision } from "../core/hooks";
 
 const execFileAsync = promisify(execFile);
 
@@ -312,6 +313,41 @@ function classifyGitCommand(command: string): EscalationDecision {
 
   // Unknown git subcommand — deny by default
   return "deny";
+}
+
+/** True for shell/bash-style tool names across runtimes (claude-code: "Bash"). */
+function isBashToolName(name: string): boolean {
+  const n = name.toLowerCase();
+  return n === "bash" || n === "shell" || n.endsWith("_bash") || n.includes("bash");
+}
+
+/**
+ * Build an `onToolUse` hook that applies sandbox-escalation policy to shell/bash
+ * tool calls on runtimes with a permission gate (e.g. claude-code). This is the
+ * auto-mode counterpart to the project-bash host retry: allow-listed
+ * build/test/read commands are affirmatively **approved** (so a worker in
+ * `acceptEdits` can run `swift build`/`go test`/`bun run test` to self-verify),
+ * hard-blocked commands are **denied**, and everything else **defers** to the
+ * runtime's normal permission posture. Non-bash tool calls are never affected.
+ */
+export function createEscalationOnToolUse(
+  config: SandboxEscalationConfig,
+): NonNullable<Hooks["onToolUse"]> {
+  return (ev): ToolHookDecision => {
+    if (config.allowUnsandboxedCommands === false) return { action: "continue" };
+    if (!isBashToolName(ev.name)) return { action: "continue" };
+    const command =
+      typeof ev.args?.command === "string" ? ev.args.command : undefined;
+    if (!command) return { action: "continue" };
+
+    const decision = classifyCommand(command, config);
+    if (decision === "allow") return { action: "approve" };
+    if (decision === "block") {
+      return { action: "deny", reason: `Blocked by sandbox policy: ${firstToken(command)}` };
+    }
+    // "deny" classification → defer to the runtime's normal permission posture.
+    return { action: "continue" };
+  };
 }
 
 // ── Sandbox failure detection ─────────────────────────────────────────────────

@@ -790,6 +790,14 @@ function makePreToolUseHook(
         },
       };
     }
+    if (decision.action === "approve") {
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "allow",
+        },
+      };
+    }
     if (decision.action === "stop") {
       return {
         continue: false,

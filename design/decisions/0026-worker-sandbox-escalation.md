@@ -1,8 +1,31 @@
 # 0026 — Worker sandbox with privilege escalation (auto-mode), so the worker can self-verify
 
-Status: Proposed
+Status: Accepted
 Date: 2026-06-05
 Fixes: the non-convergence root cause behind 0024/0025; complements 0024 (gate), 0023 (conductor shell)
+
+## Resolution (implemented 2026-06-05)
+
+Open questions settled by the implementation:
+1. **just-bash vs claude-code native bash** — *both*, per runtime. **ai-sdk** workers
+   use the agent-loop project bash with a host-retry on sandbox-constrained failure
+   (`createProjectTools({ sandboxEscalation })`). **claude-code** workers use their
+   own native bash gated by an `onToolUse` escalation hook
+   (`createEscalationOnToolUse`) that **approves** allow-listed build/test/read
+   commands via a new `{ action: "approve" }` hook decision (claude bridge →
+   `permissionDecision: "allow"`), so a worker in `acceptEdits` can run `swift build`
+   without a prompt. Both paths share one `classifyCommand`.
+2. **Classifier depth** — static deny-wins precedence: hard-block → operator
+   deny/exclude → git-subcommand refinement → built-in allow → custom allow →
+   built-in deny → custom classifier → default-deny.
+3. **Toolchain inheritance** — the escalated/approved command runs in the host env
+   (full PATH), so swift/go/bun are available.
+4. **Failure detection** — `isSandboxConstrainedResult` (EACCES/bwrap/command-not-
+   found for a known toolchain) triggers the ai-sdk host retry.
+
+Enabled per worker by `permissionMode: "auto"` (auto-accept edits + auto-approve
+allow-listed build/test bash); `auto` maps to the SDK's `acceptEdits` base posture
+plus the escalation hook. Default workers stay `acceptEdits` (no escalation).
 
 ## Context — why the correction loop didn't converge
 

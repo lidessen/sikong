@@ -4,10 +4,12 @@ import {
   aiSdkLoop,
   anthropic,
   claudeCodeLoop,
+  createEscalationOnToolUse,
   createProjectTools,
   deepseek,
   openai,
   type AgentLoop,
+  type Hooks,
   type ModelProvider,
   type SandboxEscalationConfig,
   type ToolSet,
@@ -30,6 +32,32 @@ import {
 import { dataFileCandidates, isDataFile, parseDataFile, stringifyYaml, yamlFile, type SandboxConfig } from "./config-file";
 import type { Project } from "./project";
 
+/**
+ * Map a sikong worker permission mode to a claude-code SDK permission mode. The
+ * sikong vocabulary is a superset: `auto` (auto-accept edits + auto-approve
+ * allow-listed build/test bash via the ADR 0026 escalation hook) maps to the
+ * SDK's `acceptEdits` base posture; `dontAsk` maps to `bypassPermissions`. The
+ * bash auto-approval for `auto` is delivered by the onToolUse escalation hook,
+ * not the SDK mode.
+ */
+function toClaudePermissionMode(
+  mode: string | undefined,
+): "default" | "acceptEdits" | "bypassPermissions" | "plan" | undefined {
+  switch (mode) {
+    case "auto":
+      return "acceptEdits";
+    case "dontAsk":
+      return "bypassPermissions";
+    case "default":
+    case "acceptEdits":
+    case "bypassPermissions":
+    case "plan":
+      return mode;
+    default:
+      return undefined;
+  }
+}
+
 /** Build the AgentLoop a worker describes (provider key auto-discovered at this point). */
 export function resolveWorkerLoop(worker: Worker, opts: { project?: Project } = {}): AgentLoop {
   const provider: ModelProvider =
@@ -44,9 +72,10 @@ export function resolveWorkerLoop(worker: Worker, opts: { project?: Project } = 
     provider,
     ...(project?.root ? { cwd: project.root, allowedPaths: [project.root] } : {}),
     ...(project?.env ? { env: project.env } : {}),
-    ...(project?.permissionMode ?? worker.permissionMode
-      ? { permissionMode: project?.permissionMode ?? worker.permissionMode }
-      : {}),
+    ...(() => {
+      const pm = toClaudePermissionMode(project?.permissionMode ?? worker.permissionMode);
+      return pm ? { permissionMode: pm } : {};
+    })(),
   });
 }
 
@@ -163,6 +192,18 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   const loop: LoopFactory = opts.loop ?? defaultLoop;
   const intakeLoop = opts.intakeLoop ?? defaultIntakeLoop;
 
+  // Resolve sandbox-escalation policy (ADR 0026) from the hired worker's
+  // permission mode and the project's sandbox config — shared by the worker-tool
+  // boundary (ai-sdk: host retry) and the worker-hook boundary (claude-code:
+  // onToolUse auto-approve).
+  const resolveSandboxConfig = (ctx: WakeContext): SandboxEscalationConfig | undefined => {
+    try {
+      return workerSandboxConfig(selectWorker(roster, selectArgs(ctx)), ctx.project?.sandbox);
+    } catch {
+      return workerSandboxConfig(undefined, ctx.project?.sandbox);
+    }
+  };
+
   const engine = new WorkflowEngine({
     events,
     projections,
@@ -178,18 +219,9 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
       // ai-sdk bare worker gets generic file/shell project tools
       const proj = ctx.project;
       if (workerLoop.id === "ai-sdk" && proj?.root) {
-        // Resolve sandbox escalation (ADR 0026) from the hired worker's permission
-        // mode and the project's sandbox config.
-        let sandboxConfig: SandboxEscalationConfig | undefined;
-        try {
-          const w = selectWorker(roster, selectArgs(ctx));
-          const wsc = workerSandboxConfig(w, proj.sandbox);
-          if (wsc) sandboxConfig = wsc;
-        } catch {
-          // Worker unreachable — fall back to project-level config.
-          const wsc = workerSandboxConfig(undefined, proj.sandbox);
-          if (wsc) sandboxConfig = wsc;
-        }
+        // ai-sdk workers use the agent-loop project bash, which escalates
+        // sandbox-constrained build/test commands to the host (ADR 0026).
+        const sandboxConfig = resolveSandboxConfig(ctx);
         Object.assign(tools, await createProjectTools({
           cwd: proj.root,
           ...(proj.env ? { env: proj.env } : {}),
@@ -201,6 +233,17 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
         Object.assign(tools, buildDesignTools({ projectRoot: proj.root }).tools);
       }
       return tools;
+    },
+    // The worker-hook boundary: a claude-code worker carries its own native bash
+    // (gated by its permission mode). Apply sandbox-escalation policy (ADR 0026)
+    // via onToolUse so allow-listed build/test commands are auto-approved and the
+    // worker can self-verify (`swift build`, `go test`, `bun run test`) even in
+    // acceptEdits. ai-sdk gets the equivalent at the tool level (workerTools).
+    workerHooks: (ctx: WakeContext, workerLoop: AgentLoop): Hooks | undefined => {
+      if (workerLoop.id !== "claude-code") return undefined;
+      const sandboxConfig = resolveSandboxConfig(ctx);
+      if (!sandboxConfig) return undefined;
+      return { onToolUse: createEscalationOnToolUse(sandboxConfig) };
     },
     // Record which worker a wake hires (model/provider) so the usage report can
     // cost it. Same selection as defaultLoop. billingMode is "token" — discovered

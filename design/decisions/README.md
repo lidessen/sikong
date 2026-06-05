@@ -55,4 +55,4 @@ Files use a monotonic four-digit prefix:
 | [0023](0023-conductor-goal-loop.md) | Accepted | The Conductor — first-class goal/project-driven autonomous loop (read-only orchestrator + cron; spawns worker tasks, gates outward actions) |
 | [0024](0024-grounded-acceptance-gates.md) | Accepted | Grounded acceptance gates — completion verified by a grounded verifier worker (real checks) + strategic correction loop, not agent self-report |
 | [0025](0025-phase-gated-development-lead-acceptance.md) | Accepted | Phase-gated development with per-phase lead acceptance (验收) — lead woken at each phase boundary to advance/adjust + configure the next phase |
-| [0026](0026-worker-sandbox-escalation.md) | Proposed | Worker sandbox + auto-mode privilege escalation (Claude Code model: sandbox-default + escalate-on-failure) so the worker can run the real toolchain and self-verify |
+| [0026](0026-worker-sandbox-escalation.md) | Accepted | Worker sandbox + auto-mode privilege escalation (Claude Code model: sandbox-default + escalate-on-failure) so the worker can run the real toolchain and self-verify |

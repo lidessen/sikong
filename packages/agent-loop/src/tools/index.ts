@@ -2,6 +2,7 @@ export { createProjectTools } from "./project";
 export type { ProjectToolOptions } from "./project";
 export {
   classifyCommand,
+  createEscalationOnToolUse,
   isSandboxFailure,
   isToolchainFailure,
   runOnHost,

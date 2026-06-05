@@ -90,7 +90,7 @@ export {
   CapabilityNotSupportedError,
   PreflightError,
 } from "./core/errors";
-export { createProjectTools, classifyCommand, isSandboxFailure, isToolchainFailure, runOnHost } from "./tools";
+export { createProjectTools, classifyCommand, createEscalationOnToolUse, isSandboxFailure, isToolchainFailure, runOnHost } from "./tools";
 export type {
   CommandClassifier,
   EscalationDecision,
