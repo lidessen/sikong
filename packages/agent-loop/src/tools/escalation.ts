@@ -128,6 +128,23 @@ const BUILTIN_BLOCK_PREFIXES = [
   "exec",       // shell exec
 ];
 
+/**
+ * First token patterns for commands that are inherently neutral — they don't
+ * read or write files, they only change the environment for subsequent commands
+ * in a chain. These are allowed so a cd/export/set/unset segment doesn't poison
+ * an otherwise-safe chain like `cd foo && swift build`.
+ */
+const NEUTRAL_COMMANDS = new Set([
+  "cd",
+  "pushd",
+  "popd",
+  "export",
+  "set",
+  "unset",
+  "true",
+  ":",
+]);
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 /**
@@ -220,25 +237,95 @@ function firstSubcommand(command: string): string | undefined {
   return rest[0]?.toLowerCase();
 }
 
+// ── Command chain splitting ─────────────────────────────────────────────────────
+
+/**
+ * Split a shell command string into individual commands by breaking on chain
+ * operators (`&&`, `||`, `;`, `|`). Respects single and double quotes so
+ * operators inside strings are not treated as chain boundaries.
+ */
+function splitChains(command: string): string[] {
+  const trimmed = command.trim();
+  if (!trimmed) return [];
+
+  const segments: string[] = [];
+  let current = "";
+  let i = 0;
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+
+  while (i < trimmed.length) {
+    const c = trimmed[i]!;
+    const next = trimmed[i + 1];
+
+    // Handle quotes — toggle state, don't treat content as operators
+    if (c === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      current += c;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      current += c;
+      i++;
+      continue;
+    }
+
+    // Only check for chain operators outside quotes
+    if (!inSingleQuote && !inDoubleQuote) {
+      if (c === "&" && next === "&") {
+        if (current.trim()) segments.push(current.trim());
+        current = "";
+        i += 2;
+        continue;
+      }
+      if (c === "|" && next === "|") {
+        if (current.trim()) segments.push(current.trim());
+        current = "";
+        i += 2;
+        continue;
+      }
+      if (c === "|") {
+        if (current.trim()) segments.push(current.trim());
+        current = "";
+        i++;
+        continue;
+      }
+      if (c === ";") {
+        if (current.trim()) segments.push(current.trim());
+        current = "";
+        i++;
+        continue;
+      }
+    }
+
+    current += c;
+    i++;
+  }
+
+  if (current.trim()) segments.push(current.trim());
+
+  return segments;
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
- * Classify a command for sandbox escalation. Returns:
- * - "allow" — safe to escalate, run on real host
- * - "deny" — soft block, surface the original sandbox error
- * - "block" — hard block, never escalate
+ * Classify a single-segment command (no chain operators) for sandbox escalation.
+ * Returns "allow", "deny", or "block".
  *
  * The classifier checks:
- * 1. Excluded commands (config) → deny
- * 2. Hard-block patterns → block
- * 3. Built-in allow list (build/test/read) → allow
- * 4. Custom allow list (config) → allow
- * 5. Built-in deny list → deny
- * 6. Custom deny list → deny
- * 7. Custom classifier function → delegated
+ * 1. Hard-block patterns → block
+ * 2. Excluded commands / deny list (config) → deny
+ * 3. git — refine by subcommand (reads allow, destructive deny)
+ * 4. Built-in allow list (build/test/read) → allow
+ * 5. Custom allow list (config) → allow
+ * 6. Built-in deny list → deny
+ * 7. Neutral commands (cd, export, set, unset) → allow
  * 8. Default → deny (safe default)
  */
-export function classifyCommand(
+function classifySingleCommand(
   command: string,
   config?: SandboxEscalationConfig,
 ): EscalationDecision {
@@ -283,13 +370,50 @@ export function classifyCommand(
     return "deny";
   }
 
-  // (7) Custom classifier — project-specific override for the residual cases.
-  if (config?.classifier) {
-    return config.classifier(command);
+  // (7) Neutral commands — cd, export, set, unset. These are harmless on their
+  //     own; they only set up the environment for subsequent commands in a chain.
+  //     The chain splitter classifies each segment independently, so the
+  //     subsequent segment still gets its own safety check.
+  if (NEUTRAL_COMMANDS.has(token)) {
+    return "allow";
   }
 
   // (8) Default: deny (safe default — only known-safe commands escalate)
   return "deny";
+}
+
+/**
+ * Classify a command for sandbox escalation. Returns:
+ * - "allow" — safe to escalate, run on real host
+ * - "deny" — soft block, surface the original sandbox error
+ * - "block" — hard block, never escalate
+ *
+ * Splits the command on chain operators (`&&`, `||`, `;`, `|`) and classifies
+ * each segment independently. The conservative union applies: if any segment
+ * is block, the whole command is block; if any segment is deny, the whole
+ * command is deny; otherwise allow (all segments must be allow).
+ */
+export function classifyCommand(
+  command: string,
+  config?: SandboxEscalationConfig,
+): EscalationDecision {
+  const segments = splitChains(command);
+  if (segments.length === 0) return "deny";
+
+  let result: EscalationDecision = "allow";
+  for (const segment of segments) {
+    const decision = classifySingleCommand(segment, config);
+    if (decision === "block") return "block";
+    if (decision === "deny") result = "deny";
+  }
+
+  // Custom classifier — receives the full original command (not a pre-split
+  // segment), so a site-specific override can still inspect chains as a whole.
+  if (result === "deny" && config?.classifier) {
+    return config.classifier(command);
+  }
+
+  return result;
 }
 
 /** Refined git classification: reads are allowed, destructive ops are denied. */
