@@ -10,7 +10,7 @@
     "dashboard": "bun src/dashboard/server.ts"
   },
   "dependencies": {
-    "semajsx": "file:../../semajsx-next/packages/semajsx"
+    "semajsx": "file:./vendor/semajsx"
   },
   "devDependencies": {
     "@types/bun": "latest",
