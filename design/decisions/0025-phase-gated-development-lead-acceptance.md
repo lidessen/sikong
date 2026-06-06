@@ -1,91 +1,68 @@
-# 0025 — Phase-gated development with per-phase lead acceptance (验收)
+# 0025 - Phase-gated development with per-phase lead acceptance
 
-Status: Accepted
+Status: Accepted (revised 2026-06-06)
 Date: 2026-06-05
-Refines: 0020 (adaptive development), 0024 (grounded gates), 0023 (the lead/conductor)
+Refines: 0020 (adaptive development), 0024 (worker evidence + lead decision), 0023 (the lead/conductor)
 
 ## Context
 
-ADR 0024 makes the *end* verification real. But this session's failures were
-often **wrong early** and only caught late: the operator console's design phase
-never actually planned the operator console, yet implementation ground on for
-attempts before the end-gate noticed. The fix the owner proposes: the lead
-**perceives each phase's deliverable (产物) and accepts it (验收)** — advancing or
-adjusting at every boundary, not just bookending the task. Catch the wrong design
-*before* paying for the implementation.
+ADR 0024 makes final completion depend on worker-submitted evidence and a lead
+accept/reject decision. Dogfood also showed that many failures are wrong early:
+the design or decomposition can drift before implementation starts, and catching
+that only at the final review wastes work.
+
+The useful part of the phase-gated idea is not a new verifier mechanism. It is the
+lead seeing each phase deliverable early enough to redirect the effort.
 
 ## Decision
 
-The development workflow is explicit **phases**, each producing a deliverable; at
-**every phase boundary the engine wakes the LEAD to accept (验收)** the deliverable
-and decide **advance or adjust (纠偏)** — and to configure the next phase's work.
+Development can be organized as explicit phases. Each phase produces a concrete
+deliverable, the worker submits evidence for that deliverable, and the lead records
+the same `accepted` / `rejected` decision used by ADR 0024.
 
-### Phases (and their deliverable)
-1. **需求产品 / Requirements–Product** — clarify what's being built, scope, and
-   define the **acceptance criteria** (the ADR-0024 grounded checks). *Deliverable:*
-   requirement/product spec + acceptance checks. *Lead accepts:* are the
-   requirements + the checks the right target?
-2. **设计实现 / Design–Implementation** — design the approach and build it.
-   *Deliverable:* design + implementation (changedFiles). *Lead accepts:* does the
-   design actually address the requirement, and is the implementation on track? —
-   **this is the early catch** (a wrong design/decomposition is rejected here, before
-   verification is wasted).
-3. **验证验收 / Verify–Accept** — run the **grounded checks** (ADR 0024). *Deliverable:*
-   verdict + real evidence. *Lead accepts* informed by the objective checks: pass →
-   advance; fail → adjust back to design–impl with the feedback.
-4. **交付 / Delivery** — integrate/ship (merge, commit, deploy). *Deliverable:* the
-   delivered artifact. *Lead accepts:* delivered correctly → done.
+The engine does not need a separate "acceptance wake" primitive. A phase boundary
+is just a normal workflow gate whose next stage requires lead acceptance.
 
-### The mechanism: per-phase lead-acceptance wakes
-This is the net-new system primitive. When a phase's worker(s) finish its
-deliverable, the engine **wakes the LEAD** (a distinct *acceptance* wake, not a
-worker wake) carrying that deliverable + any grounded evidence. The lead's verdict
-**gates the transition** — it is not an auto-advance on field-presence:
-- **Accept** → advance, and the lead **configures/deploys the next phase's work**
-  (部署调整下阶段工作) — e.g. the decomposition, the checks, the effort/model.
-- **Adjust (纠偏)** → send the phase back (re-spec / redo) or re-shape the next
-  phase, applying the strategic-lead playbook (ADR 0024 §3: diagnose · research ·
-  re-decompose · switch model/technique). Abandon only when strategy is exhausted.
+### Phases
 
-This generalizes development-lead (which today only acts at *delegate* + a final
-*review*) into a lead that is in the loop at **every** boundary.
+1. **Requirements / Product** - clarify target, scope, and acceptance criteria.
+   Deliverable: requirement/product spec plus the criteria the later evidence must
+   address. Lead accepts whether the target is right.
+2. **Design / Implementation** - design the approach and build the change.
+   Deliverable: design, implementation summary, changed files, and any intermediate
+   evidence. Lead accepts whether the approach is on track.
+3. **Verify / Accept** - run the project's checks and real-user smokes where
+   relevant. Deliverable: structured evidence, including commands, exit codes,
+   outputs, changed files, and artifacts. Lead accepts or rejects the result.
+4. **Delivery** - integrate or ship after acceptance. Deliverable: committed,
+   merged, or published artifact evidence. Outward-facing delivery still needs the
+   explicit approval boundary from the release workflow.
 
-### Large tasks
-Each phase is itself decomposable: the lead fans the phase's work into subtasks
-(bounded by `maxTeamDepth`), accepts the phase's combined deliverable, then advances
-and configures the next phase. Phase division + lead-confirmed advancement is how a
-big effort stays on-track instead of grinding solo.
+### Mechanism
 
-## How it composes (the full 纠偏 model)
-- **0024** supplies the *objective* layer — grounded checks run in Verify–Accept and
-  authored as acceptance criteria in Requirements–Product.
-- **0025** (this) supplies the *judgment + steering* layer — the lead accepts each
-  phase's deliverable, catches wrong-early, and configures the next phase.
-- **0023** supplies the *actor* — the Conductor/lead (read + research tools, no
-  write) does the acceptance and strategic adjustment.
-Together: objective checks gate facts; the lead gates judgment + steers strategy;
-the conductor runs it autonomously, escalating to the human only at outward gates
-or when abandoning.
+- Worker submits the phase deliverable as fields and/or `submit_evidence`.
+- Worker requests transition when ready for review.
+- Lead reviews the deliverable and records `acceptance_decision`.
+- `acceptancePassed` admits the next phase only when the latest decision in the
+  current stage is `accepted`.
+- On rejection, the task stays open. The lead may adjust instructions, decompose
+  differently, increase effort, create follow-up subtasks, or cancel.
 
-## Why this is the right shape
-- **Cheap failure**: a wrong design dies at the Design boundary, not after N wasted
-  implementation+verify cycles (the operator-console pathology).
-- **Lead = strategist made real**: the per-phase acceptance wake is the system hook
-  that lets the lead "perceive 产物 → advance or adjust" — exactly the role the owner
-  wants, instead of fire-and-forget delegation.
-- It makes "the lead drives" a *mechanism*, not a manual habit (which is all it was
-  this session — me re-driving by hand).
+There is no auto-accept fast path. If a phase is low-risk, the lead acceptance can
+be quick, but it remains explicit.
 
-## Open questions (settle at build time)
-1. **Who runs each phase** — a worker per phase (lead delegates) vs the lead doing
-   light phases (requirements) itself? (Lean: lead delegates implementation; lead
-   does requirements/acceptance directly.)
-2. **Acceptance-wake shape** — reuse the existing wake with a lead-acceptance
-   stage/role + the deliverable in context, vs a distinct mechanism.
-3. **Auto-accept fast path** — when grounded checks pass cleanly + the phase is
-   low-risk, may the lead auto-accept to avoid a wake every boundary? (Budget/latency.)
+## Relationship to other ADRs
+
+- **0024** supplies the shared acceptance primitive: evidence plus lead decision.
+- **0020** supplies the adaptive development workflow where solo/team execution is
+  chosen at runtime.
+- **0023** can later automate the lead role, but only inside the same accept/reject
+  boundary.
 
 ## Consequences
-- Development becomes lead-steered phase-by-phase, with early correction and an
-  objective end-gate — the structural cure for "wrong work that ships green."
-- Implementation is a sikong-self effort, layered on ADR 0024's grounded gate.
+
+- Wrong design or decomposition can be rejected before more implementation cost is
+  spent.
+- The mechanism stays small: no verifier worker, no separate acceptance wake, no
+  automatic correction loop.
+- Phase-gated development is a workflow shape, not a new engine subsystem.

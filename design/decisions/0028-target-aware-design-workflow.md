@@ -34,9 +34,9 @@ the *materialization* (assemble + preview) is web-bound.
     already writes arbitrary files, incl. `.swift`).
 - **review/preview** branches on `target`:
   - `web-semajsx` → `design_preview` HTML bundles + owner visual review (as today).
-  - `swiftui` → no in-agent preview; require **`swift build` passes** (a grounded
-    acceptance check, ADR 0024/0027) so it at least compiles, then **owner visual
-    review** (the agent can't see rendered pixels — more pronounced for native).
+  - `swiftui` → no in-agent preview; require **`swift build` evidence** so the lead
+    can see that it at least compiles, then **owner visual review** (the agent can't
+    see rendered pixels — more pronounced for native).
 
 Version bump to `design@3`; keep the `design@2` definition registered for replay of
 already-pinned tasks (same pattern as `_DESIGN_WORKFLOW_V1` for 0017).
@@ -46,8 +46,8 @@ already-pinned tasks (same pattern as `_DESIGN_WORKFLOW_V1` for 0017).
 - Reuses the entire philosophy → language → derive pipeline (and the catalog,
   incl. Apple HIG) unchanged; native is purely a materialization target.
 - Tokens stay universal — one derivation, many targets.
-- Native correctness is gated the grounded way: `swift build` must pass before
-  review, instead of trusting a self-report.
+- Native review uses concrete compile evidence: `swift build` output is submitted
+  before owner visual review, instead of trusting a self-report.
 
 ## Consequences
 

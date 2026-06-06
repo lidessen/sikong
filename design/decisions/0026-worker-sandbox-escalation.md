@@ -1,8 +1,8 @@
-# 0026 — Worker sandbox with privilege escalation (auto-mode), so the worker can self-verify
+# 0026 — Worker sandbox with privilege escalation (auto-mode), so the worker can produce evidence
 
 Status: Accepted
 Date: 2026-06-05
-Fixes: the non-convergence root cause behind 0024/0025; complements 0024 (gate), 0023 (conductor shell)
+Fixes: the worker-tooling gap behind reliable evidence; complements 0024 (worker evidence + lead decision), 0023 (conductor shell)
 
 ## Resolution (implemented 2026-06-05)
 
@@ -27,18 +27,16 @@ Enabled per worker by `permissionMode: "auto"` (auto-accept edits + auto-approve
 allow-listed build/test bash); `auto` maps to the SDK's `acceptEdits` base posture
 plus the escalation hook. Default workers stay `acceptEdits` (no escalation).
 
-## Context — why the correction loop didn't converge
+## Context — why worker evidence needs real tool access
 
-The grounded gate (0024) correctly *caught* the operator console's false "done" and
-blocked it — but the worker couldn't **converge** to a clean build. Diagnosis: the
-worker runs shell in a restricted sandbox (the agent-loop project bash / just-bash)
-and **cannot run the real toolchain** (`swift build` was permission-declined,
-`go build`/codesign blocked). So the worker edits **blind** — it can't compile to see
-if its fix worked or introduced a new error — and only the gate (running on the host
-with the toolchain) sees the errors, one per round. A blind-editing worker fixes one
-gate-reported error at a time and re-introduces others → it grinds, it doesn't
-converge. The fix is to let the worker **run the build itself** (self-verify before
-claiming done), safely.
+ADR 0024 now requires the worker to submit concrete evidence for lead review. That
+evidence is weak if the worker cannot run the real project checks. During dogfood,
+workers sometimes edited blindly because sandboxed shell access could not run the
+actual toolchain (`swift build`, `go build`, codesign, or project test commands).
+
+The fix is not to make the engine accept the work automatically. The fix is to let
+the worker run allowed build/test/read commands so it can submit useful evidence
+before the lead decides.
 
 ## Decision — model the worker shell on Claude Code's sandbox + auto-mode escalation
 
@@ -64,9 +62,9 @@ worker runs `swift build`  → sandbox blocks (no toolchain / write outside cwd)
    → runs with the real toolchain → worker SEES the result → iterates to clean
 ```
 So the worker can `swift build` / `go test` / `bun run test` itself, fix → rebuild →
-fix → … → green, **before** requesting transition — and then the grounded gate
-(0024) double-checks on the host. The gate stops staying-blocked-forever; the worker
-can now actually satisfy it.
+fix → … → green before requesting transition. The resulting command outputs and
+exit codes are worker evidence for lead review, not an automatic acceptance
+verdict.
 
 ### Auto-mode classifier (bounded — Claude Code's precedence)
 - **Auto-allow (escalate freely):** build/test/lint/typecheck/read-only toolchain
@@ -91,8 +89,8 @@ can now actually satisfy it.
 ## Why this is the right fix
 - It removes the **root cause** of non-convergence: the worker can finally *see* its
   build errors and iterate to green locally — no more blind edit-and-pray.
-- It **completes** the grounded-gate loop (0024): worker self-verifies → gate
-  double-checks on the host. Two independent verifications, both grounded.
+- It makes ADR 0024's evidence useful: the lead reviews real command outputs
+  instead of static claims.
 - It is **safe**: sandbox-by-default bounds damage; escalation is allow-listed to
   build/test/read and classifier-blocked for destructive/outward — exactly Claude
   Code's proven posture, not a blanket "run anything."
@@ -111,9 +109,8 @@ can now actually satisfy it.
    denied, "command not found" for a known toolchain) → escalate; else surface.
 
 ## Consequences
-- Workers stop shipping blind: they build/test before claiming done, so the gate's
-  job becomes confirmation rather than first discovery — and tasks like the operator
-  console can actually converge.
+- Workers stop shipping blind: they build/test before submitting evidence, so the
+  lead receives concrete results instead of prose claims.
 - One bounded sandbox-escalation model spans worker + conductor; implemented by
   sikong (reusing agent-loop's existing `dangerouslyDisableSandbox` + the claude-code
-  sandbox), gated by 0024 once built.
+  sandbox).

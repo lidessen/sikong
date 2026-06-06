@@ -7,6 +7,31 @@ event timelines, and **wake loops** that drive `agent-loop` workers until a task
 reaches a terminal stage. Agents do not mutate state directly — they call workflow
 tools; a deterministic reducer records events and guards decide when stages advance.
 
+## Why Sikong
+
+Open and openly available paid models are already strong enough to do meaningful
+development work. The remaining bottleneck is increasingly an engineering
+problem, not a reasoning problem: keeping work scoped, preserving state across
+runs, assigning the right worker, capturing evidence, reviewing acceptance,
+isolating parallel branches, and making progress inspectable and recoverable.
+
+More reasoning alone does not solve those problems. If a worker forgets context,
+tests the wrong thing, overwrites another worker's changes, or claims completion
+without reviewable evidence, a smarter next token is not the missing primitive.
+The missing primitive is an engineering system around the model.
+
+Sikong is an attempt to practice that directly: solve engineering problems with
+engineering mechanisms. Work becomes durable state, agent actions become validated
+commands, progress is recorded as events, and acceptance is a lead decision over
+submitted evidence rather than an agent's self-report.
+
+This project also treats model choice as an engineering variable. Sikong is built
+to prefer models that individual builders can afford to run. You can still use
+frontier models such as Claude when you want to, but the project is designed to
+prove that you should not need them by default. The point is not to chase the
+most expensive reasoning; it is to build a system that can get reliable work out
+of practical, high-value models.
+
 This repository is a Bun workspaces monorepo with two packages:
 
 | Package | Role |

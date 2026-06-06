@@ -68,6 +68,108 @@ even if the verify fails). String edits here also fail *silently* (no-op on
 mismatch), so after multi-file edits `grep -c` that each change actually landed
 before trusting it.
 
+## Agent posture
+
+The agent working from this file is a Sikong project steward, not a general
+owner of every repository touched during dogfood. Its attention belongs on:
+
+- the current user goal and the smallest Sikong change that advances it;
+- the `design/` source of truth, ADR drift, and whether a behavior change needs a
+  new decision record;
+- workflow reliability, evidence quality, acceptance boundaries, verification,
+  costs, and release readiness;
+- dogfood findings that reveal a Sikong mechanism gap.
+
+Its attention does not belong on:
+
+- taking over product direction for a target project unless the task explicitly
+  asks for that;
+- turning one-off dogfood friction into a new Sikong subsystem;
+- hiding unfinished work behind task completion, green summaries, or unreviewed
+  worker claims;
+- promoting unpublished worktree builds into the local stable or published
+  release path.
+
+When dogfood touches other projects, keep the target project's product decisions,
+implementation notes, and release notes in that project's own durable docs.
+Record only Sikong-relevant findings in this repository: orchestration failures,
+worker/tooling friction, verification gaps, cost issues, acceptance decisions, and
+release/version lessons.
+
+## Work logs
+
+Human-readable work continuity lives in `development-log/YYYY-MM.md`. The
+chronicle and `.sikong/` state are useful evidence, but they are not a substitute
+for a durable project work log.
+
+Update the log after meaningful Sikong work, especially after dogfood runs,
+behavior changes, release preparation, or repeated failures. Keep entries compact
+and append-only. Prefer this shape:
+
+- Target: what was being improved or validated.
+- Implementation: what changed.
+- Verification: exact checks or dogfood evidence.
+- Verifier: who/what judged the result.
+- Drift: closer, neutral, or farther from the design target.
+- Method feedback: what the run taught about the process.
+- Next adjustment: the next bounded follow-up, if any.
+
+For cross-project dogfood, write the detailed work log in the target project when
+that project has one, or create `development-log/YYYY-MM.md` there if the work is
+substantial and the user has not provided another durable log location. In
+Sikong's log, add only the summary needed to preserve Sikong's own continuity and
+link it to the dogfood task id, target project, commit, or release candidate.
+
+## Dogfood strategy
+
+Sikong is developed by using Sikong, but dogfood is a gate for behavior changes,
+not a ritual for every edit.
+
+Dogfood before treating changes as stable when they affect workflow behavior,
+worker selection, verification, release, monitoring, task state, acceptance,
+project tooling, or model/cost policy. Documentation-only edits, focused tests,
+and small internal cleanups may skip dogfood; state that explicitly.
+
+Default to models individual builders can afford, especially cost-effective paid
+open models when suitable. Escalate to frontier models only when evidence shows
+the cheaper path is insufficient: repeated failed wakes, repeated blocks, lead
+rejection, inability to submit useful evidence, high-risk design review, or final
+promotion/release review.
+
+A dogfood run must leave recoverable evidence: task id, chronicle events, command
+outputs, changed files, usage/cost when available, and the lead accept/reject
+decision. Important findings go to `development-log/YYYY-MM.md`. Repeated
+findings or durable behavior changes become tests or ADRs.
+
+Treat failures as signal, not automatic feature requests. One-off failures stay
+in the log; repeated or high-risk failures should become a bounded engineering
+mechanism, test, or design decision. Do not turn every dogfood failure into a new
+subsystem.
+
+### Dogfood version policy
+
+Keep three versions separate:
+
+- **Worktree canary**: the current checkout built as `packages/sikong/dist/sikong`.
+  Use it to verify the change under development. Do not make it the default local
+  dogfood command until the change is committed, verified, dogfooded, and accepted
+  by the lead.
+- **Local stable**: the default local dogfood command used for routine Sikong
+  project management. It must come from a committed revision with a green full
+  gate and at least one accepted real dogfood task.
+- **Published release**: the npm/package version. Publish only after the candidate
+  has served as local stable on real work without unresolved blocking failures,
+  then passed the release gate, build, and package dry run.
+
+Replace local stable only from an accepted commit. Record the source version, git
+sha, build time, verification commands, dogfood task id, and lead decision. Prefer
+an atomic replacement, such as a versioned binary plus symlink, instead of
+overwriting the command in place.
+
+If local stable exposes a serious regression, do not promote a dirty worktree as
+the fix. Repair it, commit it, run the full gate, dogfood the fix, get lead
+acceptance, then replace local stable.
+
 ## Architecture
 
 Three concentric layers; data flows **factory → executor → adapter → backend**,

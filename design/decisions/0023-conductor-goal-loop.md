@@ -28,10 +28,10 @@ The Conductor's toolset is exactly:
   file-write tools, so any side effects are incidental (temp files), never source
   changes. This makes assessment far more capable (it can *see* if the build is
   green) while keeping the write-boundary intact.
-- **research (查资料)** — web/doc lookup (search + fetch + library docs). The lead's
-  strategic role (ADR 0024 §3) requires looking up unfamiliar APIs/patterns to
-  *adjust strategy* when a task is stuck, rather than blindly retrying. Read-only by
-  nature (fetching information), so it stays inside the safety boundary.
+- **research (查资料)** — web/doc lookup (search + fetch + library docs). The lead may
+  need to look up unfamiliar APIs/patterns before rejecting evidence, adjusting
+  instructions, or re-decomposing a stuck task. Read-only by nature (fetching
+  information), so it stays inside the safety boundary.
 - **cron** — schedule its own next wake (one-shot delay or recurring).
 
 It has **NO write tools** (no editFile/writeFile/insertInFile/replaceInFile, no

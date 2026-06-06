@@ -44,12 +44,12 @@ wrapper):
 2. **design → implement → verify** — the existing development-lead team pattern;
    durable changes get ADRs.
 3. **candidate** — build a candidate binary (`dist/sikong-candidate`).
-4. **gate (the linchpin)** — typecheck + tests **+ a SELF-SMOKE**: the candidate
-   must run a canonical real task end-to-end and pass the adversarial real-path
-   verify. (See "Why the gate is everything" below.)
+4. **evidence** — typecheck + tests **+ a SELF-SMOKE**: the candidate must run a
+   canonical real task end-to-end and record the commands, outputs, changed state,
+   and any failures as promotion evidence.
 5. **release** — bump version, update CHANGELOG, tag.
 6. **approve + promote** — the cycle **HALTS here** and records an **approval
-   request** (candidate version, changelog, gate + self-smoke evidence, diff
+   request** (candidate version, changelog, typecheck/test + self-smoke evidence, diff
    summary, token cost). **Promotion requires an explicit lead approval** (e.g.
    `sikong release approve <candidate>`); only then does it atomically swap
    `dist/sikong` ← candidate (keep `dist/sikong.prev` for rollback), record the
@@ -58,7 +58,7 @@ wrapper):
 
 ### Approval gate (mandatory — no unsupervised self-iteration)
 
-sikong may analyze, implement, build, and gate a candidate autonomously, but it
+sikong may analyze, implement, build, and collect candidate evidence autonomously, but it
 **cannot replace "current" or chain into another cycle without an explicit
 external approval.** There is no continuous, unattended self-promotion: every
 version that becomes "current" was seen and approved by the lead, with the
@@ -69,9 +69,10 @@ the *control* stays with the human/AI lead at promotion.
 
 **Self-modification safety**: the *current* (stable) binary runs the cycle and
 builds the *candidate*; the current binary is loaded in memory and never changes
-mid-cycle. A broken candidate simply **fails the gate → no promotion → current
-unchanged**, with `dist/sikong.prev` for instant rollback. There is no window in
-which sikong can corrupt the engine that's driving its own improvement.
+mid-cycle. A broken candidate is rejected during lead review, so there is no
+promotion and current remains unchanged, with `dist/sikong.prev` for rollback.
+There is no window in which sikong can corrupt the engine that's driving its own
+improvement.
 
 ### 4. Roles
 
@@ -81,36 +82,37 @@ which sikong can corrupt the engine that's driving its own improvement.
   sikong.**
 - **sikong's workers**: do the actual implementation.
 
-## Why the gate is everything
+## Why promotion evidence is everything
 
-Self-iteration is only safe if the promotion gate is **trustworthy**. The dogfood
-has repeatedly shown workers ship green-but-shallow tests (ADR 0015's prompt-level
-verify was insufficient — confirmed three times). A weak gate in a *self*-loop
-compounds: a bad candidate promoted to "current" degrades every later cycle. So
-the **first thing to build is the trustworthy gate**: the candidate proves itself
-by *running a real task and being adversarially verified* (a dedicated verify/
-reviewer agent that executes the user-facing smoke), not by a passing unit suite.
-This is the same "real verify-gate mechanism" already flagged as the top
-sikong-quality item — self-iteration makes it mandatory.
+Self-iteration is only safe if the lead sees evidence that can falsify the
+candidate. The dogfood has repeatedly shown workers ship green-but-shallow tests
+(ADR 0015's prompt-level verify was insufficient). In a self-loop, a bad candidate
+promoted to "current" degrades every later cycle.
+
+The first version should stay simple: run deterministic project checks and one
+canonical self-smoke, submit the captured evidence, and require explicit lead
+promotion approval. A separate verifier/reviewer agent is optional future work,
+not a prerequisite for the promotion boundary.
 
 ## Net-new vs reused
 
 - **Reused**: development-lead workflow, the chronicle, shilu (backlog +
   knowledge), `build:cli`, ADRs.
 - **Net-new (small)**: the `self-iterate` workflow wrapper (analyze + candidate +
-  gate + promote stages), a thin **promote script** (build → gate → swap → keep
-  prev), and the **candidate self-smoke** verify-gate.
+  evidence + promote stages), a thin **promote script** (build → evidence → swap → keep
+  prev), and the **candidate self-smoke** evidence path.
 
 ## Consequences
 
 - sikong becomes self-improving with human/AI oversight only at curate + accept.
 - The lead's role shifts to orchestration across projects.
-- Quality hinges entirely on the promotion gate — build it first and keep it honest.
+- Quality hinges on promotion evidence plus explicit lead approval — keep both
+  visible and hard to bypass.
 
 ## Build order (when accepted)
 
-1. The **trustworthy promotion gate** (candidate self-smoke + adversarial verify
-   agent) — prerequisite for everything.
-2. The **promote script** (build candidate → gate → swap current → keep prev).
-3. The **`self-iterate` workflow** (analyze/candidate/gate/promote stages).
+1. The promotion evidence path (candidate self-smoke + captured deterministic
+   check output) — prerequisite for everything.
+2. The **promote script** (build candidate → collect evidence → swap current → keep prev).
+3. The **`self-iterate` workflow** (analyze/candidate/evidence/promote stages).
 4. Wire the **shilu `sikong-backlog`** + chronicle→backlog digest.
