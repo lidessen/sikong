@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 export interface CommandEvidence {
@@ -24,6 +25,7 @@ export interface PromotionEvidence {
   candidate: {
     binPath: string;
     builtFromSource: boolean;
+    sha256: string;
   };
   checks: readonly CommandEvidence[];
   decision: {
@@ -79,6 +81,7 @@ export function renderPromotionEvidenceMarkdown(evidence: PromotionEvidence): st
     `Package: ${evidence.packageName}@${evidence.packageVersion}`,
     `Git: ${evidence.git.branch} ${evidence.git.sha}`,
     `Candidate: ${evidence.candidate.binPath}`,
+    `Candidate sha256: ${evidence.candidate.sha256}`,
     ``,
     `## Checks`,
     ``,
@@ -122,6 +125,11 @@ export async function readPackageIdentity(packageJsonPath: string): Promise<{
     name: typeof parsed.name === "string" ? parsed.name : "unknown",
     version: typeof parsed.version === "string" ? parsed.version : "0.0.0",
   };
+}
+
+export async function hashFileSha256(path: string): Promise<string> {
+  const bytes = await readFile(path);
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 export async function runCommandEvidence(

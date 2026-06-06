@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import {
   type CommandEvidence,
   type PromotionEvidence,
+  hashFileSha256,
   promotionEvidencePassed,
   readPackageIdentity,
   runCommandEvidence,
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
       ),
     );
   }
+  const candidateSha256 = await hashFileSha256(candidateBin);
 
   const evidence: PromotionEvidence = {
     schemaVersion: 1,
@@ -136,6 +138,7 @@ async function main(): Promise<void> {
     candidate: {
       binPath: candidateRelToRepo,
       builtFromSource: suppliedBin === undefined,
+      sha256: candidateSha256,
     },
     checks,
     decision: {

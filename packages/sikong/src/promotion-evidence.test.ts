@@ -25,6 +25,7 @@ function sampleEvidence(): PromotionEvidence {
     candidate: {
       binPath: "packages/sikong/dist/sikong-candidate",
       builtFromSource: true,
+      sha256: "a".repeat(64),
     },
     checks: [
       {

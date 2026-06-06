@@ -101,6 +101,18 @@ recorded with repo-relative paths so it can be reviewed without leaking the
 builder's local checkout path; the lead must review it and explicitly accept or
 reject the candidate first.
 
+After lead acceptance, install the candidate as local stable:
+
+```sh
+bun run promotion:install-local -- --evidence promotion-evidence/<file>.json --accepted-by <lead>
+```
+
+The install step machine-validates that evidence checks all passed, the evidence
+was generated from a clean git status, the evidence sha matches the current HEAD,
+the candidate binary hash matches, and recorded paths are repo-relative. It then copies the candidate to
+`${SIKONG_HOME:-~/.sikong}/local-stable/versions/...`, atomically updates the
+`current` symlink, and writes a receipt. It still does not publish anything.
+
 Releasing builds every platform binary, publishes each `sikong-<platform>`
 package, then publishes the `sikong` launcher last (so its optional
 dependencies already resolve). From `packages/sikong`:

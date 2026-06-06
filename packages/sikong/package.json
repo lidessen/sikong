@@ -18,6 +18,7 @@
     "release": "bun scripts/release.ts",
     "release:dry": "bun scripts/release.ts --dry-run",
     "promotion:evidence": "bun scripts/promotion-evidence.ts",
+    "promotion:install-local": "bun scripts/promotion-install-local.ts",
     "prepublishOnly": "bun run typecheck && bun run test",
     "smoke:deepseek-tools": "bun smokes/smoke-deepseek-project-tools.ts",
     "self-smoke": "bun scripts/self-smoke.ts",
