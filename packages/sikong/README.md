@@ -86,6 +86,21 @@ and the filesystem side effect.
 
 ## Release
 
+Before replacing a local stable dogfood binary or preparing a public release,
+generate promotion evidence for the candidate:
+
+```sh
+bun run promotion:evidence
+```
+
+The script builds `dist/sikong-candidate`, runs the repository typecheck/tests,
+runs `git diff --check`, self-smokes the candidate binary, and writes JSON +
+Markdown evidence under `promotion-evidence/` at the repository root. It does
+not replace the local stable binary and does not publish anything. Evidence is
+recorded with repo-relative paths so it can be reviewed without leaking the
+builder's local checkout path; the lead must review it and explicitly accept or
+reject the candidate first.
+
 Releasing builds every platform binary, publishes each `sikong-<platform>`
 package, then publishes the `sikong` launcher last (so its optional
 dependencies already resolve). From `packages/sikong`:

@@ -9,6 +9,7 @@ design/preview/
 .env.*
 !.env.example
 .sikong/
+promotion-evidence/
 coverage/
 *.tsbuildinfo
 .vitest/

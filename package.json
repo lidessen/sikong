@@ -9,6 +9,7 @@
   "scripts": {
     "build": "bun run --filter sikong build",
     "build:cli": "bun run --filter sikong build:cli",
+    "promotion:evidence": "bun --cwd packages/sikong scripts/promotion-evidence.ts",
     "release:check": "bun run typecheck && bun run test && bun run build && git diff --check && cd packages/sikong && npm publish --dry-run",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun run --filter '*' test"
