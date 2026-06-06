@@ -1,9 +1,7 @@
 // Lead-authored per-task acceptance checks (ADR 0027).
 //
-// This is the LEAD-AUTHORED spec for the feature: the implementing worker must make
-// these pass against the real engine. It proves the key property — a worker cannot
-// reach `done` by satisfying only the stage's own (worker-influenced) acceptance;
-// the lead's task-level checks are merged at the gate and must pass for real.
+// These checks are review criteria, not engine-executed tests. The worker submits
+// evidence; a lead acceptance event is the only thing that admits `done`.
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,8 +17,8 @@ import {
 } from "../store/memory";
 import { GENERAL_WORKFLOW } from "../workflow/builtin";
 
-// A workflow whose `work` stage carries a static acceptance check that PASSES, and a
-// done stage gated on `acceptancePassed`. The task-level acceptance is what varies.
+// A workflow whose `work` stage carries static acceptance criteria, and whose
+// done stage is gated on explicit lead acceptance.
 const GATED_WF: WorkflowDef = {
   id: "lead-acc-wf",
   version: "1",
@@ -61,10 +59,9 @@ function makeEngine(root: string) {
 }
 
 describe("lead-authored task acceptance (ADR 0027)", () => {
-  test("blocks done when a lead task check fails, even though the stage check passes", async () => {
+  test("blocks done until the lead accepts, even when worker submits evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "sikong-leadacc-block-"));
-    await writeFile(join(root, "stage.txt"), "ok\n", "utf8"); // stage acceptance passes
-    // The lead requires a file the worker did NOT produce → merged gate must fail.
+    await writeFile(join(root, "stage.txt"), "ok\n", "utf8");
     const engine = makeEngine(root);
     await engine.createTask({
       projectId: "p",
@@ -79,10 +76,9 @@ describe("lead-authored task acceptance (ADR 0027)", () => {
     expect(task?.stageId).toBe("work");
   });
 
-  test("admits done when both the stage check and the lead task checks pass", async () => {
+  test("admits done when the lead accepts the submitted evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "sikong-leadacc-pass-"));
     await writeFile(join(root, "stage.txt"), "ok\n", "utf8");
-    await writeFile(join(root, "lead-required.txt"), "ok\n", "utf8"); // lead check now satisfied
     const engine = makeEngine(root);
     await engine.createTask({
       projectId: "p",
@@ -90,6 +86,12 @@ describe("lead-authored task acceptance (ADR 0027)", () => {
       taskId: "lead-acc-pass",
       acceptance: [{ kind: "fileExists", description: "lead-required artifact", path: "lead-required.txt" }],
     });
+    await engine.idle();
+    await engine.submitCommand(
+      "lead-acc-pass",
+      { kind: "acceptance_decision", decision: "accepted", reason: "lead reviewed evidence" },
+      "lead",
+    );
     await engine.idle();
 
     const task = await engine.getTask("lead-acc-pass");

@@ -37,6 +37,15 @@ function newEngine(loop: LoopFactory, extra: WorkflowDef[] = [], hooks = {}) {
   });
 }
 
+async function leadAccept(engine: WorkflowEngine, taskId: string, reason = "lead reviewed evidence"): Promise<void> {
+  await engine.submitCommand(
+    taskId,
+    { kind: "acceptance_decision", decision: "accepted", reason },
+    "lead",
+  );
+  await engine.idle();
+}
+
 const TWO_STEP: WorkflowDef = {
   id: "eng",
   version: "1",
@@ -193,6 +202,7 @@ describe("WorkflowEngine wake cycle", () => {
       fields: { request: "change worker discover" },
     });
     await engine.idle();
+    await leadAccept(engine, "dev1");
 
     const task = await engine.getTask("dev1");
     expect(task?.status).toBe("done");
@@ -407,6 +417,7 @@ describe("WorkflowEngine wake cycle", () => {
       fields: { request: "plan the change" },
     });
     await engine.idle();
+    await leadAccept(engine, "dev-plan-commit");
 
     const task = await engine.getTask("dev-plan-commit");
     expect(calls).toBe(5);
@@ -904,240 +915,126 @@ describe("WorkflowEngine wake cycle", () => {
   });
 });
 
-describe("Acceptance verifier (ADR 0024 Layers 3+4)", () => {
-  test("passing acceptance checks admit next stage transition", async () => {
-    const root = await mkdtemp(join(tmpdir(), "sikong-acc-pass-"));
-    await writeFile(join(root, "done.txt"), "ready\n", "utf8");
-
-    const ACC_WF: WorkflowDef = {
-      id: "acc-pass",
-      version: "1",
-      name: "AccPass",
-      description: "",
-      fields: {},
-      stages: [
-        {
-          id: "work",
-          category: "in_progress",
-          entry: { op: "always" },
-          acceptance: [{ kind: "fileExists", description: "done file", path: "done.txt" }],
-        },
-        {
-          id: "done",
-          category: "done",
-          entry: {
-            op: "and",
-            all: [
-              { op: "hasEvent", eventType: "transition.requested" },
-              { op: "acceptancePassed" },
-            ],
-          },
-        },
-      ],
-    };
-
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
-    });
-    engine["o"].registry.register(ACC_WF);
-
-    await engine.createTask({ projectId: "p", workflowId: "acc-pass", taskId: "acc-pass-1" });
-    await engine.idle();
-
-    const task = await engine.getTask("acc-pass-1");
-    expect(task?.status).toBe("done");
-    expect(task?.stageId).toBe("done");
-  });
-
-  test("failed acceptance checks prevent stage transition", async () => {
-    const root = await mkdtemp(join(tmpdir(), "sikong-acc-fail-"));
-
-    const ACC_WF: WorkflowDef = {
-      id: "acc-fail",
-      version: "1",
-      name: "AccFail",
-      description: "",
-      fields: {},
-      stages: [
-        {
-          id: "work",
-          category: "in_progress",
-          entry: { op: "always" },
-          acceptance: [{ kind: "fileExists", description: "missing file", path: "missing.txt" }],
-        },
-        {
-          id: "done",
-          category: "done",
-          entry: {
-            op: "and",
-            all: [
-              { op: "hasEvent", eventType: "transition.requested" },
-              { op: "acceptancePassed" },
-            ],
-          },
-        },
-      ],
-    };
-
-    const chronicle = new MemoryChronicleStore(() => 1);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      chronicle,
-      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
-    });
-    engine["o"].registry.register(ACC_WF);
-
-    await engine.createTask({ projectId: "p", workflowId: "acc-fail", taskId: "acc-fail-1" });
-    await engine.idle();
-
-    const task = await engine.getTask("acc-fail-1");
-    expect(task?.status).toBe("in_progress");
-    expect(task?.stageId).toBe("work");
-
-    // Verify the acceptance.verdict event was recorded
-    const events = await (engine["o"].events as MemoryEventStore).load("acc-fail-1");
-    expect(events.some((e) => e.type === "acceptance.verdict" && e.payload.verdict === "failed")).toBe(true);
-
-    // Verify chronicle recorded the acceptance event
-    const log = await chronicle.recent({ taskId: "acc-fail-1", limit: 50 });
-    expect(log.some((e) => e.type === "wake.acceptance")).toBe(true);
-  });
-
-  test("first acceptance failure schedules a correction wake", async () => {
-    const root = await mkdtemp(join(tmpdir(), "sikong-acc-corr-"));
-    let wakeCount = 0;
-
-    const ACC_WF: WorkflowDef = {
-      id: "acc-corr",
-      version: "1",
-      name: "AccCorr",
-      description: "",
-      fields: {},
-      stages: [
-        {
-          id: "work",
-          category: "in_progress",
-          entry: { op: "always" },
-          acceptance: [{ kind: "fileExists", description: "missing", path: "never.txt" }],
-        },
-        {
-          id: "done",
-          category: "done",
-          entry: {
-            op: "and",
-            all: [
-              { op: "hasEvent", eventType: "transition.requested" },
-              { op: "acceptancePassed" },
-            ],
-          },
-        },
-      ],
-    };
-
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      loop: () => {
-        wakeCount++;
-        return mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } });
+describe("Acceptance evidence + lead review (ADR 0024 revised)", () => {
+  const REVIEW_WF: WorkflowDef = {
+    id: "review-wf",
+    version: "1",
+    name: "ReviewWf",
+    description: "",
+    fields: {},
+    stages: [
+      {
+        id: "work",
+        category: "in_progress",
+        entry: { op: "always" },
+        acceptance: [{ kind: "projectGate", description: "typecheck/test evidence" }],
       },
-    });
-    engine["o"].registry.register(ACC_WF);
+      {
+        id: "done",
+        category: "done",
+        entry: {
+          op: "and",
+          all: [
+            { op: "hasEvent", eventType: "transition.requested" },
+            { op: "acceptancePassed" },
+          ],
+        },
+      },
+    ],
+  };
 
-    await engine.createTask({ projectId: "p", workflowId: "acc-corr", taskId: "acc-corr-1" });
-    await engine.idle();
-
-    // First wake fails acceptance → correction wake scheduled → second wake also fails → no more
-    expect(wakeCount).toBe(2);
-    const task = await engine.getTask("acc-corr-1");
-    expect(task?.stageId).toBe("work");
-    expect(task?.status).toBe("in_progress");
-  });
-
-  test("acceptance checks are skipped for stages without acceptance", async () => {
-    const chronicle = new MemoryChronicleStore(() => 1);
+  function makeReviewEngine(loop: AgentLoop = mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } })) {
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
       registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      chronicle,
-      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
+      loop: () => loop,
     });
+    engine["o"].registry.register(REVIEW_WF);
+    return engine;
+  }
 
-    await engine.createTask({ projectId: "p", taskId: "noaccept" });
-    await engine.idle();
-
-    expect((await engine.getTask("noaccept"))?.status).toBe("done");
-    const log = await chronicle.recent({ taskId: "noaccept", limit: 50 });
-    expect(log.filter((e) => e.type === "wake.acceptance")).toHaveLength(0);
-  });
-
-  test("acceptance checks with projectGate check", async () => {
-    const root = await mkdtemp(join(tmpdir(), "sikong-acc-gate-"));
-    // Create a minimal project with passing scripts
-    await writeFile(
-      join(root, "package.json"),
-      JSON.stringify({
-        name: "gate-test",
-        scripts: { typecheck: "true", test: "true" },
+  test("worker evidence and transition do not admit done without lead acceptance", async () => {
+    const engine = makeReviewEngine(
+      scriptLoop(async (input) => {
+        await input.tools?.submit_evidence?.execute?.(
+          {
+            summary: "typecheck/test passed",
+            checks: [{ label: "typecheck", command: "bun run typecheck", exitCode: 0, passed: true }],
+          },
+          {},
+        );
+        await input.tools?.request_transition?.execute?.({ reason: "ready for lead review" }, {});
       }),
     );
 
-    const GATE_WF: WorkflowDef = {
-      id: "gate-wf",
-      version: "1",
-      name: "GateWf",
-      description: "",
-      fields: {},
-      stages: [
-        {
-          id: "build",
-          category: "in_progress",
-          entry: { op: "always" },
-          acceptance: [{ kind: "projectGate", description: "verify project" }],
-        },
-        {
-          id: "done",
-          category: "done",
-          entry: {
-            op: "and",
-            all: [
-              { op: "hasEvent", eventType: "transition.requested" },
-              { op: "acceptancePassed" },
-            ],
-          },
-        },
-      ],
-    };
-
-    const chronicle = new MemoryChronicleStore(() => 1);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "P", root }]),
-      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
-      chronicle,
-      loop: () => mockLoop({ callTool: { name: "request_transition", args: { reason: "done" } } }),
-    });
-    engine["o"].registry.register(GATE_WF);
-
-    await engine.createTask({ projectId: "p", workflowId: "gate-wf", taskId: "gate-1" });
+    await engine.createTask({ projectId: "p", workflowId: "review-wf", taskId: "review-no-accept" });
     await engine.idle();
 
-    const task = await engine.getTask("gate-1");
+    const task = await engine.getTask("review-no-accept");
+    expect(task?.status).toBe("in_progress");
+    expect(task?.stageId).toBe("work");
+    const events = await (engine["o"].events as MemoryEventStore).load("review-no-accept");
+    expect(events.some((e) => e.type === "acceptance.evidence")).toBe(true);
+  });
+
+  test("lead acceptance admits done after evidence and transition", async () => {
+    const engine = makeReviewEngine(
+      scriptLoop(async (input) => {
+        await input.tools?.submit_evidence?.execute?.({ summary: "tests passed" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "ready" }, {});
+      }),
+    );
+
+    await engine.createTask({ projectId: "p", workflowId: "review-wf", taskId: "review-accept" });
+    await engine.idle();
+    await engine.submitCommand(
+      "review-accept",
+      { kind: "acceptance_decision", decision: "accepted", reason: "evidence reviewed by lead" },
+      "lead",
+    );
+
+    await engine.idle();
+
+    const task = await engine.getTask("review-accept");
     expect(task?.status).toBe("done");
     expect(task?.stageId).toBe("done");
-    const log = await chronicle.recent({ taskId: "gate-1", limit: 50 });
-    expect(log.some((e) => e.type === "wake.acceptance")).toBe(true);
+  });
+
+  test("lead rejection keeps the task open", async () => {
+    const engine = makeReviewEngine(
+      scriptLoop(async (input) => {
+        await input.tools?.submit_evidence?.execute?.({ summary: "tests passed but feature incomplete" }, {});
+        await input.tools?.request_transition?.execute?.({ reason: "ready" }, {});
+      }),
+    );
+
+    await engine.createTask({ projectId: "p", workflowId: "review-wf", taskId: "review-reject" });
+    await engine.idle();
+    await engine.submitCommand(
+      "review-reject",
+      { kind: "acceptance_decision", decision: "rejected", reason: "requirement not met" },
+      "lead",
+      { schedule: false },
+    );
+    await engine.idle();
+
+    const task = await engine.getTask("review-reject");
+    expect(task?.status).toBe("in_progress");
+    expect(task?.stageId).toBe("work");
+  });
+
+  test("worker cannot accept its own work", async () => {
+    const engine = makeReviewEngine();
+    await engine.createTask({ projectId: "p", workflowId: "review-wf", taskId: "review-worker-accept" });
+
+    await expect(
+      engine.submitCommand(
+        "review-worker-accept",
+        { kind: "acceptance_decision", decision: "accepted", reason: "self-approved" },
+        "worker",
+      ),
+    ).rejects.toThrow(/lead\/engine-only/);
   });
 });
 
@@ -1211,6 +1108,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
       fields: { request: "ship the effort" },
     });
     await engine.idle();
+    await leadAccept(engine, "parent1");
 
     const task = await engine.getTask("parent1");
     expect(task?.status).toBe("done");
@@ -1281,6 +1179,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
         fields: { request: "two-round effort" },
       });
       await engine.idle();
+      await leadAccept(engine, "parent-multi");
 
       const task = await engine.getTask("parent-multi");
       expect(verifyPasses).toBe(2); // re-woken for a second verify round after the follow-up finished
@@ -1341,6 +1240,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
 
       await engine.createTask({ projectId: "p", workflowId: "development", taskId: "iso-parent", fields: { request: "x" } });
       await engine.idle();
+      await leadAccept(engine, "iso-parent");
 
       const parent = await engine.getTask("iso-parent");
       expect(parent?.status).toBe("done");
@@ -1405,6 +1305,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
 
       await engine.createTask({ projectId: "p", workflowId: "development", taskId: "fail-parent", fields: { request: "x" } });
       await engine.idle();
+      await leadAccept(engine, "fail-parent");
 
       const parent = await engine.getTask("fail-parent");
       expect(childWakes).toBeGreaterThanOrEqual(2); // initial + one retry before auto-fail
@@ -1459,6 +1360,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
 
     await engine.createTask({ projectId: "p", workflowId: "development", taskId: "dag-parent", fields: { request: "x" } });
     await engine.idle();
+    await leadAccept(engine, "dag-parent");
 
     const parent = await engine.getTask("dag-parent");
     expect(order).toEqual(["A", "B"]); // B waited for A (dependency respected), not parallel
@@ -1521,6 +1423,7 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
       fields: { request: "alias smoke" },
     });
     await engine.idle();
+    await leadAccept(engine, "alias-test");
 
     const task = await engine.getTask("alias-test");
     expect(task?.status).toBe("done");

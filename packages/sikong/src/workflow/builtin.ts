@@ -129,9 +129,10 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
+      acceptance: [{ kind: "projectGate", description: "Submit typecheck/test evidence for lead review" }],
       outputFields: ["summary"],
       instructions:
-        "Preview and evaluate the assembled design against the chosen `language` philosophy and the `frame`'s goals. web-semajsx: use `design_preview` to emit preview bundles for the owner. swiftui: run `swift build` to verify it compiles (a grounded gate — the agent cannot see rendered pixels); then present for owner visual review. Judge coherence-with-the-stated-philosophy, not raw aesthetics — every parameter should trace to the philosophy. Iterate within this stage: adjust files, re-preview, get owner feedback. Then PRESENT for OWNER VISUAL REVIEW (the honest limit: the agent cannot see rendered pixels, so the owner must visually approve). Set `summary` with a one-line outcome of the review, then request transition. Block if the design fails to cohere with its stated philosophy or if `swift build` fails for a swiftui target.",
+        "Preview and evaluate the assembled design against the chosen `language` philosophy and the `frame`'s goals. web-semajsx: use `design_preview` to emit preview bundles for the owner. swiftui: run `swift build` to verify it compiles; then present for owner visual review. Judge coherence-with-the-stated-philosophy, not raw aesthetics — every parameter should trace to the philosophy. Submit structured evidence with `submit_evidence` (commands, outputs, previews/artifacts, changed files), set `summary`, and request transition. The lead must review the evidence and accept/reject; do not claim acceptance yourself. Block if the design fails to cohere with its stated philosophy or if verification cannot run.",
     },
     {
       id: "done",
@@ -142,6 +143,7 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
           { op: "field", field: "changedFiles", cmp: "exists" },
           { op: "field", field: "summary", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
+          { op: "acceptancePassed" },
         ],
       },
     },
@@ -451,7 +453,7 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
       id: "build",
       category: "in_progress",
       effort: "medium",
-      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "submit_evidence", "block", "cancel"],
       entry: {
         op: "and",
         all: [
@@ -461,13 +463,13 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
       },
       outputFields: ["implementation", "changedFiles"],
       instructions:
-        "The adaptive stage — implement the change directly OR delegate via `create_subtask`. For solo work: write the code, record `implementation` (what you changed) and set `changedFiles` to a JSON array of the changed project file paths, then request transition. For delegation (planned team effort): create one subtask per layer with `create_subtask`, respecting dependsOn ordering and the collision rule for shared-file edits (two subtasks touching the same files must either chain with dependsOn or isolate each via isolate:true). For any spec-critical requirement, attach lead-authored `acceptance` checks to the subtask — `create_subtask({ acceptance: [...] })` (ADR 0027) — using command/fileExists/grep/projectGate criteria the child must pass at its own gate. These are immutable by the worker and merge with its stage acceptance, so a worker can't satisfy only its own (possibly self-authored) tests while leaving the requirement unmet. After delegating, request transition to wait for the team. Block with a concrete reason if the change cannot be made.",
+        "The adaptive stage — implement the change directly OR delegate via `create_subtask`. For solo work: write the code, record `implementation` (what you changed) and set `changedFiles` to a JSON array of the changed project file paths, then request transition. For delegation (planned team effort): create one subtask per layer with `create_subtask`, respecting dependsOn ordering and the collision rule for shared-file edits (two subtasks touching the same files must either chain with dependsOn or isolate:true). Lead-authored `acceptance` checks are evidence requirements for later review, not automatic engine tests. After delegating, request transition to wait for the team. Block with a concrete reason if the change cannot be made.",
     },
     {
       id: "verify",
       category: "in_progress",
       effort: "medium",
-      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "submit_evidence", "block", "cancel"],
       entry: {
         op: "and",
         all: [
@@ -481,10 +483,10 @@ export const DEVELOPMENT_WORKFLOW: WorkflowDef = {
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
-      acceptance: [{ kind: "projectGate", description: "Type-check and tests pass" }],
+      acceptance: [{ kind: "projectGate", description: "Submit typecheck/test evidence for lead review" }],
       outputFields: ["verification", "summary"],
       instructions:
-        "Verify the implementation adversarially (ADR 0015) AND/OR review+merge the team's results. Run the project's full checks (build, vet/lint, tests) covering EDGE CASES and real-user-path smokes — not only happy-path values. If the team used isolated worktrees, merge each branch with git now. You MAY create follow-up subtasks with `create_subtask` for multi-round efforts (set no summary to be re-woken). Record `verification` (what you checked, exact commands, and results) and set `summary` as a one-line outcome, then request transition. Block if verification fails or cannot run.",
+        "Verify the implementation adversarially (ADR 0015) AND/OR review+merge the team's results. Run the project's full checks (build, vet/lint, tests) covering EDGE CASES and real-user-path smokes — not only happy-path values. If the team used isolated worktrees, merge each branch with git now. You MAY create follow-up subtasks with `create_subtask` for multi-round efforts (set no summary to be re-woken). Record `verification`, submit structured evidence with `submit_evidence` (commands, exit codes, outputs/artifacts, changed files), set `summary`, then request transition. The lead must review the evidence and accept/reject; do not claim acceptance yourself. Block if verification fails or cannot run.",
     },
     {
       id: "done",
@@ -707,8 +709,8 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
       id: "review",
       category: "in_progress",
       effort: "medium",
-      tools: ["create_subtask", "set_field", "request_transition", "append_note", "block", "cancel"],
-      acceptance: [{ kind: "projectGate", description: "Type-check and tests pass across the merged project" }],
+      tools: ["create_subtask", "set_field", "request_transition", "append_note", "submit_evidence", "block", "cancel"],
+      acceptance: [{ kind: "projectGate", description: "Submit typecheck/test evidence across the merged project for lead review" }],
       outputFields: ["summary"],
       entry: {
         op: "and",
@@ -718,7 +720,7 @@ export const _DEVELOPMENT_LEAD_WORKFLOW_V1: WorkflowDef = {
         ],
       },
       instructions:
-        "Read the Team section and review what each subtask returned. Any subtask shown as [isolated → branch sikong/<id>] committed its work to that branch — before finishing, merge each isolated branch into the current branch with git (you have a shell), resolving conflicts. If the effort needs another round, create follow-up subtasks with `create_subtask` and request transition WITHOUT setting `summary` — you will be re-woken once they finish, then review again. When the effort is complete, set a one-line `summary` of the overall outcome and request transition. Block if it failed.",
+        "Read the Team section and review what each subtask returned. Any subtask shown as [isolated → branch sikong/<id>] committed its work to that branch — before finishing, merge each isolated branch into the current branch with git (you have a shell), resolving conflicts. If the effort needs another round, create follow-up subtasks with `create_subtask` and request transition WITHOUT setting `summary` — you will be re-woken once they finish, then review again. When the effort is complete, submit structured evidence with `submit_evidence`, set a one-line `summary`, and request transition. The lead must review the evidence and accept/reject. Block if it failed.",
     },
     {
       id: "done",

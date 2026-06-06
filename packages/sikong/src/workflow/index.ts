@@ -4,8 +4,9 @@
  */
 export type {
   AcceptanceCheck,
-  AcceptanceVerdict,
-  AcceptanceVerdictDetail,
+  AcceptanceDecision,
+  AcceptanceEvidence,
+  AcceptanceEvidenceItem,
   Command,
   EventSource,
   FieldCmp,

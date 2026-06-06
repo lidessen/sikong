@@ -53,9 +53,9 @@ Files use a monotonic four-digit prefix:
 | [0021](0021-configurable-effort-level.md) | Accepted | Configurable, lead-decided effort level (generic RunInput.effort + per-stage/per-subtask resolution; default medium) |
 | [0022](0022-philosophy-driven-design-workflow.md) | Accepted | Philosophy-driven design workflow (frame → language → derive → assemble → review; design-language catalog) — supersedes 0017 |
 | [0023](0023-conductor-goal-loop.md) | Accepted | The Conductor — first-class goal/project-driven autonomous loop (read-only orchestrator + cron; spawns worker tasks, gates outward actions) |
-| [0024](0024-grounded-acceptance-gates.md) | Accepted | Grounded acceptance gates — completion verified by a grounded verifier worker (real checks) + strategic correction loop, not agent self-report |
+| [0024](0024-grounded-acceptance-gates.md) | Accepted | Grounded acceptance gates — worker submits evidence; lead reviews and records accepted/rejected; engine enforces the decision |
 | [0025](0025-phase-gated-development-lead-acceptance.md) | Accepted | Phase-gated development with per-phase lead acceptance (验收) — lead woken at each phase boundary to advance/adjust + configure the next phase |
 | [0026](0026-worker-sandbox-escalation.md) | Accepted | Worker sandbox + auto-mode privilege escalation (Claude Code model: sandbox-default + escalate-on-failure) so the worker can run the real toolchain and self-verify |
-| [0027](0027-lead-authored-task-acceptance.md) | Accepted | Lead-authored per-task acceptance checks (Task.acceptance + create_subtask/CLI; merged with stage acceptance at the gate) — a worker can't test around the spec |
+| [0027](0027-lead-authored-task-acceptance.md) | Accepted | Lead-authored per-task acceptance criteria (Task.acceptance + create_subtask/CLI) — worker evidence must address criteria the worker cannot redefine |
 | [0028](0028-target-aware-design-workflow.md) | Accepted | Target-aware design workflow — native/SwiftUI support (target field; assemble/review branch web-semajsx vs swiftui; tokens stay universal) |
 | [0029](0029-interactive-monitor-dashboard.md) | Accepted | Interactive monitor dashboard — semajsx hydration + live SSE (filter/sort/drill-down, in-place updates) replacing the SSR meta-refresh snapshot |

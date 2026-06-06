@@ -6,7 +6,6 @@ export {
   type WakeContext,
   type WorkflowEngineOptions,
 } from "./engine";
-export { evalAcceptanceCheck } from "./eval-acceptance";
 export {
   buildCommandTools,
   COMMAND_TOOL_NAMES,

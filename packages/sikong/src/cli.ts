@@ -7,7 +7,7 @@
  *
  *   create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>]   publish a task
  *   run [--task <id>]                                                 drive pending task(s) to done/quiet (exit 1 if any wake errored)
- *   submit <id> <set-field <f> <v> | transition [reason] | cancel [reason] | block <reason> | unblock>
+ *   submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | cancel [reason] | block <reason> | unblock>
  *   register <workflow.yaml>                                          register a workflow definition
  *   overview [--project <id>] [--json]                                  human workspace dashboard
  *   status [--project <id>] [--text] | task <id> [--text] | chronicle [--task <id>] [-n N] [--text]
@@ -36,7 +36,7 @@ import { parseDataFile } from "./config-file";
 import { isValidProjectId, type Project } from "./project";
 import { discoverWorkers, discoveredRoster, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
 import type { WorkerPermissionMode } from "./worker";
-import type { AcceptanceCheck, Command } from "./workflow";
+import type { AcceptanceCheck, AcceptanceEvidence, Command } from "./workflow";
 import { resolveWorkspaceDir } from "./workspace-layout";
 
 const VALUE_FLAGS = new Set([
@@ -208,8 +208,31 @@ function parseLeadCommand(op: string, rest: string[]): Command {
       return { kind: "request_transition", ...(rest.length ? { reason: rest.join(" ") } : {}) };
     case "unblock":
       return { kind: "unblock" };
+    case "accept": {
+      const reason = rest.join(" ");
+      if (!reason) throw new Error("accept needs <reason>");
+      return { kind: "acceptance_decision", decision: "accepted", reason };
+    }
+    case "reject": {
+      const reason = rest.join(" ");
+      if (!reason) throw new Error("reject needs <reason>");
+      return { kind: "acceptance_decision", decision: "rejected", reason };
+    }
+    case "evidence": {
+      const raw = rest.join(" ");
+      if (!raw) throw new Error("evidence needs <json>");
+      let evidence: unknown;
+      try {
+        evidence = JSON.parse(raw);
+      } catch {
+        throw new Error("evidence must be a JSON object");
+      }
+      if (!evidence || typeof evidence !== "object" || Array.isArray(evidence))
+        throw new Error("evidence must be a JSON object");
+      return { kind: "submit_evidence", evidence: evidence as AcceptanceEvidence };
+    }
     default:
-      throw new Error(`unknown submit op "${op}" (set-field | transition | cancel | block | unblock)`);
+      throw new Error(`unknown submit op "${op}" (set-field | transition | evidence | accept | reject | cancel | block | unblock)`);
   }
 }
 
@@ -499,7 +522,7 @@ switch (cmd) {
   case "submit": {
     const id = positional[1];
     const op = positional[2];
-    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | transition [reason] | cancel [reason] | block <reason> | unblock>");
+    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | cancel [reason] | block <reason> | unblock>");
     const ws = await openWorkspace(dir);
     let command: Command;
     try {
@@ -784,7 +807,7 @@ switch (cmd) {
         "  release <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--ref <ref>]\n" +
         "                                                               shorthand for --workflow release; --ref pre-fills the releaseRef field\n" +
         "  run [--task <id>]\n" +
-        "  submit <id> <set-field <f> <v> | transition [reason] | cancel [reason] | block <reason> | unblock>\n" +
+        "  submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | cancel [reason] | block <reason> | unblock>\n" +
         "  register <workflow.yaml>\n" +
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
         "  project memory <id> [markdown]\n" +

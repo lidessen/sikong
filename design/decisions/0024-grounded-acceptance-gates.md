@@ -1,130 +1,113 @@
-# 0024 — Grounded acceptance gates: completion is verified, not self-reported
+# 0024 - Grounded acceptance gates: worker submits evidence, lead decides
 
-Status: Accepted
+Status: Accepted (revised 2026-06-06)
 Date: 2026-06-05
 
-## Context — what the dogfood proved
+## Context - what the dogfood proved
 
-A single hard task (the chiling operator console) failed ~6 ways across this
-session, and so did smaller ones in subtler forms. The symptoms all trace to **one
-mechanism flaw**, not to model weakness:
+A single hard task (the chiling operator console) failed repeatedly, and smaller
+tasks showed the same pattern in subtler forms:
 
-- A worker did ~10 edits, called `request_transition`, and the engine advanced
-  `build → verify` — even though the requirement was nowhere near met (the
-  build→verify guard only checks `changedFiles exists + transition.requested`).
-- Workers repeatedly produced the easy part and **dropped the hard part**; nothing
-  in the mechanism *failed* them for an unmet requirement.
-- A task reported a `build.sh` "✅ analyzed" that **did not exist on disk**; another
-  marked the work "verified" by **static review because the worker sandbox couldn't
-  run the build** — and the build was in fact broken.
-- The flaky-suite, the shallow tests (ADR 0015), the "green-but-wrong" outputs:
-  same root.
+- A worker requested a transition even though the requirement was not met.
+- Workers did the easy part, dropped the hard part, and still wrote convincing
+  completion prose.
+- Verification claims were sometimes static review or fabricated evidence rather
+  than commands that actually ran.
+- Generic green tests did not prove that the requested behavior was implemented.
 
-**Root cause: in sikong, completion is *self-reported*.** A stage advances on
-field-*presence* plus a transition the agent itself requests; `done` trusts the
-agent's prose `verification` field. The agent can advance/complete without the
-requirement being satisfied, without the build/tests actually passing, and even
-while *fabricating* the evidence — especially when its sandbox can't run the
-toolchain. ADR 0016 called a trustworthy gate "the linchpin"; this ADR makes it
-real, because today it is prose.
+The root cause is not only that completion was self-reported. It is that sikong
+had no explicit acceptance handoff between the worker who did the work and the
+lead who owns whether the work is good enough.
+
+The previous design tried to solve this with an engine/verifier worker that ran
+machine checks and generated a verdict/correction loop. Dogfood made that feel
+too heavy for the current product shape. The simpler, more durable boundary is:
+the worker submits evidence; the lead reviews it and records the acceptance
+decision.
 
 ## Decision
 
-Make completion **grounded in machine-checked acceptance criteria executed by the
-engine**, not by the worker's narration.
+Completion gates are grounded in explicit evidence plus an explicit lead decision.
+The engine records and enforces the decision; it does not independently judge the
+work.
 
-### 1. Acceptance criteria as data
-A task/stage carries explicit, machine-checkable **acceptance checks** — authored
-with the task (by the lead/brief), e.g.:
-- a command that must exit 0 (`swift build`, `go test ./...`, the real-user smoke);
-- a file that must exist; a `grep` that must match (or must NOT match — e.g. no
-  `TODO`, no "run \`...\`" command-hints);
-- a project gate (typecheck+test).
-These are structured (`{ kind, cmd|path|pattern, expect }`), not prose.
+### 1. Acceptance expectations as data
 
-### 2. A grounded VERIFIER WORKER runs the gate (owner-decided)
-A dedicated **verifier worker** (separate from the implementing worker) sits at the
-stage/`done` boundary. Crucially it is **grounded**: it must *execute* the
-acceptance checks (run `swift build`, `go test`, the greps, the real-user smoke)
-and base its verdict on the **real exit codes + output**, NOT on a static reading
-of the diff. (A verifier that only reads code is the same fabrication trap we are
-fixing — an agent rubber-stamping. So the verifier has toolchain access / runs
-where the build works, and its verdict cites captured command evidence.) The
-implementing worker's `request_transition` is a *request*; the gate is granted only
-by the verifier's grounded PASS. The verifier outputs: **verdict (pass/fail) +
-actionable suggestions** (what's missing and how to fix it) — not just a boolean.
+A task/stage can carry structured `AcceptanceCheck[]` expectations authored by
+the workflow, lead, client, or delegating parent. These are review criteria, not
+engine-executed code:
 
-### 3. Correction loop (纠偏) with a STRATEGIC LEAD, not a blind retry
-On a FAIL, the verifier's suggestions + failing checks go to a **lead/strategic
-layer** (the conductor/lead, ADR 0023) — not straight back into the same build.
-Critically, the lead does not just re-run the same approach; it **adjusts strategy**
-(owner-decided), exactly as a human lead would when stuck:
-- **diagnose** *why* it's failing (root cause, from the grounded evidence);
-- **research (查资料)** — look up the unfamiliar API/docs/examples the worker keeps
-  routing around (the lead has read + research tools, ADR 0023);
-- **adapt the approach** — re-decompose into smaller/precise pieces, hand a complete
-  code skeleton, switch model/effort (flash→pro), change technique, or change which
-  worker;
-- only then **re-delegate** with the new strategy.
-This is precisely what unstuck the operator console this session (solo → decompose →
-precise single-file pieces → research the chiling CLI → escalate the niche bits) —
-made mechanical instead of manual. A blind retry of a failing strategy just burns
-budget; strategic adjustment is what converges. After the corrected attempt, the
-work returns to the grounded verifier (§2). Bounds (owner-decided):
-- **Consecutive-fail circuit-breaker**: after N consecutive failed verifications,
-  stop — do not loop forever.
-- **Fixable-vs-abandon judgment**: the verifier also assesses whether the work is
-  *recoverable* or hopeless ("放弃治疗") and can recommend **bailing early** (before
-  N) — escalating to the lead/human rather than burning budget on a lost cause.
-  (This is exactly what was missing this session: 6 attempts with no mechanism to
-  say "this isn't converging — stop and escalate.")
-- Each iteration's verdict + evidence + suggestions land on the chronicle, so the
-  loop is observable and the abandon decision is auditable.
+- `command`: the command the worker should run and report, including exit code
+  and relevant output;
+- `fileExists`: the artifact/path the worker should cite;
+- `grep`: the pattern expectation the worker should address;
+- `projectGate`: shorthand for the project's standard verification evidence,
+  normally typecheck plus tests.
 
-### 4. Verification must be able to RUN
-A gate that can't execute the build/tests is theatre. The verifier environment
-(worker or the engine-side gate) must have the project toolchain + permissions, or
-the gate must run outside the worker. Fabricated/static-only verification is the
-direct result of a verifier that can't execute — fix the *capability*, not just the
-prompt.
+The worker cannot mutate these expectations after task creation.
+
+### 2. Worker submits evidence
+
+At an acceptance-bearing stage, the worker uses `submit_evidence` to record a
+structured evidence bundle:
+
+- a concise summary;
+- command evidence with command, exit code, output, and pass/fail claim;
+- changed files and artifact paths where useful.
+
+The worker may still request a transition, but evidence plus a transition request
+does not complete the gate. It only tells the lead: "this is ready for review."
+
+### 3. Lead accepts or rejects
+
+Only the lead/engine source can record `acceptance_decision`:
+
+- `accepted` records `acceptance.accepted`;
+- `rejected` records `acceptance.rejected`.
+
+The `acceptancePassed` guard is true only after the latest decision in the
+current stage is `accepted`. A worker cannot accept its own work. A rejection
+keeps the task open so the lead can re-wake, adjust instructions, decompose,
+escalate effort, or stop.
+
+### 4. Keep the loop simple
+
+There is no separate automatic verifier worker, no engine-side verdict event, and
+no built-in correction loop. Those may be added later if lead review becomes the
+bottleneck, but they are not part of this decision.
+
+For now, sikong keeps the authority boundary clear:
+
+- worker: do the work and submit evidence;
+- lead: review evidence against the brief and decide pass/fail;
+- engine: persist the events and enforce that `done` requires lead acceptance.
 
 ## Why this is the high-leverage fix
-- It is the **structural version of ADR 0015's intent** (which tried to induce real
-  tests via the *prompt* — and was bypassed three times). Prompts ask; gates enforce.
-- It makes ADR 0016's self-iteration **safe** — the promotion gate becomes real.
-- It directly stops the whole observed failure class: premature transitions, dropped
-  hard parts, fabricated/green-but-wrong completion.
-- It is **substrate-agnostic**: the acceptance checks (build passes, file exists,
-  pattern present) catch "operator console not actually implemented" the same way
-  they catch a failing test.
+
+- It directly removes self-acceptance while keeping the mechanism small.
+- It turns vague completion prose into reviewable evidence.
+- It keeps subjective/product judgment with the lead instead of pretending all
+  acceptance can be reduced to machine checks.
+- It still supports deterministic project checks, but as evidence for review
+  rather than an automatic verdict.
 
 ## Relationship to other ADRs
-- Strengthens **0015** (verify stage) from prompt-induced to mechanism-enforced.
-- Makes **0016**'s "trustworthy gate" concrete (it is currently the open risk).
-- Composes with decomposition (a too-big task whose checks never pass signals it
-  must be split) and with stage-aware wake timeouts (separate, related fix).
 
-## Resolved (owner-decided 2026-06-05)
-- **Gate runtime** → a **grounded verifier worker** (runs the real checks, with
-  toolchain access; verdict cites executed evidence — never static-only).
-- **On fail** → verifier suggestions drive a **correction (纠偏) loop**; a
-  **consecutive-fail circuit-breaker** stops it; the verifier judges
-  **fixable-vs-abandon** and can bail early to the lead/human.
-
-## Still open (settle at build time)
-1. **Who authors the checks** — the lead/brief (explicit) and/or a derive step that
-   proposes them from the requirement? (Lean: brief-authored + workflow defaults
-   like "project typecheck+test must pass".)
-2. **Check vocabulary** — start minimal (exit-0 command, file-exists, grep
-   match/absent, project-gate) and grow.
-3. **N** for the consecutive-fail breaker + per-task token budget.
-4. **Verifier toolchain access** — how the verifier worker gets a real build
-   environment (the implementing worker's sandbox demonstrably can't build).
+- Strengthens **0015** by requiring adversarial verification evidence before lead
+  acceptance.
+- Makes **0016** safer because promotion still needs explicit lead approval.
+- Aligns with **0025** phase gates: each phase boundary can ask the lead to accept
+  or reject the evidence before moving on.
+- Refines **0027**: task-level acceptance checks are lead-authored review
+  criteria, not engine-run verifier inputs.
 
 ## Consequences
-- Completion means *the criteria actually pass*, with real captured evidence — not
-  the agent's word. This is the change that makes sikong trustworthy enough to run
-  hard tasks (and to run unattended via the Conductor, ADR 0023).
-- Implementation is itself a sikong-self task (sikong fixes sikong) — the lead
-  diagnoses (this ADR); sikong's workers build it, gated by… the very mechanism it
-  adds, once bootstrapped.
+
+- Completion means the lead accepted the submitted evidence, not that the worker
+  claimed success.
+- The current CLI/API surface needs commands for evidence submission and lead
+  decisions.
+- If the lead wants extra certainty, they can run commands themselves or require
+  richer evidence before accepting.
+- The abandoned automatic verifier/correction-loop design remains a future
+  option, but it is no longer the accepted default.

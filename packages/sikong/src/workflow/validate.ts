@@ -107,14 +107,14 @@ export function validateWorkflow(def: WorkflowDef, opts: ValidateOptions = {}): 
   }
 
   // Cross-stage: a stage with `acceptancePassed` in its entry requires the
-  // PREVIOUS stage to have acceptance checks defined.
+  // PREVIOUS stage to define acceptance criteria for lead review.
   def.stages.forEach((stage, idx) => {
     if (idx > 0 && guardContainsAcceptancePassed(stage.entry)) {
       const prev = def.stages[idx - 1];
       if (!prev || !prev.acceptance?.length)
         push(
           "missing-acceptance-checks",
-          `stage "${stage.id}" uses acceptancePassed guard but preceding stage "${prev?.id ?? "(none)"}" has no acceptance checks`,
+          `stage "${stage.id}" uses acceptancePassed guard but preceding stage "${prev?.id ?? "(none)"}" has no acceptance criteria`,
           { stageId: stage.id },
         );
     }

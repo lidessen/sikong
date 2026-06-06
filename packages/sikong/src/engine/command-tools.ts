@@ -6,6 +6,7 @@ export const COMMAND_TOOL_NAMES = [
   "set_field",
   "request_transition",
   "append_note",
+  "submit_evidence",
   "block",
   "cancel",
   "create_subtask",
@@ -79,6 +80,69 @@ export function buildCommandTools(
         additionalProperties: false,
       },
       execute: (args) => push({ kind: "append_note", text: String(args.text) }),
+    });
+
+  if (on("submit_evidence"))
+    tools.submit_evidence = defineTool({
+      description:
+        "Submit structured evidence for lead review. This records facts; it does not accept the work. A lead must review and accept/reject separately.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          summary: { type: "string", description: "Short summary of the evidence and result." },
+          checks: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                command: { type: "string" },
+                exitCode: { type: "number" },
+                output: { type: "string" },
+                path: { type: "string" },
+                passed: { type: "boolean" },
+              },
+              required: ["label"],
+              additionalProperties: false,
+            },
+          },
+          changedFiles: {
+            type: "array",
+            items: { type: "string" },
+          },
+          artifacts: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["summary"],
+        additionalProperties: false,
+      },
+      execute: (args) =>
+        push({
+          kind: "submit_evidence",
+          evidence: {
+            summary: String(args.summary),
+            ...(Array.isArray(args.checks)
+              ? {
+                  checks: args.checks
+                    .filter((check): check is Record<string, unknown> =>
+                      typeof check === "object" && check !== null && !Array.isArray(check),
+                    )
+                    .map((check) => ({
+                      label: String(check.label ?? ""),
+                      ...(typeof check.command === "string" ? { command: check.command } : {}),
+                      ...(typeof check.exitCode === "number" ? { exitCode: check.exitCode } : {}),
+                      ...(typeof check.output === "string" ? { output: check.output } : {}),
+                      ...(typeof check.path === "string" ? { path: check.path } : {}),
+                      ...(typeof check.passed === "boolean" ? { passed: check.passed } : {}),
+                    })),
+                }
+              : {}),
+            ...(Array.isArray(args.changedFiles) ? { changedFiles: args.changedFiles.map(String) } : {}),
+            ...(Array.isArray(args.artifacts) ? { artifacts: args.artifacts.map(String) } : {}),
+          },
+        }),
     });
 
   if (on("block"))

@@ -34,7 +34,7 @@ export type FieldCmp = "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "exist
 
 /**
  * A declarative, serializable predicate over a task's fields + the events in
- * its current stage (+ its children's statuses + acceptance state). Evaluated
+ * its current stage (+ its children's statuses + lead acceptance state). Evaluated
  * by the engine, never by an LLM — that is what keeps stage transitions
  * deterministic and auditable, and what makes agent-authored workflows safe
  * (no code injection).
@@ -54,29 +54,27 @@ export type Guard =
 /** Coarse Kanban category over fully-custom stages. `Task.status` derives from it. */
 export type StageCategory = "todo" | "in_progress" | "done";
 
-// ---- Acceptance gates (ADR 0024) ------------------------------------------
+// ---- Acceptance review (ADR 0024 revised) ---------------------------------
 
 /**
- * A structured, machine-checkable acceptance criterion for a stage. The verifier
- * worker (a grounded executor, not the implementing worker) executes these checks
- * and reports a verdict before the stage transition is admitted.
- *
- * Expand the union to add more check kinds as needed.
+ * A structured acceptance expectation authored by the lead/workflow. These are
+ * requirements a worker must address with evidence; the engine records them but
+ * does not execute or judge them. Lead review decides pass/fail.
  */
 export type AcceptanceCheck =
   | {
       kind: "command";
-      /** Human-readable description of what this checks. */
+      /** Human-readable description of what evidence is expected. */
       description: string;
-      /** Shell command to run. Must exit 0 (or `expectExit`) to pass. */
+      /** Command the worker should run and report as evidence. */
       cmd: string;
-      /** Expected exit code; defaults to 0. */
+      /** Expected exit code; defaults to 0 when omitted. */
       expectExit?: number;
     }
   | {
       kind: "fileExists";
       description: string;
-      /** Path to the file that must exist. */
+      /** Path the worker/lead should verify exists. */
       path: string;
     }
   | {
@@ -92,23 +90,34 @@ export type AcceptanceCheck =
   | {
       kind: "projectGate";
       description: string;
-      // Shorthand for the project's standard verification (typecheck + test).
-      // Expanded to concrete commands at runtime by the verifier.
+      // Shorthand for the project's standard verification evidence
+      // (normally typecheck + test), submitted by the worker and reviewed by lead.
     };
 
-/** Per-check result from a single acceptance-verification run. */
-export interface AcceptanceVerdictDetail {
-  /** The `description` of the check this result corresponds to. */
-  checkDescription: string;
-  passed: boolean;
-  /** Evidence captured during execution (stdout, file listing, etc.). */
-  evidence: string;
-  /** Actionable suggestion when the check failed. */
-  suggestion?: string;
+/** One concrete piece of worker-submitted evidence for lead review. */
+export interface AcceptanceEvidenceItem {
+  label: string;
+  /** Command that was run, when this evidence came from a command. */
+  command?: string;
+  /** Process exit code, when applicable. */
+  exitCode?: number;
+  /** Short captured output or a pointer to where the full output is stored. */
+  output?: string;
+  /** File/artifact path relevant to the evidence. */
+  path?: string;
+  /** Worker-local pass/fail claim for this evidence item; lead still decides. */
+  passed?: boolean;
 }
 
-/** The four verdicts a verifier can return. */
-export type AcceptanceVerdict = "passed" | "failed" | "abandon";
+/** Evidence bundle submitted by a worker before a lead accepts/rejects. */
+export interface AcceptanceEvidence {
+  summary: string;
+  checks?: readonly AcceptanceEvidenceItem[];
+  changedFiles?: readonly string[];
+  artifacts?: readonly string[];
+}
+
+export type AcceptanceDecision = "accepted" | "rejected";
 
 export interface StageDef {
   id: string;
@@ -136,10 +145,9 @@ export interface StageDef {
    */
   effort?: "low" | "medium" | "high" | "max";
   /**
-   * Acceptance checks (ADR 0024) that must pass before the task can leave this
-   * stage. The engine runs a grounded verifier worker to execute these checks;
-   * the next stage's entry guard should include `{ op: "acceptancePassed" }` to
-   * gate on the verdict. When unset or empty, no acceptance requirement applies.
+   * Acceptance expectations (ADR 0024 revised). The worker submits structured
+   * evidence against these checks; the lead reviews that evidence and records an
+   * accept/reject decision. The engine does not execute these checks itself.
    */
   acceptance?: readonly AcceptanceCheck[];
 }
@@ -205,8 +213,8 @@ export interface Task {
   depth: number;
   /**
    * Lead-authored per-task acceptance checks (ADR 0027). Immutable by the worker;
-   * merged with the stage's static acceptance at gate stages. No command mutates
-   * this field — set only at creation, passed via create_subtask for delegation.
+   * worker evidence must address them before lead review. No command mutates this
+   * field — set only at creation, passed via create_subtask for delegation.
    */
   acceptance?: readonly AcceptanceCheck[];
   /** `seq` of the last event folded into this projection. */
@@ -230,7 +238,9 @@ export type TaskEventType =
   | "task.unblocked"
   | "cancellation.requested"
   | "task.cancelled"
-  | "acceptance.verdict";
+  | "acceptance.evidence"
+  | "acceptance.accepted"
+  | "acceptance.rejected";
 
 export interface TaskEvent {
   /** Monotonic per task, starting at 1. Assigned by the EventStore on append. */
@@ -281,7 +291,7 @@ export type Command =
       effort?: "low" | "medium" | "high" | "max";
       /**
        * Lead-authored acceptance checks for this subtask (ADR 0027). Immutable by
-       * the child worker; merged with the stage's static acceptance at gate stages.
+       * the child worker; evidence must address them before lead review.
        */
       acceptance?: readonly AcceptanceCheck[];
     }
@@ -289,13 +299,13 @@ export type Command =
   | { kind: "unblock" }
   | { kind: "cancel"; reason?: string }
   | {
-      kind: "acceptance_verdict";
-      /** Overall verdict from the verifier. */
-      verdict: AcceptanceVerdict;
-      /** Per-check results from the verification run. */
-      details: AcceptanceVerdictDetail[];
-      /** Optional prose summary of the verification outcome. */
-      summary?: string;
+      kind: "submit_evidence";
+      evidence: AcceptanceEvidence;
+    }
+  | {
+      kind: "acceptance_decision";
+      decision: AcceptanceDecision;
+      reason: string;
     };
 
 /** Provenance applied to events a command/advance produces. */

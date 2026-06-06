@@ -127,16 +127,25 @@ export function apply(
           ? mk("task.cancelled", command.reason ? { reason: command.reason } : {})
           : mk("cancellation.requested", command.reason ? { reason: command.reason } : {}),
       ];
-    case "acceptance_verdict": {
-      const verdict = command.verdict;
-      if (verdict !== "passed" && verdict !== "failed" && verdict !== "abandon")
-        reject(`invalid acceptance verdict "${String(verdict)}"`);
-      const details = Array.isArray(command.details) ? command.details : [];
+    case "submit_evidence": {
+      if (!isValidAcceptanceEvidence(command.evidence))
+        reject("submit_evidence requires evidence with a non-empty summary");
       return [
-        mk("acceptance.verdict", {
-          verdict,
-          details,
-          ...(command.summary ? { summary: command.summary } : {}),
+        mk("acceptance.evidence", {
+          evidence: command.evidence,
+        }),
+      ];
+    }
+    case "acceptance_decision": {
+      if (source !== "lead" && source !== "engine")
+        reject("acceptance_decision is lead/engine-only");
+      if (command.decision !== "accepted" && command.decision !== "rejected")
+        reject(`invalid acceptance decision "${String(command.decision)}"`);
+      if (!command.reason.trim())
+        reject("acceptance_decision requires a non-empty reason");
+      return [
+        mk(command.decision === "accepted" ? "acceptance.accepted" : "acceptance.rejected", {
+          reason: command.reason,
         }),
       ];
     }
@@ -279,7 +288,9 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     case "transition.requested":
     case "note.appended":
     case "cancellation.requested":
-    case "acceptance.verdict":
+    case "acceptance.evidence":
+    case "acceptance.accepted":
+    case "acceptance.rejected":
       break; // signal / audit only — no projection change
   }
 
@@ -359,30 +370,25 @@ function eventTypesInCurrentStage(events: readonly EventLike[]): ReadonlySet<str
 }
 
 /**
- * Derive the acceptance-verification status (ADR 0024) for the current stage by
- * scanning events. Returns `"none"` when the stage has no acceptance checks,
- * `"pending"` when checks are defined but no verdict has been recorded yet, and
- * the verdict value (`"passed"`/`"failed"`/`"abandon"`) when one exists. Only
- * looks within the current stage boundary — a verdict from a prior stage is
- * irrelevant.
+ * Derive the lead acceptance-review status for the current stage by scanning
+ * events. Evidence makes the status pending; a lead accepted/rejected event is
+ * the only decision. Only looks within the current stage boundary, so a prior
+ * stage's review never admits the next stage.
  */
 export function deriveAcceptanceStatus(
-  stage: StageDef | undefined,
+  _stage: StageDef | undefined,
   events: readonly EventLike[],
 ): AcceptanceStatus {
-  if (!stage?.acceptance?.length) return "none";
-
-  // Scan backwards so the latest verdict wins. Stop at stage boundaries.
+  // Scan backwards so the latest lead decision wins. Stop at stage boundaries.
+  let sawEvidence = false;
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev?.type === "acceptance.verdict") {
-      const v = ev.payload.verdict;
-      if (v === "passed" || v === "failed" || v === "abandon") return v;
-    }
-    // Only stage boundaries reset acceptance — unblock changes nothing.
+    if (ev?.type === "acceptance.accepted") return "accepted";
+    if (ev?.type === "acceptance.rejected") return "rejected";
+    if (ev?.type === "acceptance.evidence") sawEvidence = true;
     if (ev?.type === "stage.entered" || ev?.type === "task.created") break;
   }
-  return "pending";
+  return sawEvidence ? "pending" : "none";
 }
 
 // ---- create + small helpers -----------------------------------------------
@@ -472,6 +478,11 @@ function isValidFieldValue(def: FieldDef, value: unknown): boolean {
     case "json":
       return true;
   }
+}
+
+function isValidAcceptanceEvidence(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.summary === "string" && value.summary.trim().length > 0;
 }
 
 function asString(v: unknown): string {
