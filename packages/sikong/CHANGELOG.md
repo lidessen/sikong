@@ -3,6 +3,19 @@
 All notable changes to `sikong` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- **Adaptive wake timeout from deterministic work units** (ADR 0030). The fixed
+  90s default wake timeout is replaced with a per-wake budget computed from
+  visible work units: agent turn base, prompt size, output fields, tool surface,
+  acceptance checks, and child-team size — each scaled by the resolved effort
+  multiplier, clamped to [120s, 1200s]. The chronicle records the budget and its
+  component breakdown per wake so operators can inspect why a wake was given that
+  timeout. `--wake-timeout <seconds>` remains an explicit override for tests and
+  emergency bounds.
+
 ## 0.1.7 — 2026-06-04
 
 ### Fixed

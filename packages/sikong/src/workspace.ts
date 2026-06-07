@@ -275,7 +275,7 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     // Default depth cap of 2 (lead + workers) bounds all fan-out, including
     // design, release, and user-registered workflows without explicit maxTeamDepth.
     maxTeamDepth: 2,
-    wakeTimeoutMs: opts.wakeTimeoutMs ?? 90_000,
+    ...(opts.wakeTimeoutMs !== undefined ? { wakeTimeoutMs: opts.wakeTimeoutMs } : {}),
   });
   return { engine, events, projections, chronicle, registry, projects, workers };
 }

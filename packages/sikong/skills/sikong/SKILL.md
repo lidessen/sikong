@@ -99,8 +99,10 @@ Agent-facing read commands default to JSON; add `--text` for human output.
 6. **One `sikong run` at a time per workspace** (single-writer). Serialize your
    runs; concurrent runs race the write lock.
 
-7. **Raise `--wake-timeout` for heavy real builds** (native compiles, big test
-   suites, max-effort design). The default is tuned for light wakes.
+7. **Let adaptive wake timeout run unless you need an explicit cap.** Default
+   `sikong run` computes a per-wake budget from deterministic work units
+   (stage outputs, tools, acceptance checks, team size, effort). Use
+   `--wake-timeout` only as an override for tests, smokes, or emergency bounds.
 
 8. **Set effort per stage/subtask** (`low`/`medium`/`high`/`max`). Dial up for
    design/hard reasoning, down for rote build/verify. Default is medium with

@@ -823,10 +823,17 @@ describe("WorkflowEngine wake cycle", () => {
     });
     await engine.createTask({ projectId: "p", taskId: "c1" });
     await engine.idle();
-    const types = (await chronicle.recent({ taskId: "c1", limit: 50 })).map((e) => e.type);
+    const entries = await chronicle.recent({ taskId: "c1", limit: 50 });
+    const types = entries.map((e) => e.type);
     expect(types).toEqual(
       expect.arrayContaining(["task.created", "wake.start", "task.advanced", "task.terminal", "wake.end"]),
     );
+    const wakeStart = entries.find((entry) => entry.type === "wake.start");
+    expect(wakeStart?.summary).toMatch(/timeout=\d+s/);
+    expect(wakeStart?.data).toMatchObject({
+      effort: "medium",
+      components: expect.arrayContaining([expect.objectContaining({ name: "agentTurn" })]),
+    });
   });
 
   test("the chronicle records wake progress tool events before wake end", async () => {

@@ -96,11 +96,67 @@ Record only Sikong-relevant findings in this repository: orchestration failures,
 worker/tooling friction, verification gaps, cost issues, acceptance decisions, and
 release/version lessons.
 
+## Dogfood discovery workflow
+
+Do not turn every dogfood finding directly into a Sikong task. Findings are
+issue-like observations first; tasks are only for work the lead has accepted for
+execution.
+
+Use Shilu as the dogfood discovery and memory layer:
+
+- record each finding as a Shilu entry as soon as it is observed;
+- include the source project, task id or command, evidence, impact, suspected
+  owner, severity, and whether it is a one-off or repeated signal;
+- keep the entry lightweight and reviewable; do not solve the issue inside the
+  note unless the user explicitly asks for an immediate fix;
+- periodically review Shilu entries and promote accepted items into Sikong tasks,
+  ADRs, tests, or release work;
+- keep Sikong tasks for committed execution, not raw observation capture.
+
+The intended split is:
+
+- **Shilu** records observations, issue-like findings, method feedback, backlog
+  candidates, and cross-project memory.
+- **Sikong** coordinates accepted work: design, implementation, verification,
+  acceptance, local-stable promotion, and release.
+
+When both are being dogfooded, record Shilu mechanism gaps in Shilu first as
+well. Only create a Sikong task after the lead accepts the finding as work to do.
+
+## Dogfood run supervision
+
+Do not stop a Sikong dogfood run just because it is taking time. Long-running
+work is normal when the task has real design, implementation, verification, or
+delegation work to do.
+
+Before intervening, inspect the task and chronicle. Continue waiting when the
+run shows healthy signals: recent tool activity, state commands, stage
+transitions, child task creation, evidence submission, or an in-progress worker
+performing expected verification. A timeout or cancelled worker pass is not by
+itself a failure if the task state advanced or the chronicle shows useful work.
+
+Intervene only when there is an actual abnormal signal: process failure,
+repeated identical no-progress wakes, missing required evidence, invalid state
+transition, blocked status, tool/auth/environment error, runaway cost, or a
+worker trying to complete without reviewable evidence. In those cases, record
+the evidence in Shilu first, then decide whether the lead should accept it as a
+Sikong task, test, ADR, or release blocker.
+
 ## Work logs
 
 Human-readable work continuity lives in `development-log/YYYY-MM.md`. The
 chronicle and `.sikong/` state are useful evidence, but they are not a substitute
 for a durable project work log.
+
+Development logs stay in the repository that owns the work. They are the
+repo-local audit trail: what changed, why it changed, what was verified, what was
+accepted, and what follow-up remains. They should version with the code.
+
+Shilu does not replace development logs. Shilu is the digest, index, memory, and
+backlog layer over those logs and over dogfood observations. Promote reusable
+lessons, repeated failures, issue-like findings, release/promotion experience,
+and cross-project context into Shilu so they can be searched and reviewed across
+projects.
 
 Update the log after meaningful Sikong work, especially after dogfood runs,
 behavior changes, release preparation, or repeated failures. Keep entries compact
@@ -119,11 +175,19 @@ that project has one, or create `development-log/YYYY-MM.md` there if the work i
 substantial and the user has not provided another durable log location. In
 Sikong's log, add only the summary needed to preserve Sikong's own continuity and
 link it to the dogfood task id, target project, commit, or release candidate.
+Then add or update Shilu entries only for the distilled knowledge that should
+survive outside that single repository.
 
 ## Dogfood strategy
 
 Sikong is developed by using Sikong, but dogfood is a gate for behavior changes,
 not a ritual for every edit.
+
+For Sikong's own mechanism, workflow, scheduling, release, acceptance, or
+worker-boundary changes, create or reuse a Sikong task before treating the work as
+complete. Manual drafting is allowed, but the change should be handed to Sikong
+for a durable task trail: design/plan/build/verify fields, chronicle evidence,
+worker-submitted evidence, and final lead review.
 
 Dogfood before treating changes as stable when they affect workflow behavior,
 worker selection, verification, release, monitoring, task state, acceptance,

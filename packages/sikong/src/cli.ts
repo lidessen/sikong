@@ -504,7 +504,7 @@ switch (cmd) {
   }
   case "run": {
     const errors: string[] = [];
-    const wakeTimeoutFlag = flag("--wake-timeout"); // seconds; raise it for heavy real builds
+    const wakeTimeoutFlag = flag("--wake-timeout"); // seconds; explicit override for adaptive wake timeout
     const ws = await openWorkspace(dir, {
       hooks: { onError: ({ taskId, error }) => errors.push(`${taskId}: ${error.message}`) },
       ...(wakeTimeoutFlag ? { wakeTimeoutMs: Math.max(1, Number(wakeTimeoutFlag)) * 1000 } : {}),

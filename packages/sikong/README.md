@@ -18,7 +18,8 @@ The CLI provides a headless workflow engine with:
 - workflow definitions with staged state machines and schema-validated fields
 - append-only JSONL event storage plus projections and chronicle inspection
 - project/worktree isolation and worker permission modes
-- wake execution over `agent-loop` workers, including AI SDK project tools
+- wake execution over `agent-loop` workers, with adaptive per-wake timeouts and
+  AI SDK project tools
 - a Bun CLI for creating tasks, waking workers, and inspecting state
 
 ## CLI
@@ -32,6 +33,8 @@ After install:
 
 ```sh
 sikong help
+sikong run --task <taskId>                         # adaptive wake timeout
+sikong run --task <taskId> --wake-timeout 300      # explicit override, seconds
 ```
 
 The default workspace home is `~/.sikong`. Override it with `SIKONG_HOME`.

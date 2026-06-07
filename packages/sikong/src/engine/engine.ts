@@ -37,6 +37,7 @@ import type {
   WorkflowRegistry,
 } from "../store/types";
 import type { Project } from "../project";
+import { estimateWakeTimeout, type WakeTimeoutEstimate } from "./adaptive-timeout";
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
 import { buildCommitSystem, buildPrompt, buildSystem, type TeamMember, type ToolCallFact } from "./prompt";
@@ -52,6 +53,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const DIAGNOSTIC_TEXT_LIMIT = 800;
 const TOOL_FACT_LIMIT = 40;
 const TOOL_PREVIEW_LIMIT = 600;
+const INTAKE_TIMEOUT_MS = 90_000;
 
 interface RunDiagnostics {
   phase: "worker" | "commit";
@@ -94,6 +96,17 @@ function compactPreview(text: string, limit = DIAGNOSTIC_TEXT_LIMIT): { preview?
     preview: compact.slice(0, limit),
     chars: text.length,
     truncated: compact.length > limit,
+  };
+}
+
+function timeoutData(timeout: WakeTimeoutEstimate): Record<string, unknown> {
+  return {
+    timeoutMs: timeout.timeoutMs,
+    rawMs: timeout.rawMs,
+    minMs: timeout.minMs,
+    maxMs: timeout.maxMs,
+    effort: timeout.effort,
+    components: timeout.components,
   };
 }
 
@@ -412,9 +425,11 @@ export interface WorkflowEngineOptions {
   /** Override id generation (default: a deterministic per-engine counter). */
   genId?: (kind: "task" | "wake") => string;
   /**
-   * Wall-clock cap per wake. A wake exceeding it is aborted/cancelled and
-   * reported as an errored run — so a wedged backend that ignores cancellation
-   * can never hang a task. Unset = no timeout (not recommended in production).
+   * Explicit wall-clock cap per wake. When unset, the engine computes an
+   * adaptive watchdog budget from the current wake's deterministic work units.
+   * A wake exceeding its budget is aborted/cancelled and reported as an errored
+   * run, so a wedged backend that ignores cancellation can never hang a task.
+   * Set 0 only for tests or emergency debugging where no timeout is desired.
    */
   wakeTimeoutMs?: number;
   /** Max wakes per task per engine session (runaway backstop). Default 50. */
@@ -608,7 +623,7 @@ export class WorkflowEngine {
       tools,
       signal: controller.signal,
     });
-    const result = await this.boundedRun(run.result, () => {
+    const result = await this.boundedRun(run.result, this.o.wakeTimeoutMs ?? INTAKE_TIMEOUT_MS, () => {
       controller.abort();
       run.cancel("intake timeout");
     });
@@ -743,10 +758,10 @@ export class WorkflowEngine {
     // engine merges them with the command tools without knowing what they are.
     const workerTools = (await this.o.workerTools?.(ctx, loop)) ?? {};
     const workerToolNames = Object.keys(workerTools);
+    const commandToolNames = Object.keys(commandTools);
     const tools = { ...workerTools, ...commandTools };
     const workerHooks = (await this.o.workerHooks?.(ctx, loop)) ?? undefined;
     this.o.hooks?.onWakeStart?.({ taskId, wakeId, stageId: task.stageId });
-    await this.chron({ type: "wake.start", taskId, wakeId, summary: `wake @ "${task.stageId}"` });
 
     const aiSdkRuntimeOptions =
       loop.id === "ai-sdk"
@@ -759,6 +774,23 @@ export class WorkflowEngine {
     const team = await this.teamSnapshots(task);
     // Resolve effort per-wake: task override > stage default > workspace default.
     const effort: EffortLevel | undefined = (task.effort ?? stage?.effort ?? "medium") as EffortLevel | undefined;
+    const timeout = this.resolveWakeTimeout({
+      task,
+      workflow: wf,
+      stage,
+      workerToolNames,
+      commandToolNames,
+      team,
+      projectMemory: project?.memory,
+      effort,
+    });
+    await this.chron({
+      type: "wake.start",
+      taskId,
+      wakeId,
+      summary: `wake @ "${task.stageId}" — timeout=${Math.round(timeout.timeoutMs / 1000)}s`,
+      data: timeoutData(timeout),
+    });
     const run = loop.run({
       system: buildSystem(task, wf, stage, workerToolNames, project?.memory),
       prompt: buildPrompt(task, wf, stage, team),
@@ -784,7 +816,7 @@ export class WorkflowEngine {
       return runHandle.result;
     };
     const workerDiagnostics = createRunDiagnostics("worker");
-    let result = await this.boundedRun(consumeRun(run, workerDiagnostics), () => {
+    let result = await this.boundedRun(consumeRun(run, workerDiagnostics), timeout.timeoutMs, () => {
       controller.abort();
       run.cancel("wake timeout");
     });
@@ -934,7 +966,7 @@ export class WorkflowEngine {
       });
       if (pendingCommitStop) stopCommitRun(pendingCommitStop);
       const commitDiagnostics = createRunDiagnostics("commit");
-      result = await this.boundedRun(consumeRun(commitRun, commitDiagnostics), () => {
+      result = await this.boundedRun(consumeRun(commitRun, commitDiagnostics), timeout.timeoutMs, () => {
         commitController.abort();
         commitRun.cancel("wake commit timeout");
       });
@@ -1043,6 +1075,7 @@ export class WorkflowEngine {
         commands: commands.length,
         ...(advancedTo ? { advancedTo } : {}),
         ...(error ? { error: error.message } : {}),
+        timeout: timeoutData(timeout),
         usage: {
           inputTokens: wakeUsage.inputTokens,
           outputTokens: wakeUsage.outputTokens,
@@ -1144,7 +1177,25 @@ export class WorkflowEngine {
    * never hang the task (its run is abandoned). Also normalizes a rejected
    * consume into an errored result.
    */
-  private async boundedRun(consume: Promise<RunResult>, onTimeout: () => void): Promise<RunResult> {
+  private resolveWakeTimeout(input: Parameters<typeof estimateWakeTimeout>[0]): WakeTimeoutEstimate {
+    if (this.o.wakeTimeoutMs !== undefined) {
+      return {
+        timeoutMs: this.o.wakeTimeoutMs,
+        rawMs: this.o.wakeTimeoutMs,
+        minMs: this.o.wakeTimeoutMs,
+        maxMs: this.o.wakeTimeoutMs,
+        effort: input.effort ?? input.task.effort ?? input.stage?.effort ?? "medium",
+        components: [{ name: "explicitOverride", ms: this.o.wakeTimeoutMs }],
+      };
+    }
+    return estimateWakeTimeout(input);
+  }
+
+  private async boundedRun(
+    consume: Promise<RunResult>,
+    ms: number | undefined,
+    onTimeout: () => void,
+  ): Promise<RunResult> {
     const errored = (error: Error): RunResult => ({
       events: [],
       usage: emptyUsage(),
@@ -1154,7 +1205,6 @@ export class WorkflowEngine {
       text: "",
     });
     const safe = consume.catch((err) => errored(err instanceof Error ? err : new Error(String(err))));
-    const ms = this.o.wakeTimeoutMs;
     if (!ms) return safe;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<RunResult>((resolve) => {
