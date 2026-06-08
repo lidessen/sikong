@@ -7,11 +7,14 @@ import {
   type EffortLevel,
   type Hooks,
   type LoopEvent,
+  type RunHandle,
   type RunResult,
   type TokenUsage,
   type ToolSet,
 } from "agent-loop";
 import {
+  deriveAcceptanceStatus,
+  eventTypesInCurrentStage,
   filterValidFields,
   initTask,
   project,
@@ -40,7 +43,9 @@ import type { Project } from "../project";
 import { estimateWakeTimeout, type WakeTimeoutEstimate } from "./adaptive-timeout";
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
-import { buildCommitSystem, buildPrompt, buildSystem, type TeamMember, type ToolCallFact } from "./prompt";
+import { buildCommitSystem, buildPrompt, buildSystem, type ToolCallFact } from "./prompt";
+import type { SteerMailbox } from "./steer-mailbox";
+import type { TeamMember } from "./team-status";
 
 function isTerminal(status: TaskStatus): boolean {
   return status === "done" || status === "cancelled";
@@ -54,6 +59,7 @@ const DIAGNOSTIC_TEXT_LIMIT = 800;
 const TOOL_FACT_LIMIT = 40;
 const TOOL_PREVIEW_LIMIT = 600;
 const INTAKE_TIMEOUT_MS = 90_000;
+const STEER_POLL_MS = 1_000;
 
 interface RunDiagnostics {
   phase: "worker" | "commit";
@@ -420,6 +426,8 @@ export interface WorkflowEngineOptions {
   hooks?: EngineHooks;
   /** Optional durable observability log of engine/wake activity (read by the CLI). */
   chronicle?: ChronicleStore;
+  /** Optional cross-process mailbox for lead steer messages while a wake is running. */
+  steerMailbox?: SteerMailbox;
   /** Optional project store: when wired, createTask validates the project exists. */
   projects?: ProjectStore;
   /** Override id generation (default: a deterministic per-engine counter). */
@@ -556,10 +564,10 @@ export class WorkflowEngine {
     const events = reduceCommands(task, wf, [command], { source });
     if (events.length) {
       await this.o.events.append(taskId, events);
-      await this.persist(taskId, wf);
+      if (command.kind !== "steer") await this.persist(taskId, wf);
     }
     // The CLI persists with schedule:false and drives wakes separately via `run`.
-    if (opts.schedule !== false) this.schedule(taskId);
+    if (command.kind !== "steer" && opts.schedule !== false) this.schedule(taskId);
   }
 
   /** Drive pending (non-terminal, unblocked) tasks to quiescence — the CLI `run`. */
@@ -772,6 +780,12 @@ export class WorkflowEngine {
           }
         : undefined;
     const team = await this.teamSnapshots(task);
+    const taskEventsForPrompt = await this.o.events.load(task.id);
+    const steerFromSeq = taskEventsForPrompt.at(-1)?.seq ?? 0;
+    const leadStatus = {
+      eventTypes: eventTypesInCurrentStage(taskEventsForPrompt),
+      acceptanceStatus: deriveAcceptanceStatus(stage, taskEventsForPrompt),
+    };
     // Resolve effort per-wake: task override > stage default > workspace default.
     const effort: EffortLevel | undefined = (task.effort ?? stage?.effort ?? "medium") as EffortLevel | undefined;
     const timeout = this.resolveWakeTimeout({
@@ -784,6 +798,7 @@ export class WorkflowEngine {
       projectMemory: project?.memory,
       effort,
     });
+    const workerSteerStartedAt = Date.now();
     await this.chron({
       type: "wake.start",
       taskId,
@@ -793,7 +808,7 @@ export class WorkflowEngine {
     });
     const run = loop.run({
       system: buildSystem(task, wf, stage, workerToolNames, project?.memory),
-      prompt: buildPrompt(task, wf, stage, team),
+      prompt: buildPrompt(task, wf, stage, team, leadStatus),
       tools,
       signal: controller.signal,
       effort,
@@ -802,6 +817,7 @@ export class WorkflowEngine {
     });
     workerRun = run;
     if (pendingWorkerStop) stopWorkerRun(pendingWorkerStop);
+    const stopWorkerSteerPump = this.startSteerPump(taskId, wakeId, run, steerFromSeq, workerSteerStartedAt);
     const consumeRun = async (
       runHandle: ReturnType<AgentLoop["run"]>,
       diagnostics: RunDiagnostics,
@@ -816,10 +832,15 @@ export class WorkflowEngine {
       return runHandle.result;
     };
     const workerDiagnostics = createRunDiagnostics("worker");
-    let result = await this.boundedRun(consumeRun(run, workerDiagnostics), timeout.timeoutMs, () => {
-      controller.abort();
-      run.cancel("wake timeout");
-    });
+    let result: RunResult;
+    try {
+      result = await this.boundedRun(consumeRun(run, workerDiagnostics), timeout.timeoutMs, () => {
+        controller.abort();
+        run.cancel("wake timeout");
+      });
+    } finally {
+      stopWorkerSteerPump();
+    }
     let wakeUsage: TokenUsage = result.usage;
     let commands = drain();
     await this.chron({
@@ -930,6 +951,7 @@ export class WorkflowEngine {
         },
         execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
       });
+      const commitSteerStartedAt = Date.now();
       await this.chron({
         type: "wake.commit",
         taskId,
@@ -966,10 +988,22 @@ export class WorkflowEngine {
       });
       if (pendingCommitStop) stopCommitRun(pendingCommitStop);
       const commitDiagnostics = createRunDiagnostics("commit");
-      result = await this.boundedRun(consumeRun(commitRun, commitDiagnostics), timeout.timeoutMs, () => {
-        commitController.abort();
-        commitRun.cancel("wake commit timeout");
-      });
+      const commitEventsForSteer = await this.o.events.load(task.id);
+      const stopCommitSteerPump = this.startSteerPump(
+        taskId,
+        wakeId,
+        commitRun,
+        commitEventsForSteer.at(-1)?.seq ?? 0,
+        commitSteerStartedAt,
+      );
+      try {
+        result = await this.boundedRun(consumeRun(commitRun, commitDiagnostics), timeout.timeoutMs, () => {
+          commitController.abort();
+          commitRun.cancel("wake commit timeout");
+        });
+      } finally {
+        stopCommitSteerPump();
+      }
       wakeUsage = addUsage(wakeUsage, result.usage);
       commands = [...firstPassCommands, ...drain(), ...commitCommands];
       await this.chron({
@@ -1191,6 +1225,84 @@ export class WorkflowEngine {
     return estimateWakeTimeout(input);
   }
 
+  private startSteerPump(
+    taskId: string,
+    wakeId: string,
+    run: RunHandle,
+    fromSeq: number,
+    startedAt: number,
+  ): () => void {
+    let cursor = fromSeq;
+    let stopped = false;
+    let polling = false;
+
+    const applySteer = async (
+      message: string,
+      data: Record<string, unknown>,
+      recordTimelineEvent: boolean,
+    ): Promise<void> => {
+      const outcome = await run.steer(message);
+      if (recordTimelineEvent) {
+        const [event] = await this.o.events.append(taskId, [
+          {
+            taskId,
+            source: "lead",
+            type: "steer.requested",
+            payload: { message },
+            wakeId,
+          },
+        ]);
+        if (event) cursor = Math.max(cursor, event.seq);
+      }
+      await this.chron({
+        type: "wake.steer",
+        taskId,
+        wakeId,
+        summary: `steer ${outcome.mode}: ${message.slice(0, 100)}`,
+        data: { ...data, mode: outcome.mode, message },
+      });
+    };
+
+    const poll = async (): Promise<void> => {
+      if (stopped || polling) return;
+      polling = true;
+      try {
+        const events = (await this.o.events.load(taskId, cursor)).sort((a, b) => a.seq - b.seq || a.ts - b.ts);
+        for (const event of events) {
+          if (stopped) break;
+          cursor = Math.max(cursor, event.seq);
+          if (event.type !== "steer.requested") continue;
+          const message = typeof event.payload.message === "string" ? event.payload.message.trim() : "";
+          if (!message) continue;
+          await applySteer(message, { eventSeq: event.seq }, false);
+        }
+
+        for (const entry of await this.o.steerMailbox?.list(taskId) ?? []) {
+          if (stopped) break;
+          if (entry.createdAt < startedAt) {
+            await this.o.steerMailbox?.remove(taskId, entry.id);
+            continue;
+          }
+          const message = entry.message.trim();
+          if (message) await applySteer(message, { mailboxId: entry.id, createdAt: entry.createdAt }, true);
+          await this.o.steerMailbox?.remove(taskId, entry.id);
+        }
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        await this.chron({ type: "wake.error", taskId, wakeId, summary: `steer pump failed: ${error.message}` });
+      } finally {
+        polling = false;
+      }
+    };
+
+    const timer = setInterval(() => void poll(), STEER_POLL_MS);
+    void poll();
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }
+
   private async boundedRun(
     consume: Promise<RunResult>,
     ms: number | undefined,
@@ -1284,6 +1396,7 @@ export class WorkflowEngine {
             {
               id: k.id,
               workflowId: k.workflowId,
+              stageId: k.stageId,
               status: k.status,
               ...(k.isolate ? { isolate: true } : {}),
               ...(typeof k.fields.summary === "string" && k.fields.summary ? { summary: k.fields.summary } : {}),

@@ -1,5 +1,5 @@
 import type { AcceptanceCheck, StageDef, Task, WorkflowDef } from "../workflow/types";
-import type { TeamMember } from "./prompt";
+import type { TeamMember } from "./team-status";
 
 export interface TimeoutComponent {
   name: string;

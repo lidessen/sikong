@@ -6,7 +6,7 @@ import {
   MemoryProjectionStore,
   MemoryWorkerStore,
 } from "../store/memory";
-import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
+import { renderLeadActions, renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
 import { initTask, project } from "../workflow/reducer";
 import { GENERAL_WORKFLOW } from "../workflow/builtin";
 
@@ -46,6 +46,70 @@ describe("inspect", () => {
     expect(d && renderTaskDetail(d)).toContain("stage: open");
 
     expect(await taskDetail("nope", events, projections, chronicle)).toBeNull();
+  });
+
+  test("taskDetail renders deterministic lead team status", async () => {
+    const events = new MemoryEventStore(() => 1);
+    const projections = new MemoryProjectionStore();
+    const chronicle = new MemoryChronicleStore(() => 1);
+
+    await events.append("parent", initTask({ taskId: "parent", projectId: "p", workflow: GENERAL_WORKFLOW }));
+    await events.append("child", [
+      ...initTask({
+        taskId: "child",
+        projectId: "p",
+        workflow: GENERAL_WORKFLOW,
+        parentId: "parent",
+        fields: { request: "do child work", summary: "child finished" },
+      }),
+      { taskId: "child", source: "engine", type: "stage.entered", payload: { stageId: "done" } },
+    ]);
+    await events.append("parent", [
+      {
+        taskId: "parent",
+        source: "engine",
+        type: "subtask.created",
+        payload: { childId: "child", workflowId: GENERAL_WORKFLOW.id },
+      },
+    ]);
+    await projections.put(project(await events.load("child"), GENERAL_WORKFLOW));
+    await projections.put(project(await events.load("parent"), GENERAL_WORKFLOW));
+
+    const d = await taskDetail("parent", events, projections, chronicle);
+    expect(d?.leadStatus?.classification).toBe("ready_for_parent_review");
+
+    const rendered = d && renderTaskDetail(d);
+    expect(rendered).toContain("lead/team:");
+    expect(rendered).toContain("classification: ready_for_parent_review");
+    expect(rendered).toContain("children: total=1 done=1 cancelled=0 active=0");
+    expect(rendered).toContain("child (general@done) [done]");
+
+    const status = await workspaceStatus(projections, chronicle, { events });
+    expect(status.pendingLeadActions).toHaveLength(1);
+    expect(status.pendingLeadActions[0]).toMatchObject({
+      taskId: "parent",
+      classification: "ready_for_parent_review",
+      childCount: 1,
+      activeChildren: 0,
+      suggestedCommand: "sikong task parent --text",
+    });
+    expect(renderStatus(status)).toContain("Pending lead actions:");
+    expect(renderStatus(status)).toContain("parent [ready_for_parent_review]");
+
+    const overview = await workspaceOverview(
+      {
+        projects: new MemoryProjectStore([{ id: "p", name: "Project P", root: "/tmp/p" }]),
+        workers: new MemoryWorkerStore(),
+        projections,
+        chronicle,
+        events,
+      },
+    );
+    expect(overview.pendingLeadActions.map((action) => action.taskId)).toEqual(["parent"]);
+    expect(renderOverview(overview)).toContain("parent [ready_for_parent_review]");
+    expect(renderLeadActions(overview.pendingLeadActions)).toContain("Pending lead actions:");
+    expect(renderLeadActions(overview.pendingLeadActions)).toContain("parent [ready_for_parent_review]");
+    expect(renderLeadActions(overview.pendingLeadActions)).toContain("command: sikong task parent --text");
   });
 
   test("taskDetail shows the log even when the projection isn't materialized yet", async () => {

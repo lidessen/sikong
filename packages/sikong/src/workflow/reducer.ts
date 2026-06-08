@@ -149,6 +149,13 @@ export function apply(
         }),
       ];
     }
+    case "steer": {
+      if (source !== "lead" && source !== "engine")
+        reject("steer is lead/engine-only");
+      const message = command.message.trim();
+      if (!message) reject("steer requires a non-empty message");
+      return [mk("steer.requested", { message })];
+    }
   }
 }
 
@@ -291,6 +298,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     case "acceptance.evidence":
     case "acceptance.accepted":
     case "acceptance.rejected":
+    case "steer.requested":
       break; // signal / audit only — no projection change
   }
 
@@ -352,7 +360,7 @@ export function tryAdvance(
 }
 
 /** Event types that occurred since the task entered its current stage. */
-function eventTypesInCurrentStage(events: readonly EventLike[]): ReadonlySet<string> {
+export function eventTypesInCurrentStage(events: readonly EventLike[]): ReadonlySet<string> {
   let start = 0;
   for (let i = events.length - 1; i >= 0; i--) {
     const t = events[i]?.type;

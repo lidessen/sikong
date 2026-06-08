@@ -1,4 +1,6 @@
 import type { Task, TaskEvent, TaskStatus } from "../workflow/types";
+import { deriveAcceptanceStatus, eventTypesInCurrentStage } from "../workflow/reducer";
+import { deriveLeadTeamStatus, type LeadTeamStatus, type TeamMember } from "../engine/team-status";
 import type {
   ChronicleEntry,
   ChronicleStore,
@@ -32,6 +34,7 @@ export interface WorkspaceStatusView {
   total: number;
   counts: Record<TaskStatus, number>;
   tasks: TaskSummary[];
+  pendingLeadActions: PendingLeadAction[];
   recentActivity: ChronicleEntry[];
   recentErrors: ChronicleEntry[];
 }
@@ -39,6 +42,8 @@ export interface WorkspaceStatusView {
 export interface TaskDetailView {
   /** Null when the event log has the task but its projection isn't materialized yet. */
   task: Task | null;
+  leadStatus?: LeadTeamStatus;
+  team: TeamMember[];
   timeline: TaskEvent[];
   activity: ChronicleEntry[];
 }
@@ -73,8 +78,22 @@ export interface WorkspaceOverviewView {
   totalTasks: number;
   counts: Record<TaskStatus, number>;
   recentTasks: TaskSummary[];
+  pendingLeadActions: PendingLeadAction[];
   recentActivity: ChronicleEntry[];
   recentErrors: ChronicleEntry[];
+}
+
+export interface PendingLeadAction {
+  taskId: string;
+  projectId: string;
+  workflowId: string;
+  stageId: string;
+  classification: LeadTeamStatus["classification"];
+  next: string;
+  suggestedCommand: string;
+  childCount: number;
+  activeChildren: number;
+  updatedAt: number;
 }
 
 const ZERO_COUNTS: () => Record<TaskStatus, number> = () => ({
@@ -88,7 +107,7 @@ const ZERO_COUNTS: () => Record<TaskStatus, number> = () => ({
 export async function workspaceStatus(
   projections: ProjectionStore,
   chronicle: ChronicleStore,
-  opts: { projectId?: string; activityLimit?: number } = {},
+  opts: { projectId?: string; activityLimit?: number; events?: EventStore } = {},
 ): Promise<WorkspaceStatusView> {
   const tasks = await projections.query(opts.projectId ? { projectId: opts.projectId } : {});
   const counts = ZERO_COUNTS();
@@ -111,6 +130,7 @@ export async function workspaceStatus(
     total: tasks.length,
     counts,
     tasks: summaries,
+    pendingLeadActions: await pendingLeadActions(tasks, projections, opts.events),
     recentActivity: await chronicle.recent({ limit: opts.activityLimit ?? 15 }),
     recentErrors: await chronicle.recent({ limit: 10, type: ["wake.error", "command.rejected"] }),
   };
@@ -126,11 +146,40 @@ export async function taskDetail(
   const task = await projections.get(taskId);
   const all = await events.load(taskId);
   if (!task && all.length === 0) return null; // genuinely absent
+  const team = task ? await teamMembers(task, projections) : [];
+  const leadStatus = task
+    ? deriveLeadTeamStatus(task, undefined, team, {
+        eventTypes: eventTypesInCurrentStage(all),
+        acceptanceStatus: deriveAcceptanceStatus(undefined, all),
+      })
+    : undefined;
   return {
     task,
+    ...(leadStatus ? { leadStatus } : {}),
+    team,
     timeline: all.slice(-(opts.timelineLimit ?? 20)),
     activity: await chronicle.recent({ taskId, limit: 20 }),
   };
+}
+
+async function teamMembers(task: Task, projections: ProjectionStore): Promise<TeamMember[]> {
+  if (task.childIds.length === 0) return [];
+  const children = await Promise.all(task.childIds.map((id) => projections.get(id)));
+  return children.flatMap((child) =>
+    child
+      ? [
+          {
+            id: child.id,
+            workflowId: child.workflowId,
+            stageId: child.stageId,
+            status: child.status,
+            ...(child.isolate ? { isolate: true } : {}),
+            ...(typeof child.fields.summary === "string" && child.fields.summary ? { summary: child.fields.summary } : {}),
+            ...(typeof child.fields.request === "string" && child.fields.request ? { request: child.fields.request } : {}),
+          },
+        ]
+      : [],
+  );
 }
 
 export async function workspaceOverview(
@@ -139,6 +188,7 @@ export async function workspaceOverview(
     workers: WorkerStore;
     projections: ProjectionStore;
     chronicle: ChronicleStore;
+    events?: EventStore;
   },
   opts: { projectId?: string; defaultWorkerId?: string; taskLimit?: number; activityLimit?: number } = {},
 ): Promise<WorkspaceOverviewView> {
@@ -180,9 +230,63 @@ export async function workspaceOverview(
     totalTasks: allTasks.length,
     counts,
     recentTasks: taskSummaries.slice(0, opts.taskLimit ?? 20),
+    pendingLeadActions: await pendingLeadActions(allTasks, stores.projections, stores.events),
     recentActivity: await stores.chronicle.recent({ limit: opts.activityLimit ?? 10 }),
     recentErrors: await stores.chronicle.recent({ limit: 10, type: ["wake.error", "command.rejected"] }),
   };
+}
+
+async function pendingLeadActions(
+  tasks: readonly Task[],
+  projections: ProjectionStore,
+  events?: EventStore,
+): Promise<PendingLeadAction[]> {
+  const actionable = new Set<LeadTeamStatus["classification"]>([
+    "ready_for_parent_review",
+    "waiting_for_lead_acceptance",
+    "needs_repair_or_decision",
+    "ready_to_close",
+  ]);
+  const rows: PendingLeadAction[] = [];
+  for (const task of tasks) {
+    if (task.status === "done" || task.status === "cancelled" || task.status === "blocked") continue;
+    const team = await teamMembers(task, projections);
+    const timeline = events ? await events.load(task.id) : [];
+    const status = deriveLeadTeamStatus(task, undefined, team, {
+      eventTypes: eventTypesInCurrentStage(timeline),
+      acceptanceStatus: deriveAcceptanceStatus(undefined, timeline),
+    });
+    if (!actionable.has(status.classification)) continue;
+    rows.push({
+      taskId: task.id,
+      projectId: task.projectId,
+      workflowId: task.workflowId,
+      stageId: task.stageId,
+      classification: status.classification,
+      next: status.next,
+      suggestedCommand: suggestedLeadCommand(task.id, status.classification),
+      childCount: status.total,
+      activeChildren: status.active,
+      updatedAt: task.updatedAt,
+    });
+  }
+  return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function suggestedLeadCommand(taskId: string, classification: LeadTeamStatus["classification"]): string {
+  switch (classification) {
+    case "ready_to_close":
+      return `sikong run --task ${taskId}`;
+    case "waiting_for_lead_acceptance":
+      return `sikong task ${taskId} --text`;
+    case "ready_for_parent_review":
+      return `sikong task ${taskId} --text`;
+    case "needs_repair_or_decision":
+      return `sikong task ${taskId} --text`;
+    case "waiting_for_children":
+    case "no_team":
+      return `sikong task ${taskId} --text`;
+  }
 }
 
 function projectOverview(project: Project, tasks: readonly Task[]): ProjectOverview {
@@ -244,6 +348,7 @@ export function renderStatus(v: WorkspaceStatusView): string {
       `  ${t.id}  [${t.status}]  ${t.workflowId} @ ${t.stageId}  (project ${t.projectId})` +
         `${t.parentId ? ` ↳ child of ${t.parentId}` : ""}${t.childCount ? ` [${t.childCount} child${t.childCount > 1 ? "ren" : ""}]` : ""}`,
     );
+  renderPendingLeadActions(lines, v.pendingLeadActions);
   lines.push("", "Recent activity:");
   if (v.recentActivity.length === 0) lines.push("  (none)");
   for (const e of v.recentActivity)
@@ -253,6 +358,22 @@ export function renderStatus(v: WorkspaceStatusView): string {
     for (const e of v.recentErrors)
       lines.push(`  ${fmtTs(e.ts)} ${e.type}${e.taskId ? ` ${e.taskId}` : ""} — ${e.summary}`);
   }
+  return lines.join("\n");
+}
+
+export function renderLeadActions(actions: readonly PendingLeadAction[]): string {
+  const lines = ["Pending lead actions:"];
+  if (actions.length === 0) {
+    lines.push("  (none)");
+    return lines.join("\n");
+  }
+  for (const action of actions)
+    lines.push(
+      `  ${action.taskId} [${action.classification}] project=${action.projectId} ${action.workflowId}@${action.stageId}` +
+        ` children=${action.childCount} active=${action.activeChildren}`,
+      `    next: ${action.next}`,
+      `    command: ${action.suggestedCommand}`,
+    );
   return lines.join("\n");
 }
 
@@ -291,6 +412,8 @@ export function renderOverview(v: WorkspaceOverviewView, opts: { dir?: string } 
   for (const t of v.recentTasks)
     lines.push(`  ${t.id} [${t.status}] project=${t.projectId} ${t.workflowId}@${t.stageId}`);
 
+  renderPendingLeadActions(lines, v.pendingLeadActions);
+
   lines.push("", "Recent activity:");
   if (v.recentActivity.length === 0) lines.push("  (none)");
   for (const e of v.recentActivity)
@@ -304,6 +427,10 @@ export function renderOverview(v: WorkspaceOverviewView, opts: { dir?: string } 
   return lines.join("\n");
 }
 
+function renderPendingLeadActions(lines: string[], actions: readonly PendingLeadAction[]): void {
+  lines.push("", ...renderLeadActions(actions.slice(0, 20)).split("\n"));
+}
+
 export function renderTaskDetail(v: TaskDetailView): string {
   const t = v.task;
   const lines: string[] = [];
@@ -315,6 +442,23 @@ export function renderTaskDetail(v: TaskDetailView): string {
     if (t.workerId) lines.push(`  worker: ${t.workerId}`);
     if (t.parentId) lines.push(`  parent: ${t.parentId}`);
     if (t.childIds.length) lines.push(`  children: ${t.childIds.join(", ")}`);
+    if (v.leadStatus && v.team.length) {
+      const s = v.leadStatus;
+      lines.push(
+        "  lead/team:",
+        `    classification: ${s.classification}`,
+        `    children: total=${s.total} done=${s.done} cancelled=${s.cancelled} active=${s.active}`,
+        `    transition requested: ${s.transitionRequested ? "yes" : "no"}; acceptance: ${s.acceptanceStatus}`,
+        `    next: ${s.next}`,
+      );
+      for (const m of v.team) {
+        const parts = [`    - ${m.id} (${m.workflowId}${m.stageId ? `@${m.stageId}` : ""}) [${m.status}]`];
+        if (m.isolate) parts.push(`[isolated -> branch sikong/${m.id}]`);
+        if (m.summary) parts.push(`summary: ${truncate(m.summary, 120)}`);
+        else if (m.request) parts.push(`request: ${truncate(m.request, 120)}`);
+        lines.push(parts.join("  "));
+      }
+    }
     lines.push("  fields:");
     const keys = Object.keys(t.fields);
     if (keys.length === 0) lines.push("    (none)");

@@ -15,6 +15,7 @@ import {
   type ToolSet,
 } from "agent-loop";
 import { WorkflowEngine, type LoopFactory } from "./engine";
+import { JsonSteerMailbox } from "./steer-mailbox";
 import { DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "../workflow/builtin";
 import type { WorkflowDef } from "../workflow/types";
 import {
@@ -24,6 +25,9 @@ import {
   MemoryProjectionStore,
   MemoryWorkflowRegistry,
 } from "../store/memory";
+import { JsonWorkspaceChronicleStore, JsonWorkspaceEventStore, JsonWorkspaceProjectionStore } from "../store";
+
+const cliPath = new URL("../cli.ts", import.meta.url).pathname;
 
 function newEngine(loop: LoopFactory, extra: WorkflowDef[] = [], hooks = {}) {
   const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
@@ -129,6 +133,172 @@ describe("WorkflowEngine wake cycle", () => {
 
     expect(transitionAttempts).toBe(1);
     expect((await engine.getTask("terminal-worker"))?.status).toBe("done");
+  });
+
+  test("delivers mailbox steer commands to the active wake run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sikong-steer-mailbox-"));
+    const events = new MemoryEventStore(() => 1);
+    const seen: string[] = [];
+    let resolveStarted!: () => void;
+    let resolveDone!: () => void;
+    let startedOnce = false;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const none = async function* (): AsyncGenerator<never> {};
+    const loop: LoopFactory = () => {
+      const capabilities: CapabilityList = ["tools", "steer.deferred"];
+      return {
+        id: "steerable",
+        capabilities,
+        supports: (c: Capability) => capabilities.includes(c),
+        run(): RunHandle {
+          if (!startedOnce) {
+            startedOnce = true;
+            resolveStarted();
+          }
+          const result = done.then(() => ({
+            events: [] as LoopEvent[],
+            usage: emptyUsage(),
+            durationMs: 0,
+            status: "completed" as const,
+            text: "",
+          }));
+          return {
+            [Symbol.asyncIterator]: () => none(),
+            textStream: none(),
+            result,
+            text: result.then((r) => r.text),
+            usage: result.then((r) => r.usage),
+            steer: async (message: string) => {
+              seen.push(message);
+              resolveDone();
+              return { mode: "deferred" as const };
+            },
+            cancel: () => {},
+          };
+        },
+        preflight: async () => ({ ok: true }),
+        dispose: async () => {},
+      };
+    };
+    const mailbox = new JsonSteerMailbox(root);
+    const engine = new WorkflowEngine({
+      events,
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop,
+      steerMailbox: mailbox,
+    });
+
+    try {
+      await engine.createTask({ projectId: "p", taskId: "steer-me", fields: { request: "wait" }, wake: false });
+      const running = engine.runPending("steer-me");
+      await started;
+      await mailbox.submit("steer-me", "Use the accepted repair constraints before deciding.");
+      await running;
+
+      expect(seen).toEqual(["Use the accepted repair constraints before deciding."]);
+      expect(await mailbox.list("steer-me")).toHaveLength(0);
+      expect((await events.load("steer-me")).map((event) => event.type)).toContain("steer.requested");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("accepts CLI steer while a JSON-backed wake is active and locked", async () => {
+    const root = await mkdtemp(join(tmpdir(), "sikong-cli-steer-live-"));
+    const events = new JsonWorkspaceEventStore(root);
+    const projections = new JsonWorkspaceProjectionStore(root);
+    const chronicle = new JsonWorkspaceChronicleStore(root);
+    const mailbox = new JsonSteerMailbox(root);
+    const seen: string[] = [];
+    let resolveStarted!: () => void;
+    let resolveDone!: () => void;
+    let startedOnce = false;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    const none = async function* (): AsyncGenerator<never> {};
+    const loop: LoopFactory = () => {
+      const capabilities: CapabilityList = ["tools", "steer.deferred"];
+      return {
+        id: "json-steerable",
+        capabilities,
+        supports: (c: Capability) => capabilities.includes(c),
+        run(): RunHandle {
+          if (!startedOnce) {
+            startedOnce = true;
+            resolveStarted();
+          }
+          const result = done.then(() => ({
+            events: [] as LoopEvent[],
+            usage: emptyUsage(),
+            durationMs: 0,
+            status: "completed" as const,
+            text: "",
+          }));
+          return {
+            [Symbol.asyncIterator]: () => none(),
+            textStream: none(),
+            result,
+            text: result.then((r) => r.text),
+            usage: result.then((r) => r.usage),
+            steer: async (message: string) => {
+              seen.push(message);
+              resolveDone();
+              return { mode: "deferred" as const };
+            },
+            cancel: () => {},
+          };
+        },
+        preflight: async () => ({ ok: true }),
+        dispose: async () => {},
+      };
+    };
+    const engine = new WorkflowEngine({
+      events,
+      projections,
+      chronicle,
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop,
+      steerMailbox: mailbox,
+      wakeTimeoutMs: 5_000,
+    });
+
+    try {
+      await engine.createTask({ projectId: "p", taskId: "cli-steer-live", fields: { request: "wait" }, wake: false });
+      await writeFile(join(root, ".lock"), JSON.stringify({ pid: process.pid, ts: Date.now() }));
+      const running = engine.runPending("cli-steer-live");
+      await started;
+
+      const steer = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "submit",
+        "cli-steer-live",
+        "steer",
+        "use the live correction channel",
+        "--dir",
+        root,
+      ]);
+      expect(new TextDecoder().decode(steer.stderr)).toBe("");
+      expect(steer.exitCode).toBe(0);
+      await running;
+
+      expect(seen).toEqual(["use the live correction channel"]);
+      expect(await mailbox.list("cli-steer-live")).toHaveLength(0);
+      expect((await events.load("cli-steer-live")).map((event) => event.type)).toContain("steer.requested");
+      expect((await chronicle.recent({ taskId: "cli-steer-live", type: "wake.steer" }))).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("worker cancel records an approval request instead of terminating the task", async () => {
@@ -1124,8 +1294,12 @@ describe("DEVELOPMENT workflow (team delegation)", () => {
     const childId = task!.childIds[0]!;
     expect((await engine.getTask(childId))?.status).toBe("done");
     // the parent saw its team — id, status, and the child's structured summary — in verify
+    expect(parentReviewSystem).toContain("## Lead team status");
+    expect(parentReviewSystem).toContain("classification: ready_for_parent_review");
+    expect(parentReviewSystem).toContain("children: total=1 done=1 cancelled=0 active=0");
     expect(parentReviewSystem).toContain("## Team (your subtasks)");
     expect(parentReviewSystem).toContain(childId);
+    expect(parentReviewSystem).toContain(`simple-commit@done`);
     expect(parentReviewSystem).toContain("child handled part 1");
     });
   });

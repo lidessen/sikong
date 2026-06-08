@@ -1,16 +1,6 @@
 import type { StageDef, TaskStatus, WorkflowDef, Task } from "../workflow/types";
 import { COMMAND_TOOL_NAMES, type CommandToolName } from "./command-tools";
-
-/** A compact, read-only snapshot of a child task shown to its lead's wake (ADR 0009). */
-export interface TeamMember {
-  id: string;
-  workflowId: string;
-  status: TaskStatus;
-  /** Ran in an isolated workspace (its work is on branch `sikong/<id>` for git projects). */
-  isolate?: boolean;
-  summary?: string;
-  request?: string;
-}
+import { deriveLeadTeamStatus, type LeadStatusContext, type TeamMember } from "./team-status";
 
 export interface ToolCallFact {
   tool: string;
@@ -109,8 +99,8 @@ export function buildPrompt(
   wf: WorkflowDef,
   stage: StageDef | undefined,
   team: readonly TeamMember[] = [],
+  status: LeadStatusContext = {},
 ): string {
-  void stage;
   const lines: string[] = [];
   const fieldNames = Object.keys(wf.fields);
   if (fieldNames.length) {
@@ -120,9 +110,18 @@ export function buildPrompt(
     }
   }
   if (team.length) {
+    const digest = deriveLeadTeamStatus(task, stage, team, status);
+    lines.push(
+      "",
+      "## Lead team status",
+      `- classification: ${digest.classification}`,
+      `- children: total=${digest.total} done=${digest.done} cancelled=${digest.cancelled} active=${digest.active}`,
+      `- current stage: ${task.stageId}; transition requested: ${digest.transitionRequested ? "yes" : "no"}; acceptance: ${digest.acceptanceStatus}`,
+      `- next: ${digest.next}`,
+    );
     lines.push("", "## Team (your subtasks)");
     for (const m of team) {
-      const parts = [`- ${m.id} (${m.workflowId}) — ${m.status}`];
+      const parts = [`- ${m.id} (${m.workflowId}${m.stageId ? `@${m.stageId}` : ""}) — ${m.status}`];
       if (m.isolate) parts.push(`[isolated → branch sikong/${m.id}]`);
       if (m.summary) parts.push(`summary: ${renderValue(m.summary)}`);
       else if (m.request) parts.push(`request: ${renderValue(m.request)}`);

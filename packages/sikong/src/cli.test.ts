@@ -1,8 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { JsonWorkspaceChronicleStore } from "./store";
+import { JsonWorkspaceChronicleStore, JsonWorkspaceEventStore, JsonWorkspaceProjectionStore } from "./store";
+import { JsonSteerMailbox } from "./engine/steer-mailbox";
+import { GENERAL_WORKFLOW } from "./workflow/builtin";
+import { initTask, project } from "./workflow/reducer";
 
 const tmp = () => mkdtemp(join(tmpdir(), "sikong-cli-"));
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
@@ -86,6 +89,104 @@ describe("sikong CLI", () => {
     }
   });
 
+  test("submit steer records a mailbox entry for an active wake", async () => {
+    const dir = await tmp();
+    try {
+      const created = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "create",
+        "needs correction",
+        "--dir",
+        dir,
+        "--workflow",
+        "general",
+        "--id",
+        "steer-task",
+      ]);
+      expect(created.exitCode).toBe(0);
+
+      const steer = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "submit",
+        "steer-task",
+        "steer",
+        "prefer the accepted repair, do not block",
+        "--dir",
+        dir,
+      ]);
+      expect(steer.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(steer.stdout))).toMatchObject({
+        ok: true,
+        taskId: "steer-task",
+        command: { kind: "steer", message: "prefer the accepted repair, do not block" },
+        next: { note: "active wake will receive this steer if one is running" },
+      });
+
+      const entries = await new JsonSteerMailbox(dir).list("steer-task");
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        taskId: "steer-task",
+        source: "lead",
+        message: "prefer the accepted repair, do not block",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("submit steer bypasses the run write lock while normal submits do not", async () => {
+    const dir = await tmp();
+    try {
+      const created = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "create",
+        "needs live correction",
+        "--dir",
+        dir,
+        "--workflow",
+        "general",
+        "--id",
+        "locked-steer-task",
+      ]);
+      expect(created.exitCode).toBe(0);
+
+      await writeFile(join(dir, ".lock"), JSON.stringify({ pid: process.pid, ts: Date.now() }));
+
+      const steer = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "submit",
+        "locked-steer-task",
+        "steer",
+        "correct the active wake",
+        "--dir",
+        dir,
+      ]);
+      expect(steer.exitCode).toBe(0);
+      expect((await new JsonSteerMailbox(dir).list("locked-steer-task")).map((entry) => entry.message)).toEqual([
+        "correct the active wake",
+      ]);
+
+      const transition = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "submit",
+        "locked-steer-task",
+        "transition",
+        "normal submit should wait",
+        "--dir",
+        dir,
+      ]);
+      expect(transition.exitCode).toBe(1);
+      expect(new TextDecoder().decode(transition.stderr)).toContain("write-locked");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("inspect wait returns the next chronicle event", async () => {
     const dir = await tmp();
     try {
@@ -161,6 +262,56 @@ describe("sikong CLI", () => {
       expect(text).toContain(
         "wake.commit t1 — commit fallback [reason=no_state_commands allowed=commit_stage,block outputFields=summary]",
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("actions renders pending lead actions from workspace state", async () => {
+    const dir = await tmp();
+    try {
+      const events = new JsonWorkspaceEventStore(dir);
+      const projections = new JsonWorkspaceProjectionStore(dir);
+      await events.append("parent", initTask({ taskId: "parent", projectId: "p", workflow: GENERAL_WORKFLOW }));
+      await events.append("child", [
+        ...initTask({
+          taskId: "child",
+          projectId: "p",
+          workflow: GENERAL_WORKFLOW,
+          parentId: "parent",
+          fields: { request: "do child work", summary: "child finished" },
+        }),
+        { taskId: "child", source: "engine", type: "stage.entered", payload: { stageId: "done" } },
+      ]);
+      await events.append("parent", [
+        {
+          taskId: "parent",
+          source: "engine",
+          type: "subtask.created",
+          payload: { childId: "child", workflowId: GENERAL_WORKFLOW.id },
+        },
+      ]);
+      await projections.put(project(await events.load("child"), GENERAL_WORKFLOW));
+      await projections.put(project(await events.load("parent"), GENERAL_WORKFLOW));
+
+      const textOut = Bun.spawnSync([process.execPath, cliPath, "actions", "--dir", dir, "--text"]);
+      expect(textOut.exitCode).toBe(0);
+      const text = new TextDecoder().decode(textOut.stdout);
+      expect(text).toContain("Pending lead actions:");
+      expect(text).toContain("parent [ready_for_parent_review]");
+
+      const jsonOut = Bun.spawnSync([process.execPath, cliPath, "actions", "--dir", dir]);
+      expect(jsonOut.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(jsonOut.stdout))).toMatchObject({
+        total: 1,
+        actions: [
+          {
+            taskId: "parent",
+            classification: "ready_for_parent_review",
+            suggestedCommand: "sikong task parent --text",
+          },
+        ],
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

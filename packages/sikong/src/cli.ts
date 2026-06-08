@@ -7,7 +7,7 @@
  *
  *   create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>]   publish a task
  *   run [--task <id>]                                                 drive pending task(s) to done/quiet (exit 1 if any wake errored)
- *   submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | cancel [reason] | block <reason> | unblock>
+ *   submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | unblock>
  *   register <workflow.yaml>                                          register a workflow definition
  *   overview [--project <id>] [--json]                                  human workspace dashboard
  *   status [--project <id>] [--text] | task <id> [--text] | chronicle [--task <id>] [-n N] [--text]
@@ -29,10 +29,11 @@ import {
   JsonWorkspaceEventStore,
   JsonWorkspaceProjectionStore,
 } from "./store";
-import { renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
+import { renderLeadActions, renderOverview, renderStatus, renderTaskDetail, taskDetail, workspaceOverview, workspaceStatus } from "./inspect";
 import { renderUsage, summarizeUsage } from "./usage";
 import { acquireLock, getDefaultWorker, openWorkspace, reconcileWorktrees, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
 import { parseDataFile } from "./config-file";
+import { JsonSteerMailbox } from "./engine/steer-mailbox";
 import { isValidProjectId, type Project } from "./project";
 import { discoverWorkers, discoveredRoster, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
 import type { WorkerPermissionMode } from "./worker";
@@ -87,6 +88,7 @@ const workspaceDir = resolveWorkspaceDir({ dirFlag: flag("--dir") });
 const dir = workspaceDir.dir;
 const text = (hasFlag("--text") || hasFlag("--human")) && !hasFlag("--json");
 const cmd = positional[0];
+const isSteerSubmit = cmd === "submit" && positional[2] === "steer";
 const argv1 = process.argv[1] ?? "sikong";
 const cli = argv1.endsWith(".ts") ? `bun ${argv1}` : argv1;
 const PERMISSION_MODES = new Set<WorkerPermissionMode>([
@@ -231,8 +233,13 @@ function parseLeadCommand(op: string, rest: string[]): Command {
         throw new Error("evidence must be a JSON object");
       return { kind: "submit_evidence", evidence: evidence as AcceptanceEvidence };
     }
+    case "steer": {
+      const message = rest.join(" ").trim();
+      if (!message) throw new Error("steer needs <message>");
+      return { kind: "steer", message };
+    }
     default:
-      throw new Error(`unknown submit op "${op}" (set-field | transition | evidence | accept | reject | cancel | block | unblock)`);
+      throw new Error(`unknown submit op "${op}" (set-field | transition | evidence | accept | reject | steer | cancel | block | unblock)`);
   }
 }
 
@@ -259,7 +266,7 @@ async function buildSubmitCommand(ws: Workspace, taskId: string, op: string, res
 // Write commands take the dir's exclusive write lock (released on process exit).
 const WRITE_CMDS = new Set(["create", "design", "release", "run", "submit", "register"]);
 const needsLock =
-  (!!cmd && WRITE_CMDS.has(cmd)) ||
+  (!!cmd && WRITE_CMDS.has(cmd) && !isSteerSubmit) ||
   (cmd === "project" && positional[1] === "create") ||
   (cmd === "project" && positional[1] === "memory" && positional.length > 3) ||
   (cmd === "worker" && (positional[1] === "create" || positional[1] === "default"));
@@ -288,6 +295,7 @@ switch (cmd) {
         workers: new JsonWorkerStore(dir),
         projections: new JsonWorkspaceProjectionStore(dir),
         chronicle: new JsonWorkspaceChronicleStore(dir),
+        events: new JsonWorkspaceEventStore(dir),
       },
       {
         ...(flag("--project") ? { projectId: flag("--project")! } : {}),
@@ -301,9 +309,25 @@ switch (cmd) {
     const view = await workspaceStatus(
       new JsonWorkspaceProjectionStore(dir),
       new JsonWorkspaceChronicleStore(dir),
-      flag("--project") ? { projectId: flag("--project")! } : {},
+      {
+        ...(flag("--project") ? { projectId: flag("--project")! } : {}),
+        events: new JsonWorkspaceEventStore(dir),
+      },
     );
     printView(view, renderStatus);
+    break;
+  }
+  case "actions": {
+    const view = await workspaceStatus(
+      new JsonWorkspaceProjectionStore(dir),
+      new JsonWorkspaceChronicleStore(dir),
+      {
+        ...(flag("--project") ? { projectId: flag("--project")! } : {}),
+        events: new JsonWorkspaceEventStore(dir),
+      },
+    );
+    if (text) console.log(renderLeadActions(view.pendingLeadActions));
+    else printJson({ total: view.pendingLeadActions.length, actions: view.pendingLeadActions });
     break;
   }
   case "task": {
@@ -522,7 +546,19 @@ switch (cmd) {
   case "submit": {
     const id = positional[1];
     const op = positional[2];
-    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | cancel [reason] | block <reason> | unblock>");
+    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | unblock>");
+    const taskId = id!;
+    if (op === "steer") {
+      const message = positional.slice(3).join(" ").trim();
+      if (!message) fail("steer needs <message>");
+      const steerCommand: Extract<Command, { kind: "steer" }> = { kind: "steer", message };
+      const task = await new JsonWorkspaceProjectionStore(dir).get(taskId);
+      if (!task) fail(`task ${taskId} not found`, 1);
+      await new JsonSteerMailbox(dir).submit(taskId, steerCommand.message);
+      if (text) console.log(`submitted steer to ${taskId} — an active wake will receive it if one is running`);
+      else printJson({ ok: true, taskId, command: steerCommand, next: { note: "active wake will receive this steer if one is running" } });
+      break;
+    }
     const ws = await openWorkspace(dir);
     let command: Command;
     try {
@@ -536,8 +572,21 @@ switch (cmd) {
     } catch (err) {
       fail((err as Error).message, 1);
     }
-    if (text) console.log(`submitted ${op} to ${id} — apply with: ${cli} run --task ${id} --dir ${dir}`);
-    else printJson({ ok: true, taskId: id, command, next: { command: "run", taskId: id, dir, argv: ["run", "--task", id, "--dir", dir] } });
+    if (text)
+      console.log(
+        command.kind === "steer"
+          ? `submitted steer to ${id} — an active wake will receive it if one is running`
+          : `submitted ${op} to ${id} — apply with: ${cli} run --task ${id} --dir ${dir}`,
+      );
+    else
+      printJson({
+        ok: true,
+        taskId: id,
+        command,
+        ...(command.kind === "steer"
+          ? { next: { note: "active wake will receive this steer if one is running" } }
+          : { next: { command: "run", taskId: id, dir, argv: ["run", "--task", id, "--dir", dir] } }),
+      });
     break;
   }
   case "register": {
@@ -807,7 +856,7 @@ switch (cmd) {
         "  release <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--ref <ref>]\n" +
         "                                                               shorthand for --workflow release; --ref pre-fills the releaseRef field\n" +
         "  run [--task <id>]\n" +
-        "  submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | cancel [reason] | block <reason> | unblock>\n" +
+        "  submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | unblock>\n" +
         "  register <workflow.yaml>\n" +
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
         "  project memory <id> [markdown]\n" +
@@ -817,6 +866,7 @@ switch (cmd) {
       "  project list [--text]\n" +
       "  worker list [--text]\n" +
       "  status [--project <id>] [--text]\n" +
+      "  actions [--project <id>] [--text]     pending lead review/decision queue\n" +
       "  task <id> [--text]\n" +
       "  chronicle [--task <id>] [-n <N>] [--text]\n" +
       "  usage [--project <id>] [--text]        token usage + cost (5h/7d/30d windows)\n" +
