@@ -82,6 +82,15 @@ agent-side visual checking is future work, not assumed.
 - Supersedes 0017's stage shape; reuses ADR 0012 (dialectic), the
   `design_preview`/`design_deliver` tools, and approval gates.
 
+## Cleanup
+2026-06-08: the `_DESIGN_WORKFLOW_V2` backward-compat constant was removed from
+`builtin.ts` as part of the visual-design/generic-design workflow split. The
+visual/philosophy-first pipeline now lives as `VISUAL_DESIGN_WORKFLOW` (id
+`visual-design`, version 3+), and `DESIGN_WORKFLOW` (id `design`, version 4) is
+the generic architectural/technical design workflow. Old pins to `design@v2` are
+semantically wrong since `design` now means architectural design, so a hard
+error is safer than a silent misload.
+
 ## Build order (delegated to sikong)
 1. Rebuild `DESIGN_WORKFLOW` as `frame → language → derive → assemble → review`
    with the guarded `language`/`alternatives` + justified `designSpec`.

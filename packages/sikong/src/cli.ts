@@ -264,7 +264,7 @@ async function buildSubmitCommand(ws: Workspace, taskId: string, op: string, res
 }
 
 // Write commands take the dir's exclusive write lock (released on process exit).
-const WRITE_CMDS = new Set(["create", "design", "release", "run", "submit", "register"]);
+const WRITE_CMDS = new Set(["create", "design", "release", "run", "submit", "register", "visual-design"]);
 const needsLock =
   (!!cmd && WRITE_CMDS.has(cmd) && !isSteerSubmit) ||
   (cmd === "project" && positional[1] === "create") ||
@@ -750,15 +750,13 @@ switch (cmd) {
 
   case "design": {
     const request = positional[1];
-    if (!request) fail("usage: cli design <request> [--project <id>] [--id <id>] [--worker <id>] [--frame <text>]");
+    if (!request) fail("usage: cli design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>]");
     const ws = await openWorkspace(dir);
     const projectId = flag("--project") ?? "default";
     const id = flag("--id");
     const workerId = flag("--worker");
     const parentId = flag("--parent");
-    const frame = flag("--frame");
     const fields: Record<string, unknown> = { request };
-    if (frame) fields.frame = frame;
     let task;
     try {
       const wf = ws.registry.get("design");
@@ -775,11 +773,52 @@ switch (cmd) {
     } catch (err) {
       fail((err as Error).message, 1);
     }
+    const result = {
+      ok: true,
+      task,
+      next: { command: "run", taskId: task!.id, dir, argv: ["run", "--task", task!.id, "--dir", dir] },
+    };
+    if (text) {
+      console.log(`created ${task!.id} → workflow "design" @ "${task!.stageId}" (${task!.status})`);
+      console.log(`drive it: ${cli} run --task ${task!.id} --dir ${dir}`);
+    } else {
+      printJson(result);
+    }
+    break;
+  }
+
+  case "visual-design": {
+    const request = positional[1];
+    if (!request) fail("usage: cli visual-design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--frame <text>]");
+    const ws = await openWorkspace(dir);
+    const projectId = flag("--project") ?? "default";
+    const id = flag("--id");
+    const workerId = flag("--worker");
+    const parentId = flag("--parent");
+    const frame = flag("--frame");
+    const fields: Record<string, unknown> = { request };
+    if (frame) fields.frame = frame;
+    let task;
+    try {
+      const wf = ws.registry.get("visual-design");
+      if (!wf) fail("built-in 'visual-design' workflow not found");
+      task = await ws.engine.createTask({
+        projectId,
+        workflowId: "visual-design",
+        fields,
+        wake: false,
+        ...(id ? { taskId: id } : {}),
+        ...(workerId ? { workerId } : {}),
+        ...(parentId ? { parentId } : {}),
+      });
+    } catch (err) {
+      fail((err as Error).message, 1);
+    }
     // Guardrail (ADR 0009): warn when write-class workflow targets cwd.
     const createdProject = await ws.projects.get(projectId);
     if (resolve(createdProject?.root ?? ".") === resolve(process.cwd())) {
       console.error(
-        `⚠ design workflow staffs a coding team that edits the project, and project "${projectId}" root is the current directory (${resolve(createdProject?.root ?? ".")}). Running this task will modify files here. To target a specific directory, \`project create <id> --root <path>\` then pass --project <id>.`,
+        `⚠ visual-design workflow staffs a coding team that edits the project, and project "${projectId}" root is the current directory (${resolve(createdProject?.root ?? ".")}). Running this task will modify files here. To target a specific directory, \`project create <id> --root <path>\` then pass --project <id>.`,
       );
     }
     const result = {
@@ -788,7 +827,7 @@ switch (cmd) {
       next: { command: "run", taskId: task!.id, dir, argv: ["run", "--task", task!.id, "--dir", dir] },
     };
     if (text) {
-      console.log(`created ${task!.id} → workflow "design" @ "${task!.stageId}" (${task!.status})`);
+      console.log(`created ${task!.id} → workflow "visual-design" @ "${task!.stageId}" (${task!.status})`);
       if (frame) console.log(`  frame: ${frame.slice(0, 80)}${frame.length > 80 ? "…" : ""}`);
       console.log(`drive it: ${cli} run --task ${task!.id} --dir ${dir}`);
     } else {
@@ -851,8 +890,10 @@ switch (cmd) {
       `sikong CLI (dir: ${dir})\n\n` +
         "drive:\n" +
         "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--parent <id>] [--id <id>]\n" +
-        "  design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--frame <text>]\n" +
-        "                                                               shorthand for --workflow design; --frame pre-fills the design frame (ADR 0022)\n" +
+        "  design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>]\n" +
+        "                                                               shorthand for --workflow design (generic architectural/technical design)\n" +
+        "  visual-design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--frame <text>]\n" +
+        "                                                               shorthand for --workflow visual-design; --frame pre-fills the design frame (ADR 0028)\n" +
         "  release <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--ref <ref>]\n" +
         "                                                               shorthand for --workflow release; --ref pre-fills the releaseRef field\n" +
         "  run [--task <id>]\n" +

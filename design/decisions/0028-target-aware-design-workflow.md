@@ -39,7 +39,12 @@ the *materialization* (assemble + preview) is web-bound.
     see rendered pixels — more pronounced for native).
 
 Version bump to `design@3`; keep the `design@2` definition registered for replay of
-already-pinned tasks (same pattern as `_DESIGN_WORKFLOW_V1` for 0017).
+already-pinned tasks (same pattern as `_DESIGN_WORKFLOW_V1` for 0017). Note
+(2026-06-08 cleanup): `design@2` is no longer retained — the `design` id now
+means architectural/technical design, so old pins to `design@v2` would
+semantically misload. The backward-compat constants for both `design@v1` and
+`design@v2` were removed from `builtin.ts` in the visual-design/generic-design
+split.
 
 ## Why this is the right shape
 

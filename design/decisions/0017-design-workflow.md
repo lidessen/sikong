@@ -83,3 +83,11 @@ boundary (a worker tool), keeping the engine task-agnostic (ADR 0007).
 - Depends on semajsx phase 2 (done: `semajsx/ui` + utilities). The preview bridge
   reuses semajsx's existing render targets (SSR/dev-server + SSG `build.ts`) — no
   screenshot/headless-browser dependency needed; the live files are the preview.
+
+## Cleanup
+2026-06-08: the `_DESIGN_WORKFLOW_V1` backward-compat constant was removed from
+`builtin.ts` as part of the visual-design/generic-design workflow split (ADR 0028
+visual-design is now `VISUAL_DESIGN_WORKFLOW` under id `visual-design`; generic
+architectural/technical design is `DESIGN_WORKFLOW` under id `design`). Old pins
+to `design@v1` are semantically wrong since `design` now means architectural
+design, so the stale pin is safer as a hard error than a silent misload.

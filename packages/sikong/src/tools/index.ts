@@ -10,7 +10,7 @@
  * with the stage's command tools into the agent's tool set:
  *
  *   workerTools: (ctx, loop) => ({
- *     ...(ctx.workflow.id === "design"
+ *     ...(ctx.workflow.id === "visual-design"
  *       ? buildDesignTools({ projectRoot: ctx.project.root }).tools
  *       : {}),
  *   })

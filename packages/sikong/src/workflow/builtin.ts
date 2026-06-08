@@ -35,7 +35,7 @@ export const GENERAL_WORKFLOW: WorkflowDef = {
 };
 
 /**
- * Target-aware design workflow (ADR 0028): design UI components/pages through a
+ * Visual design workflow (ADR 0028): design UI components/pages through a
  * philosophy-first pipeline — frame, language, derive, assemble, review. The
  * design philosophy (a language from the catalog) drives parameter derivation,
  * not pixel selection. The dialectic (ADR 0012) lives at philosophy altitude.
@@ -43,11 +43,14 @@ export const GENERAL_WORKFLOW: WorkflowDef = {
  * Target-aware: `target` (web-semajsx | swiftui) captured at frame drives
  * branching at assemble (materialization) and review (preview/verify).
  * Reuses `design_preview`/`design_deliver` tools and approval gates from ADR 0017.
+ *
+ * This is the VISUAL / UI design workflow. For architectural/technical design
+ * decisions (tradeoffs, DESIGN.md content, ADRs), use `DESIGN_WORKFLOW` instead.
  */
-export const DESIGN_WORKFLOW: WorkflowDef = {
-  id: "design",
+export const VISUAL_DESIGN_WORKFLOW: WorkflowDef = {
+  id: "visual-design",
   version: "3",
-  name: "Design",
+  name: "Visual Design",
   description:
     "Design UI components or pages through a target-aware philosophy-driven pipeline (ADR 0028): frame, language, derive, assemble, review. Supports web-semajsx (default) and swiftui targets.",
   workerRole: "coding",
@@ -151,98 +154,66 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
 };
 
 /**
- * The design@v2 workflow (ADR 0022), kept so that tasks already pinned to
- * `design@v2` can still load and replay their timeline. Registration happens
- * in `workspace.ts` alongside the v3 definition. Deleted after one transition
- * release. (ADR 0028)
+ * Generic design workflow: research, decision, document, and review
+ * architectural/technical design choices — tradeoffs, DESIGN.md content,
+ * ADRs, interfaces, architecture, and any software design that is NOT
+ * UI/visual design. For UI/visual design (target-aware, philosophy-driven),
+ * use `VISUAL_DESIGN_WORKFLOW` instead.
+ *
+ * Stages: design → document → review → done.
  */
-export const _DESIGN_WORKFLOW_V2: WorkflowDef = {
+export const DESIGN_WORKFLOW: WorkflowDef = {
   id: "design",
-  version: "2",
+  version: "4",
   name: "Design",
   description:
-    "Design UI components or pages as real semajsx code through a philosophy-driven pipeline (ADR 0022): frame, language, derive, assemble, review.",
-  workerRole: "coding",
+    "Architectural/technical design: research tradeoffs, make design decisions, document them, and get lead review. For UI/visual design, use visual-design instead.",
   fields: {
-    request: { type: "string", description: "The original design request." },
-    frame: { type: "string", description: "Captured design frame: content type (blog/article/product/docs/admin/…), goals, audience, key actions, information architecture, density (read vs scan vs operate). Everything downstream bends to this." },
-    language: { type: "string", description: "The chosen design language/philosophy — which language from the catalog was selected, why it suits this frame, the feeling/values it elevates, and what it deliberately omits. Guarded: must be set alongside `alternatives`." },
-    alternatives: { type: "json", description: "Array of rejected design languages + why each was rejected — the dialectic record at philosophy altitude. Each entry: { name, philosophy, why_rejected }. Must contain at least the 2-3 candidates that were steelmanned." },
-    designSpec: { type: "json", description: "Derived concrete design specification 因地制宜 (according to circumstances): type scale, spacing rhythm, color roles, shape (radius/border), elevation/shadow, motion, per-component treatments (button/input/card/nav). Each parameter must cite its philosophical justification." },
-    changedFiles: { type: "json", description: "Array of project file paths written during assembly." },
+    request: { type: "string", description: "The original design requirement." },
+    design: { type: "string", description: "Design decisions, tradeoffs, and selected approach." },
+    alternatives: { type: "json", description: "Adversarial record of the design: the candidate approaches considered and why each was rejected — a JSON array of { option, pros, why_rejected }." },
     summary: { type: "string", description: "One-line final outcome." },
   },
   stages: [
     {
-      id: "frame",
+      id: "design",
       category: "in_progress",
       entry: { op: "always" },
-      effort: "medium",
-      outputFields: ["frame"],
-      instructions:
-        "Classify what is being expressed: capture the content type (blog/article/product/docs/admin/…), goals, audience, key actions, information architecture, and density (read vs scan vs operate). Set `frame` with the refined design frame, then request transition. Block if the request is too unclear to frame.",
-    },
-    {
-      id: "language",
-      category: "in_progress",
-      effort: "max",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "frame", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["language", "alternatives"],
-      instructions:
-        "DIVERGE: Select 2-3 candidate design languages from the catalog (`design/design-language-catalog.md`) suited to the `frame`. Steelman each: what it deliberately omits, what it elevates, the feeling/values it creates, and *why* it suits this frame. CONVERGE: choose one language whose philosophy best fits the frame's content, audience, and key actions. Record the chosen language in `language` (philosophy + reasoning + omit/elevate commitments) and the rejected candidates in `alternatives` as a JSON array of { name, philosophy, why_rejected }. The dialectic lives HERE at philosophy altitude — not at pixels. Cannot proceed to params without both fields. Then request transition.",
-    },
-    {
-      id: "derive",
-      category: "in_progress",
       effort: "high",
+      outputFields: ["design", "alternatives"],
+      instructions:
+        "Research the problem and explore design space. Read existing design documents, code structure, and any relevant context. DIVERGE first: identify 2-3 genuinely different candidate approaches and steelman each one. Attack your preferred choice with a pre-mortem. CONVERGE: resolve the design decisions. Record the settled decisions in `design`, and the seriously-considered-but-rejected approaches in `alternatives` as a JSON array of { option, pros, why_rejected }. Then request transition. Block if the requirement is too unclear to design.",
+    },
+    {
+      id: "document",
+      category: "in_progress",
+      effort: "medium",
       entry: {
         op: "and",
         all: [
-          { op: "field", field: "language", cmp: "exists" },
+          { op: "field", field: "design", cmp: "exists" },
           { op: "field", field: "alternatives", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
-      outputFields: ["designSpec"],
+      outputFields: [],
       instructions:
-        "因地制宜 (derive from context): from the chosen `language` philosophy + the `frame`'s constraints, DERIVE the concrete design system parameters — type scale, spacing rhythm, color roles, shape (radius/border), elevation/shadow, motion, and per-component treatments (button/input/card/nav). Each parameter MUST cite its philosophical justification (e.g. 'hairline borders ← minimalism omits ornament'). This is DERIVATION, not selection — every token must trace to the philosophy. Use the chosen language's derivation rules from the catalog. Set `designSpec` to a JSON object with the full specification, then request transition. Block if the language has no derivation rules available.",
-    },
-    {
-      id: "assemble",
-      category: "in_progress",
-      effort: "medium",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "designSpec", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["changedFiles"],
-      instructions:
-        "Build the design from the derived `designSpec` as real semajsx code in the target project. Use the `design_deliver` tool to write assembled files. Prefer language-parameterized `semajsx/ui` components where available. Set `changedFiles` to a JSON array of written file paths, then request transition. Block if writing fails.",
+        "Write a design document capturing the design decisions, tradeoffs, and selected approach. Update existing design docs (e.g. DESIGN.md, ADR files) with the settled decisions. Submit evidence with `submit_evidence` (files written, summaries), then request transition.",
     },
     {
       id: "review",
       category: "in_progress",
-      effort: "high",
+      effort: "low",
       entry: {
         op: "and",
         all: [
-          { op: "field", field: "designSpec", cmp: "exists" },
-          { op: "field", field: "changedFiles", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
         ],
       },
+      acceptance: [{ kind: "projectGate", description: "Submit evidence for lead review" }],
       outputFields: ["summary"],
       instructions:
-        "Preview and evaluate the assembled design against the chosen `language` philosophy and the `frame`'s goals. Use `design_preview` to emit preview bundles for the owner if needed. Judge coherence-with-the-stated-philosophy, not raw aesthetics — every parameter should trace to the philosophy. Iterate within this stage: adjust files, re-preview, get owner feedback. Then PRESENT for OWNER VISUAL REVIEW (the honest limit: the agent cannot see rendered pixels, so the owner must visually approve). Set `summary` with a one-line outcome of the review, then request transition. Block if the design fails to cohere with its stated philosophy.",
+        "Present the design for lead review. Submit structured evidence with `submit_evidence` (design docs, alternatives record), set `summary`, then request transition. The lead must review the evidence and accept/reject; do not claim acceptance yourself.",
     },
     {
       id: "done",
@@ -250,150 +221,16 @@ export const _DESIGN_WORKFLOW_V2: WorkflowDef = {
       entry: {
         op: "and",
         all: [
-          { op: "field", field: "changedFiles", cmp: "exists" },
+          { op: "field", field: "design", cmp: "exists" },
           { op: "field", field: "summary", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
+          { op: "acceptancePassed" },
         ],
       },
     },
   ],
 };
 
-/**
- * The original design workflow (ADR 0017), kept so that tasks already pinned
- * to `design@v1` can still load and replay their timeline. Registration
- * happens in `workspace.ts` alongside the v2 definition. Deleted after one
- * transition release. (ADR 0022)
- */
-export const _DESIGN_WORKFLOW_V1: WorkflowDef = {
-  id: "design",
-  version: "1",
-  name: "Design",
-  description:
-    "Design UI components or pages as real semajsx code: brief, diverge, preview, critique, converge, refine, deliver.",
-  workerRole: "coding",
-  fields: {
-    request: { type: "string", description: "The original design request." },
-    brief: { type: "string", description: "Captured design brief with constraints, targets (web and/or TUI), and style tokens." },
-    candidates: { type: "json", description: "Array of candidate designs, each as a runnable semajsx bundle with name, description, and code." },
-    critiques: { type: "json", description: "Array of adversarial critiques per candidate covering hierarchy, a11y, consistency, token usage." },
-    design: { type: "string", description: "The converged/chosen design description." },
-    changedFiles: { type: "json", description: "Array of project file paths written during delivery." },
-    summary: { type: "string", description: "One-line final outcome." },
-  },
-  stages: [
-    {
-      id: "brief",
-      category: "in_progress",
-      entry: { op: "always" },
-      effort: "medium",
-      outputFields: ["brief"],
-      instructions:
-        "Capture what to design — page, component, or screen — and the constraints: target platforms (web and/or TUI), style tokens/branding, and any existing patterns to follow. Set `brief` with the refined brief, then request transition. Block if the request is too unclear.",
-    },
-    {
-      id: "diverge",
-      category: "in_progress",
-      effort: "max",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "brief", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["candidates"],
-      instructions:
-        "Generate N genuinely different candidate designs as real semajsx code (the diverge step — judge-panel pattern, each a different approach). Each candidate is a runnable bundle. Set `candidates` to a JSON array of the candidate designs (each with name, description, and code), then request transition.",
-    },
-    {
-      id: "preview",
-      category: "in_progress",
-      effort: "medium",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "candidates", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      instructions:
-        "Emit each candidate as a live preview — serve the runnable semajsx bundles for the owner to interact with (web: SSR/dev server or static SSG build; TUI: terminal render). When the previews are live, request transition. Do not write workflow fields in this stage — just serve previews.",
-    },
-    {
-      id: "critique",
-      category: "in_progress",
-      effort: "high",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "candidates", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["critiques"],
-      instructions:
-        "Adversarially critique the candidates across multiple lenses — information hierarchy, accessibility, visual consistency, token/token-usage discipline. Each candidate should be judged by distinct lenses. Record the critiques in `critiques` as a JSON array (each entry with candidate name, lens, and assessment), then request transition.",
-    },
-    {
-      id: "converge",
-      category: "in_progress",
-      effort: "high",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "critiques", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["design"],
-      instructions:
-        "Synthesize the best design from the candidates, grafting good ideas from runners-up. Set `design` with the converged design description, then request transition for owner review. The owner approves before the next stage — present the decision and rationale clearly.",
-    },
-    {
-      id: "refine",
-      category: "in_progress",
-      effort: "medium",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "design", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["design"],
-      instructions:
-        "Iterate on owner feedback — update the design and re-preview it. Keep updating `design` based on feedback. When the design is approved for delivery, request transition to the deliver stage.",
-    },
-    {
-      id: "deliver",
-      category: "in_progress",
-      effort: "medium",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "design", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-      outputFields: ["changedFiles", "summary"],
-      instructions:
-        "Write the approved design as real semajsx/ui-based components or pages into the target project. Set `changedFiles` to a JSON array of written file paths and set `summary` as a one-line outcome, then request transition. Block if the writing fails.",
-    },
-    {
-      id: "done",
-      category: "done",
-      entry: {
-        op: "and",
-        all: [
-          { op: "field", field: "changedFiles", cmp: "exists" },
-          { op: "field", field: "summary", cmp: "exists" },
-          { op: "hasEvent", eventType: "transition.requested" },
-        ],
-      },
-    },
-  ],
-};
 
 /**
  * The merged adaptive development workflow (ADR 0020): a single workflow for

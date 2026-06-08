@@ -44,4 +44,4 @@ export {
   type ValidationIssue,
 } from "./validate";
 export { CommandRejectedError, WorkflowValidationError } from "./errors";
-export { _DESIGN_WORKFLOW_V1, _DESIGN_WORKFLOW_V2, DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./builtin";
+export { DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./builtin";

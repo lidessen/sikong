@@ -54,7 +54,7 @@ interface PreviewIndexEntry {
  *
  *   workerTools: (ctx, loop) => {
  *     const projectRoot = ctx.project?.root ?? process.cwd();
- *     return ctx.workflow.id === "design"
+ *     return ctx.workflow.id === "visual-design"
  *       ? buildDesignTools({ projectRoot }).tools
  *       : {};
  *   }

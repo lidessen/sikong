@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { assertValidWorkflow, validateWorkflow, type ValidateOptions } from "./validate";
-import { _DESIGN_WORKFLOW_V1, _DESIGN_WORKFLOW_V2, DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW } from "./builtin";
+import { DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./builtin";
 import { WorkflowValidationError } from "./errors";
 import type { Guard, WorkflowDef } from "./types";
 
@@ -18,6 +18,10 @@ describe("validateWorkflow", () => {
 
   test("the builtin DESIGN workflow is valid", () => {
     expect(validateWorkflow(DESIGN_WORKFLOW)).toEqual([]);
+  });
+
+  test("the builtin VISUAL DESIGN workflow is valid", () => {
+    expect(validateWorkflow(VISUAL_DESIGN_WORKFLOW)).toEqual([]);
   });
 
   test("the builtin RELEASE workflow is valid", () => {
@@ -163,22 +167,20 @@ describe("validateWorkflow", () => {
   });
 });
 
-// ── DESIGN_WORKFLOW (v2, ADR 0022) adversarial edge-case tests ─────────────
+// ── DESIGN_WORKFLOW (v4, generic architectural/technical design) adversarial edge-case tests ─────
 
-describe("DESIGN_WORKFLOW edge cases", () => {
+describe("DESIGN_WORKFLOW edge cases (v4, generic design)", () => {
   const wf = DESIGN_WORKFLOW;
 
-  test("workerRole is 'coding' so it staffs a coding-capable worker", () => {
-    expect(wf.workerRole).toBe("coding");
+  test("has no workerRole (any worker can do design)", () => {
+    expect(wf.workerRole).toBeUndefined();
   });
 
-  test("has the full 6-stage sequence: frame → language → derive → assemble → review → done", () => {
+  test("has the full 4-stage sequence: design → document → review → done", () => {
     const ids = wf.stages.map((s) => s.id);
     expect(ids).toEqual([
-      "frame",
-      "language",
-      "derive",
-      "assemble",
+      "design",
+      "document",
       "review",
       "done",
     ]);
@@ -203,13 +205,23 @@ describe("DESIGN_WORKFLOW edge cases", () => {
     }
   });
 
-  test("every stage has outputFields (no stage is purely side-effectful in v2)", () => {
-    for (const stage of wf.stages) {
-      if (stage.id === "done") continue; // terminal stage has no outputFields
-      expect(stage.outputFields).toBeDefined();
-      expect(stage.outputFields?.length).toBeGreaterThan(0);
-      expect(stage.instructions).toBeTruthy();
-    }
+  test("design stage outputs are (design, alternatives) — the key design artifacts", () => {
+    const design = wf.stages[0];
+    expect(design?.id).toBe("design");
+    expect(design?.outputFields).toContain("design");
+    expect(design?.outputFields).toContain("alternatives");
+  });
+
+  test("document stage has no outputFields (purely side-effectful, writes to files)", () => {
+    const doc = wf.stages[1];
+    expect(doc?.id).toBe("document");
+    expect(doc?.outputFields).toEqual([]);
+  });
+
+  test("review stage outputs summary", () => {
+    const review = wf.stages[2];
+    expect(review?.id).toBe("review");
+    expect(review?.outputFields).toContain("summary");
   });
 
   test("all outputFields in every stage are declared as workflow fields with a compatible type", () => {
@@ -219,34 +231,6 @@ describe("DESIGN_WORKFLOW edge cases", () => {
         expect(def).toBeDefined();
       }
     }
-  });
-
-  test("JSON-typed fields (alternatives, designSpec, changedFiles) only appear as outputFields of stages that write them", () => {
-    expect(wf.fields.alternatives).toBeDefined();
-    expect(wf.fields.alternatives?.type).toBe("json");
-    expect(wf.fields.designSpec).toBeDefined();
-    expect(wf.fields.designSpec?.type).toBe("json");
-    expect(wf.fields.changedFiles).toBeDefined();
-    expect(wf.fields.changedFiles?.type).toBe("json");
-  });
-
-  test("language and alternatives are paired output fields (language stage outputs both)", () => {
-    const language = wf.stages[1];
-    expect(language?.id).toBe("language");
-    expect(language?.outputFields).toContain("language");
-    expect(language?.outputFields).toContain("alternatives");
-  });
-
-  test("the 'derive' stage guards on both language AND alternatives (the dialectic gate)", () => {
-    const derive = wf.stages[2];
-    expect(derive?.id).toBe("derive");
-    const refs = collectAllFieldGuards(derive?.entry ?? { op: "always" });
-    const langGuard = refs.find((g) => g.field === "language");
-    const altGuard = refs.find((g) => g.field === "alternatives");
-    expect(langGuard).toBeDefined();
-    expect(altGuard).toBeDefined();
-    expect(langGuard?.cmp).toBe("exists");
-    expect(altGuard?.cmp).toBe("exists");
   });
 
   test("every guard field reference that uses 'exists' cmp is paired with a field that appears in some stage's outputFields", () => {
@@ -269,8 +253,8 @@ describe("DESIGN_WORKFLOW edge cases", () => {
     }
   });
 
-  test("done stage's entry guard references fields set by earlier stages (changedFiles from assemble, summary from review)", () => {
-    const done = wf.stages[5];
+  test("done stage's entry guard references fields set by earlier stages (design from design stage, summary from review)", () => {
+    const done = wf.stages[3];
     expect(done?.id).toBe("done");
 
     // Collect output fields from all non-terminal stages
@@ -288,24 +272,6 @@ describe("DESIGN_WORKFLOW edge cases", () => {
       expect(earlierOutputs.has(ref)).toBe(true);
     }
   });
-});
-
-test("_DESIGN_WORKFLOW_V1 backward compat constant is valid and matches the ADR 0017 shape", () => {
-  expect(validateWorkflow(_DESIGN_WORKFLOW_V1)).toEqual([]);
-  expect(_DESIGN_WORKFLOW_V1.version).toBe("1");
-  expect(_DESIGN_WORKFLOW_V1.stages.map((s) => s.id)).toEqual([
-    "brief", "diverge", "preview", "critique", "converge", "refine", "deliver", "done",
-  ]);
-});
-
-test("_DESIGN_WORKFLOW_V2 backward compat constant is valid and matches the ADR 0022 shape", () => {
-  expect(validateWorkflow(_DESIGN_WORKFLOW_V2)).toEqual([]);
-  expect(_DESIGN_WORKFLOW_V2.version).toBe("2");
-  expect(_DESIGN_WORKFLOW_V2.stages.map((s) => s.id)).toEqual([
-    "frame", "language", "derive", "assemble", "review", "done",
-  ]);
-  // v2 has no `target` field
-  expect(_DESIGN_WORKFLOW_V2.fields["target"]).toBeUndefined();
 });
 
 /** Collect field names referenced by an {@link op: "field"} guard within a nested guard tree. */

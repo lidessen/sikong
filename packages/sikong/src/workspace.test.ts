@@ -129,7 +129,7 @@ describe("workspace (CLI wiring)", () => {
     }
   });
 
-  test("openWorkspace registers builtin design workflow (v2) and keeps it builtin-owned", async () => {
+  test("openWorkspace registers builtin design workflow (v4 architectural) and keeps it builtin-owned", async () => {
     const dir = await tmp();
     try {
       const fakeDesign: WorkflowDef = {
@@ -149,9 +149,12 @@ describe("workspace (CLI wiring)", () => {
       });
 
       const design = ws.registry.get("design");
-      expect(design?.fields.frame).toBeDefined();
+      // DESIGN_WORKFLOW (v4) is architectural/technical, without visual-design fields
+      expect(design?.fields.design).toBeDefined();
+      expect(design?.fields.alternatives).toBeDefined();
+      expect(design?.fields.frame).toBeUndefined();
       expect(design?.stages.map((s) => s.id)).toEqual([
-        "frame", "language", "derive", "assemble", "review", "done",
+        "design", "document", "review", "done",
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
