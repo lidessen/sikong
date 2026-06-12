@@ -309,6 +309,20 @@ describe("sikong CLI", () => {
         data: { phase: "worker", event: "tool_call_start", tool: "Read", argsPreview: "{\"file\":\"a.ts\"}" },
       });
       await chronicle.append({
+        type: "wake.progress",
+        taskId: "t1",
+        wakeId: "w1",
+        summary: "tool Read ended",
+        data: {
+          phase: "worker",
+          event: "tool_call_end",
+          tool: "Read",
+          callId: "read-1",
+          durationMs: 12,
+          resultPreview: "{\"ok\":true}",
+        },
+      });
+      await chronicle.append({
         type: "wake.diagnostics",
         taskId: "t1",
         wakeId: "w1",
@@ -322,22 +336,36 @@ describe("sikong CLI", () => {
         summary: "worker pass requires lead review",
         data: { reason: "no_state_commands" },
       });
+      await chronicle.append({ type: "wake.end", taskId: "t1", wakeId: "w1", summary: "wake done" });
 
       const textOut = Bun.spawnSync([process.execPath, cliPath, "trace", "t1", "--dir", dir, "--text"]);
       expect(textOut.exitCode).toBe(0);
       const text = new TextDecoder().decode(textOut.stdout);
       expect(text).toContain("Trace t1 [in_progress]");
       expect(text).toContain("worker=flash");
-      expect(text).toContain("Latest wake: w1 status=active");
+      expect(text).toContain("Latest wake: w1 status=ended");
       expect(text).toContain("worker stateCommands=0 tools=Bash:1,Read:3");
       expect(text).toContain("last tool=Read");
+      expect(text).toContain("tools:");
+      expect(text).toContain("worker start Read");
+      expect(text).toContain("worker end Read call=read-1 duration=12ms");
       expect(text).toContain("review required: ");
 
       const jsonOut = Bun.spawnSync([process.execPath, cliPath, "trace", "t1", "--dir", dir]);
       expect(jsonOut.exitCode).toBe(0);
       expect(JSON.parse(new TextDecoder().decode(jsonOut.stdout))).toMatchObject({
         task: { id: "t1", workerId: "flash" },
-        latestWake: { wakeId: "w1", status: "active", lastTool: "Read", stateCommands: 0, tools: "Bash:1,Read:3" },
+        latestWake: {
+          wakeId: "w1",
+          status: "ended",
+          lastTool: "Read",
+          stateCommands: 0,
+          tools: "Bash:1,Read:3",
+          toolTimeline: [
+            { type: "wake.progress", data: { event: "tool_call_start", tool: "Read" } },
+            { type: "wake.progress", data: { event: "tool_call_end", tool: "Read", callId: "read-1" } },
+          ],
+        },
       });
     } finally {
       await rm(dir, { recursive: true, force: true });

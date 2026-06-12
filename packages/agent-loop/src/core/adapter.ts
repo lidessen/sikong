@@ -2,6 +2,8 @@ import type { CapabilityList } from "../core/capabilities";
 import type { LoopEvent, TokenUsage } from "../core/events";
 import type { ToolHookDecision, ToolUseHookEvent } from "../core/hooks";
 import type {
+  CleanupOptions,
+  CleanupResult,
   EffortLevel,
   RuntimeId,
   McpServers,
@@ -53,6 +55,12 @@ export interface BackendRun extends AsyncIterable<LoopEvent> {
   /** Present iff the backend declares a steer capability. */
   steer?(message: string): Promise<"live" | "deferred">;
   cancel(reason?: string): void;
+  /**
+   * Optional adapter-native cleanup. The executor provides a cooperative
+   * default when absent; adapters should implement this only when they can add
+   * runtime-specific facts such as process ids or native close semantics.
+   */
+  cleanup?(options?: CleanupOptions): Promise<CleanupResult>;
   /**
    * The model's context window in tokens, if known. The executor uses it to
    * fill `usedRatio` on `usage` events (the signal an outer supervisor uses to

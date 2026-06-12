@@ -9,7 +9,15 @@ import { createEventChannel } from "../core/channel";
 import { addUsage, emptyUsage, type LoopEvent, type TokenUsage } from "../core/events";
 import { CapabilityNotSupportedError } from "../core/errors";
 import type { HookDecision, Hooks, ToolHookDecision } from "../core/hooks";
-import type { RuntimeId, RunHandle, RunInput, RunResult, SteerOutcome } from "../core/types";
+import type {
+  CleanupOptions,
+  CleanupResult,
+  RuntimeId,
+  RunHandle,
+  RunInput,
+  RunResult,
+  SteerOutcome,
+} from "../core/types";
 import { compileRequest } from "./skills";
 
 /**
@@ -109,6 +117,73 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     } else {
       cancelledBeforeStart = true;
     }
+  }
+
+  async function waitForResult(graceMs: number | undefined): Promise<RunResult | undefined> {
+    if (settled) return resultPromise;
+    const ms = Math.max(0, graceMs ?? 0);
+    if (ms === 0) return undefined;
+    return Promise.race([
+      resultPromise,
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), ms)),
+    ]);
+  }
+
+  async function doCleanup(options: CleanupOptions = {}): Promise<CleanupResult> {
+    const started = Date.now();
+    const hardKill = options.hardKill ?? false;
+    const base = {
+      hardKill,
+      ...(options.reason ? { reason: options.reason } : {}),
+      runtime: backend.id,
+    };
+
+    if (settled) {
+      const result = await resultPromise;
+      return {
+        ...base,
+        status: result.status === "cancelled" ? "cancelled_settled" : "settled",
+        elapsedMs: Date.now() - started,
+        resultStatus: result.status,
+      };
+    }
+
+    if (backendRun?.cleanup) {
+      try {
+        const cleanup = await backendRun.cleanup(options);
+        return {
+          ...base,
+          ...cleanup,
+          runtime: cleanup.runtime ?? backend.id,
+          hardKill: cleanup.hardKill ?? hardKill,
+        };
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        return {
+          ...base,
+          status: "unsettled",
+          elapsedMs: Date.now() - started,
+          error: error.message,
+        };
+      }
+    }
+
+    doCancel(options.reason);
+    const result = await waitForResult(options.graceMs);
+    if (result) {
+      return {
+        ...base,
+        status: result.status === "cancelled" ? "cancelled_settled" : "settled",
+        elapsedMs: Date.now() - started,
+        resultStatus: result.status,
+      };
+    }
+    return {
+      ...base,
+      status: "unsettled",
+      elapsedMs: Date.now() - started,
+      pidUnavailableReason: "adapter did not expose a process id",
+    };
   }
 
   async function applyDecision(decision: HookDecision | void): Promise<void> {
@@ -244,5 +319,6 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     usage: resultPromise.then((r) => r.usage),
     steer: (message) => doSteer(message),
     cancel: (reason) => doCancel(reason),
+    cleanup: (options) => doCleanup(options),
   };
 }

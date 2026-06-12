@@ -150,6 +150,35 @@ export interface RunResult {
   text: string;
 }
 
+export interface CleanupOptions {
+  /**
+   * How long to wait for the run to settle after cooperative cancellation.
+   * Undefined means the caller only wants the best-effort adapter cleanup path.
+   */
+  graceMs?: number;
+  /** Human-readable reason for audit records and runtime cancellation. */
+  reason?: string;
+  /**
+   * Reserved for adapter-specific hard termination. Defaults to false; callers
+   * must opt in, and adapters may still report that hard kill is unavailable.
+   */
+  hardKill?: boolean;
+}
+
+export type CleanupStatus = "settled" | "cancelled_settled" | "unsettled";
+
+export interface CleanupResult {
+  status: CleanupStatus;
+  elapsedMs: number;
+  hardKill: boolean;
+  reason?: string;
+  runtime?: RuntimeId;
+  resultStatus?: RunStatus;
+  pid?: number;
+  pidUnavailableReason?: string;
+  error?: string;
+}
+
 export type SteerOutcome = {
   /** "live" = injected mid-turn; "deferred" = next step boundary; "rejected" = backend can't steer. */
   mode: "live" | "deferred" | "rejected";
@@ -180,6 +209,12 @@ export interface RunHandle extends AsyncIterable<LoopEvent> {
   steer(message: string): Promise<SteerOutcome>;
   /** Cancel the run. */
   cancel(reason?: string): void;
+  /**
+   * Request cooperative cleanup and wait for a bounded settlement result.
+   * This is not a hard-kill by default; `hardKill` must be explicitly requested
+   * and may be unsupported by a backend.
+   */
+  cleanup(options?: CleanupOptions): Promise<CleanupResult>;
 }
 
 export interface PreflightResult {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   addUsage,
+  type CleanupResult,
   emptyUsage,
   type AgentLoop,
   type EffortLevel,
@@ -59,6 +60,8 @@ const DIAGNOSTIC_TEXT_LIMIT = 800;
 const TOOL_FACT_LIMIT = 40;
 const TOOL_PREVIEW_LIMIT = 600;
 const INTAKE_TIMEOUT_MS = 90_000;
+const RUN_CLEANUP_GRACE_MS = 1_000;
+const RUN_CLEANUP_TIMEOUT_MS = RUN_CLEANUP_GRACE_MS + 250;
 const STEER_POLL_MS = 1_000;
 
 interface RunDiagnostics {
@@ -652,9 +655,9 @@ export class WorkflowEngine {
       tools,
       signal: controller.signal,
     });
-    const result = await this.boundedRun(run.result, this.o.wakeTimeoutMs ?? INTAKE_TIMEOUT_MS, () => {
+    const result = await this.boundedRun(run.result, this.o.wakeTimeoutMs ?? INTAKE_TIMEOUT_MS, async () => {
       controller.abort();
-      run.cancel("intake timeout");
+      return this.cleanupRun(run, "intake timeout");
     });
     if (result.status === "error") {
       await this.chron({ type: "wake.error", summary: `intake failed: ${result.error?.message ?? "unknown"}` });
@@ -861,11 +864,14 @@ export class WorkflowEngine {
     workerRun = run;
     if (pendingWorkerStop) stopWorkerRun(pendingWorkerStop);
     const stopWorkerSteerPump = this.startSteerPump(taskId, wakeId, run, steerFromSeq, workerSteerStartedAt, stopWorkerRun);
+    let recordingWorkerEvents = true;
     const consumeRun = async (
       runHandle: ReturnType<AgentLoop["run"]>,
       diagnostics: RunDiagnostics,
+      shouldRecord: () => boolean,
     ): Promise<RunResult> => {
       for await (const event of runHandle) {
+        if (!shouldRecord()) continue;
         observeLoopEvent(diagnostics, event);
         this.o.hooks?.onLoopEvent?.({ taskId, wakeId, event });
         const summary = progressSummary(event);
@@ -877,10 +883,27 @@ export class WorkflowEngine {
     const workerDiagnostics = createRunDiagnostics("worker");
     let result: RunResult;
     try {
-      result = await this.boundedRun(consumeRun(run, workerDiagnostics), timeout.timeoutMs, () => {
-        controller.abort();
-        run.cancel("wake timeout");
-      });
+      result = await this.boundedRun(
+        consumeRun(run, workerDiagnostics, () => recordingWorkerEvents),
+        timeout.timeoutMs,
+        async () => {
+          recordingWorkerEvents = false;
+          controller.abort();
+          return this.cleanupRun(run, "wake timeout");
+        },
+        (cleanup) => {
+          return this.chron({
+            type: "wake.cleanup",
+            taskId,
+            wakeId,
+            summary:
+              cleanup.status === "unsettled"
+                ? `worker cleanup unsettled after ${cleanup.reason ?? "timeout"}`
+                : `worker cleanup ${cleanup.status} after ${cleanup.reason ?? "timeout"}`,
+            data: cleanup as unknown as Record<string, unknown>,
+          });
+        },
+      );
     } finally {
       stopWorkerSteerPump();
       this.clearStopWake(taskId, stopWorkerRun);
@@ -1254,7 +1277,8 @@ export class WorkflowEngine {
   private async boundedRun(
     consume: Promise<RunResult>,
     ms: number | undefined,
-    onTimeout: () => void,
+    onTimeout: () => void | CleanupResult | Promise<void | CleanupResult>,
+    onCleanup?: (cleanup: CleanupResult) => void | Promise<void>,
   ): Promise<RunResult> {
     const errored = (error: Error): RunResult => ({
       events: [],
@@ -1267,13 +1291,57 @@ export class WorkflowEngine {
     const safe = consume.catch((err) => errored(err instanceof Error ? err : new Error(String(err))));
     if (!ms) return safe;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const emitCleanup = async (cleanup: CleanupResult): Promise<void> => {
+      await Promise.resolve(onCleanup?.(cleanup)).catch(() => {});
+    };
     const timeout = new Promise<RunResult>((resolve) => {
-      timer = setTimeout(() => {
-        onTimeout();
+      timer = setTimeout(() => void (async () => {
+        const cleanup = await Promise.resolve(onTimeout()).catch((err) => {
+          const error = err instanceof Error ? err : new Error(String(err));
+          return {
+            status: "unsettled" as const,
+            reason: "timeout",
+            elapsedMs: 0,
+            hardKill: false,
+            error: error.message,
+          };
+        });
+        if (cleanup) await emitCleanup(cleanup);
         resolve(errored(new Error(`wake timed out after ${ms}ms`)));
-      }, ms);
+      })(), ms);
     });
     const result = await Promise.race([safe, timeout]);
+    if (timer) clearTimeout(timer);
+    return result;
+  }
+
+  private async cleanupRun(run: RunHandle, reason: string): Promise<CleanupResult> {
+    const startedAt = Date.now();
+    const cleanup = run
+      .cleanup({ reason, graceMs: RUN_CLEANUP_GRACE_MS, hardKill: false })
+      .catch((err) => {
+        const error = err instanceof Error ? err : new Error(String(err));
+        return {
+          status: "unsettled" as const,
+          reason,
+          elapsedMs: Date.now() - startedAt,
+          hardKill: false,
+          error: error.message,
+        };
+      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<CleanupResult>((resolve) => {
+      timer = setTimeout(() => {
+        resolve({
+          status: "unsettled",
+          reason,
+          elapsedMs: Date.now() - startedAt,
+          hardKill: false,
+          error: `cleanup did not settle within ${RUN_CLEANUP_TIMEOUT_MS}ms`,
+        });
+      }, RUN_CLEANUP_TIMEOUT_MS);
+    });
+    const result = await Promise.race([cleanup, timeout]);
     if (timer) clearTimeout(timer);
     return result;
   }

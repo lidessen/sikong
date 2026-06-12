@@ -112,6 +112,9 @@ export type {
 } from "./core/hooks";
 export { defineTool } from "./core/types";
 export type {
+  CleanupOptions,
+  CleanupResult,
+  CleanupStatus,
   EffortLevel,
   RuntimeId,
   McpServerConfig,

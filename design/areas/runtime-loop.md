@@ -46,9 +46,17 @@ aggregation, provider selection, or workspace state.
 - `text`, `usage`, and `result` promises for aggregate views;
 - `steer(message)` for live or deferred steering when supported;
 - `cancel(reason)` for cooperative cancellation.
+- `cleanup(options)` for cooperative, bounded cleanup and settlement facts.
 
 Failures are reported as an `error` event and `result.status === "error"`.
 `result` should not reject.
+
+`cleanup` is not a default hard-kill path. The executor requests cancellation,
+waits up to the caller's `graceMs`, and returns `settled`,
+`cancelled_settled`, or `unsettled`. `hardKill` defaults to `false`; adapters
+may implement native cleanup only when they can report real runtime/process
+facts. SDK runtimes that do not expose a process id should report a
+`pidUnavailableReason`, not fabricate a PID.
 
 ### `ModelProvider`
 

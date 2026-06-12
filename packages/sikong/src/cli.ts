@@ -169,6 +169,16 @@ function chronicleDataSuffix(e: { type: string; data?: Record<string, unknown> }
     if (data.error) parts.push(`error=${String(data.error).slice(0, 120)}`);
     return ` [${parts.join(" ")}]`;
   }
+  if (e.type === "wake.cleanup") {
+    const parts = [
+      `status=${String(data.status ?? "")}`,
+      `reason=${String(data.reason ?? "")}`,
+    ];
+    if (data.elapsedMs !== undefined) parts.push(`elapsedMs=${String(data.elapsedMs)}`);
+    if (data.resultStatus) parts.push(`result=${String(data.resultStatus)}`);
+    if (data.error) parts.push(`error=${String(data.error).slice(0, 120)}`);
+    return ` [${parts.join(" ")}]`;
+  }
   return "";
 }
 
@@ -176,24 +186,67 @@ function chronicleLine(e: { ts: number; type: string; taskId?: string; summary: 
   return `${new Date(e.ts).toISOString().slice(11, 19)} ${e.type}${e.taskId ? ` ${e.taskId}` : ""} — ${e.summary}${chronicleDataSuffix(e)}`;
 }
 
+function traceTs(ts: number): string {
+  return new Date(ts).toISOString().slice(11, 19);
+}
+
 function latestWakeId(entries: readonly ChronicleEntry[]): string | undefined {
   return entries.find((entry) => entry.wakeId)?.wakeId;
 }
 
+function byNewest(a: ChronicleEntry, b: ChronicleEntry): number {
+  return b.ts - a.ts || b.seq - a.seq;
+}
+
+function byOldest(a: ChronicleEntry, b: ChronicleEntry): number {
+  return a.ts - b.ts || a.seq - b.seq;
+}
+
 function latestWakeStatus(entries: readonly ChronicleEntry[]): "active" | "ended" | "error" | "unknown" {
-  if (entries.some((entry) => entry.type === "wake.error")) return "error";
-  if (entries.some((entry) => entry.type === "wake.end")) return "ended";
+  const terminal = entries
+    .filter((entry) => entry.type === "wake.end" || entry.type === "wake.error")
+    .sort(byNewest)[0];
+  if (terminal?.type === "wake.end") return "ended";
+  if (terminal?.type === "wake.error") return "error";
   if (
     entries.some(
       (entry) =>
         entry.type === "wake.start" ||
         entry.type === "wake.progress" ||
+        entry.type === "wake.steer" ||
         entry.type === "wake.diagnostics" ||
-        entry.type === "wake.review_required",
+        entry.type === "wake.review_required" ||
+        entry.type === "wake.cleanup",
     )
   )
     return "active";
   return "unknown";
+}
+
+function toolTimelineFrom(entries: readonly ChronicleEntry[], limit = 12): ChronicleEntry[] {
+  return entries
+    .filter(
+      (entry) =>
+        entry.type === "wake.progress" &&
+        (entry.data?.event === "tool_call_start" || entry.data?.event === "tool_call_end") &&
+        typeof entry.data.tool === "string",
+    )
+    .sort(byOldest)
+    .slice(-limit);
+}
+
+function renderToolTimeline(entry: ChronicleEntry): string {
+  const data = entry.data ?? {};
+  const kind = data.event === "tool_call_start" ? "start" : data.error ? "error" : "end";
+  const parts = [
+    `${traceTs(entry.ts)} ${String(data.phase ?? "")} ${kind} ${String(data.tool ?? "")}`,
+  ];
+  if (data.callId) parts.push(`call=${String(data.callId)}`);
+  if (data.durationMs !== undefined) parts.push(`duration=${String(data.durationMs)}ms`);
+  if (data.argsPreview) parts.push(`args=${String(data.argsPreview).slice(0, 180)}`);
+  if (data.resultPreview) parts.push(`result=${String(data.resultPreview).slice(0, 180)}`);
+  if (data.error) parts.push(`error=${String(data.error).slice(0, 140)}`);
+  return parts.join(" ");
 }
 
 function renderTrace(view: {
@@ -209,7 +262,9 @@ function renderTrace(view: {
     lastProgress?: ChronicleEntry;
     diagnostics?: ChronicleEntry;
     reviewRequired?: ChronicleEntry;
+    cleanup?: ChronicleEntry;
     error?: ChronicleEntry;
+    toolTimeline: ChronicleEntry[];
   };
   recent: ChronicleEntry[];
 }): string {
@@ -230,9 +285,14 @@ function renderTrace(view: {
     );
     lines.push(`  worker stateCommands=${String(wake.stateCommands ?? "unknown")} tools=${wake.tools || "none"}`);
     if (wake.lastTool) lines.push(`  last tool=${wake.lastTool}`);
+    if (wake.toolTimeline.length) {
+      lines.push("  tools:");
+      for (const entry of wake.toolTimeline) lines.push(`    ${renderToolTimeline(entry)}`);
+    }
     if (wake.lastProgress) lines.push(`  progress: ${chronicleLine(wake.lastProgress)}`);
     if (wake.diagnostics) lines.push(`  diagnostics: ${chronicleLine(wake.diagnostics)}`);
     if (wake.reviewRequired) lines.push(`  review required: ${chronicleLine(wake.reviewRequired)}`);
+    if (wake.cleanup) lines.push(`  cleanup: ${chronicleLine(wake.cleanup)}`);
     if (wake.error) lines.push(`  error: ${chronicleLine(wake.error)}`);
   }
   lines.push("\nRecent:");
@@ -249,13 +309,14 @@ async function taskTrace(
   },
 ) {
   const task = await stores.projections.get(taskId);
-  const recent = await stores.chronicle.recent({ taskId, limit: 80 });
+  const recent = await stores.chronicle.recent({ taskId, limit: 300 });
   const wakeId = latestWakeId(recent);
   const wakeEntries = wakeId ? recent.filter((entry) => entry.wakeId === wakeId) : [];
   const latest = wakeEntries[0];
   const diagnostics = wakeEntries.find((entry) => entry.type === "wake.diagnostics");
   const reviewRequired = wakeEntries.find((entry) => entry.type === "wake.review_required");
   const lastProgress = wakeEntries.find((entry) => entry.type === "wake.progress");
+  const cleanup = wakeEntries.find((entry) => entry.type === "wake.cleanup");
   const error = wakeEntries.find((entry) => entry.type === "wake.error");
   const data = diagnostics?.data;
   const progressData = lastProgress?.data;
@@ -274,7 +335,9 @@ async function taskTrace(
             ...(lastProgress ? { lastProgress } : {}),
             ...(diagnostics ? { diagnostics } : {}),
             ...(reviewRequired ? { reviewRequired } : {}),
+            ...(cleanup ? { cleanup } : {}),
             ...(error ? { error } : {}),
+            toolTimeline: toolTimelineFrom(wakeEntries),
           },
         }
       : {}),

@@ -139,7 +139,10 @@ lead review (ADR 0034). A worker-emitted
 current worker pass like other stage-closing command tools, but it does not
 terminally cancel the task and does not use the external `submitCommand`
 preemption path. The existing `boundedRun` wall-clock timeout remains the safety
-net if the SDK ignores cancellation.
+net if the SDK ignores cancellation. On timeout, the engine calls
+`run.cleanup({ hardKill: false })`, waits only for the configured grace window,
+and records the resulting `wake.cleanup` fact as settled, cancelled-settled, or
+unsettled.
 
 The wake is the control tick. Before ADR 0032, the settling lag was at most one
 wake (bounded lag, the original simple choice). With preemption, the settling

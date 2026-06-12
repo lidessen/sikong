@@ -224,6 +224,12 @@ describe("WorkflowEngine wake cycle", () => {
               return { mode: "deferred" as const };
             },
             cancel: () => {},
+            cleanup: async () => ({
+              status: "settled" as const,
+              elapsedMs: 0,
+              hardKill: false,
+              resultStatus: (await result).status,
+            }),
           };
         },
         preflight: async () => ({ ok: true }),
@@ -301,6 +307,12 @@ describe("WorkflowEngine wake cycle", () => {
               return { mode: "deferred" as const };
             },
             cancel: () => {},
+            cleanup: async () => ({
+              status: "settled" as const,
+              elapsedMs: 0,
+              hardKill: false,
+              resultStatus: (await result).status,
+            }),
           };
         },
         preflight: async () => ({ ok: true }),
@@ -897,10 +909,12 @@ describe("WorkflowEngine wake cycle", () => {
 
   test("a hung wake is bounded by wakeTimeoutMs and reported, never left to hang", async () => {
     const errors: Error[] = [];
+    const chronicle = new MemoryChronicleStore(() => 1);
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
       registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
       loop: () => hangingLoop(),
       wakeTimeoutMs: 40,
       hooks: { onError: (i: { error: Error }) => errors.push(i.error) },
@@ -911,6 +925,40 @@ describe("WorkflowEngine wake cycle", () => {
 
     expect(errors.some((e) => /timed out/.test(e.message))).toBe(true);
     expect((await engine.getTask("h1"))?.status).toBe("in_progress");
+    const cleanup = (await chronicle.recent({ taskId: "h1", type: "wake.cleanup", limit: 10 }))[0];
+    expect(cleanup?.summary).toContain("worker cleanup unsettled");
+    expect(cleanup?.data).toMatchObject({
+      status: "unsettled",
+      reason: "wake timeout",
+      hardKill: false,
+      pidUnavailableReason: "test backend ignores cancellation",
+    });
+  });
+
+  test("a hung cleanup method is also bounded by the engine", async () => {
+    const errors: Error[] = [];
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop: () => cleanupHangingLoop(),
+      wakeTimeoutMs: 10,
+      hooks: { onError: (i: { error: Error }) => errors.push(i.error) },
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "h-cleanup", fields: {} });
+    await engine.idle();
+
+    expect(errors.some((e) => /timed out/.test(e.message))).toBe(true);
+    const cleanup = (await chronicle.recent({ taskId: "h-cleanup", type: "wake.cleanup", limit: 10 }))[0];
+    expect(cleanup?.data).toMatchObject({
+      status: "unsettled",
+      reason: "wake timeout",
+      hardKill: false,
+    });
+    expect(String(cleanup?.data?.error)).toContain("cleanup did not settle");
   });
 
   test("createTask rejects an unsafe task id (filename collision / traversal safety)", async () => {
@@ -1969,6 +2017,12 @@ function eventRunHandle(events: LoopEvent[]): RunHandle {
     usage: result.then((r) => r.usage),
     steer: async () => ({ mode: "rejected" as const }),
     cancel: () => {},
+    cleanup: async () => ({
+      status: "settled" as const,
+      elapsedMs: 0,
+      hardKill: false,
+      resultStatus: (await result).status,
+    }),
   };
 }
 
@@ -1989,6 +2043,12 @@ function bodyRunHandle(body: () => Promise<void>): RunHandle {
     usage: result.then((r) => r.usage),
     steer: async () => ({ mode: "rejected" as const }),
     cancel: () => {},
+    cleanup: async () => ({
+      status: "settled" as const,
+      elapsedMs: 0,
+      hardKill: false,
+      resultStatus: (await result).status,
+    }),
   };
 }
 
@@ -2031,6 +2091,12 @@ function scriptLoop(body: (input: RunInput) => Promise<string | void>, id = "scr
         usage: result.then((r) => r.usage),
         steer: async () => ({ mode: "rejected" as const }),
         cancel: () => {},
+        cleanup: async () => ({
+          status: "settled" as const,
+          elapsedMs: 0,
+          hardKill: false,
+          resultStatus: (await result).status,
+        }),
       };
     },
     preflight: async () => ({ ok: true }),
@@ -2069,6 +2135,28 @@ function cancellableScriptLoop(
         cancel: () => {
           cancelled = true;
         },
+        cleanup: async (options) => {
+          cancelled = true;
+          const graceMs = Math.max(0, options?.graceMs ?? 0);
+          const settled = await Promise.race([
+            result,
+            new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), graceMs)),
+          ]);
+          return settled
+            ? {
+                status: "cancelled_settled" as const,
+                elapsedMs: 0,
+                hardKill: options?.hardKill ?? false,
+                resultStatus: settled.status,
+                ...(options?.reason ? { reason: options.reason } : {}),
+              }
+            : {
+                status: "unsettled" as const,
+                elapsedMs: graceMs,
+                hardKill: options?.hardKill ?? false,
+                ...(options?.reason ? { reason: options.reason } : {}),
+              };
+        },
       };
     },
     preflight: async () => ({ ok: true }),
@@ -2094,6 +2182,39 @@ function hangingLoop(): AgentLoop {
         usage: never,
         steer: async () => ({ mode: "rejected" as const }),
         cancel: () => {},
+        cleanup: async (options) => ({
+          status: "unsettled" as const,
+          elapsedMs: Math.max(0, options?.graceMs ?? 0),
+          hardKill: options?.hardKill ?? false,
+          ...(options?.reason ? { reason: options.reason } : {}),
+          pidUnavailableReason: "test backend ignores cancellation",
+        }),
+      };
+    },
+    preflight: async () => ({ ok: true }),
+    dispose: async () => {},
+  };
+}
+
+/** A backend whose cleanup method itself never returns — simulates a broken adapter cleanup. */
+function cleanupHangingLoop(): AgentLoop {
+  const capabilities: CapabilityList = ["tools"];
+  const never = new Promise<never>(() => {});
+  const none = async function* (): AsyncGenerator<never> {};
+  return {
+    id: "cleanup-hang",
+    capabilities,
+    supports: (c: Capability) => capabilities.includes(c),
+    run(): RunHandle {
+      return {
+        [Symbol.asyncIterator]: () => none(),
+        textStream: none(),
+        result: never,
+        text: never,
+        usage: never,
+        steer: async () => ({ mode: "rejected" as const }),
+        cancel: () => {},
+        cleanup: async () => never,
       };
     },
     preflight: async () => ({ ok: true }),

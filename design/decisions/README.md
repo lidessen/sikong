@@ -64,3 +64,5 @@ Files use a monotonic four-digit prefix:
 | [0032](0032-wake-preemption-and-repair-fields.md) | Accepted | Wake preemption (lead cancel/block interrupts in-flight wake) + acceptance rejection reason in per-wake prompt |
 | [0033](0033-worker-work-log-review.md) | Accepted | Worker work-log review replaces automatic commit fallback |
 | [0034](0034-operator-messages-require-lead-review.md) | Accepted | Operator messages require lead review before task topology changes |
+| [0035](0035-worker-tool-trace-and-abandoned-run-cleanup.md) | Accepted | Worker tool trace and abandoned-run cleanup facts |
+| [0036](0036-cooperative-runtime-cleanup-contract.md) | Accepted | Cooperative runtime cleanup contract |

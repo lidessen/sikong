@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { makeLoop, mockLoop, type LoopEvent } from "../index";
+import { emptyUsage, makeLoop, mockLoop, type LoopEvent } from "../index";
 import { MockAdapter } from "../adapters/mock";
 import type { BackendAdapter, BackendRun } from "../core/adapter";
 
@@ -144,5 +144,97 @@ describe("loop factories + executor", () => {
 
     expect(result.status).toBe("cancelled");
     expect(result.error).toBeUndefined();
+  });
+
+  test("cleanup reports an already completed run as settled", async () => {
+    const loop = mockLoop({ response: "done" });
+    const run = loop.run("go");
+
+    await run.result;
+    const cleanup = await run.cleanup({ reason: "after result" });
+
+    expect(cleanup).toMatchObject({
+      status: "settled",
+      hardKill: false,
+      reason: "after result",
+      runtime: "mock",
+      resultStatus: "completed",
+    });
+  });
+
+  test("cleanup cooperatively cancels and waits for settlement", async () => {
+    let cancelled = false;
+    let settleCancel!: () => void;
+    const cancelSettled = new Promise<void>((resolve) => {
+      settleCancel = resolve;
+    });
+    const adapter: BackendAdapter = {
+      id: "cleanup-cancel",
+      capabilities: [],
+      start(): BackendRun {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text", text: "started" } as LoopEvent;
+            await cancelSettled;
+          },
+          result: cancelSettled.then(() => ({ usage: emptyUsage(), durationMs: 1 })),
+          cancel() {
+            cancelled = true;
+            settleCancel();
+          },
+        };
+      },
+    };
+    const loop = makeLoop("cleanup-cancel", [], async () => adapter);
+    const run = loop.run("go");
+    const iter = run[Symbol.asyncIterator]();
+    await iter.next();
+
+    const cleanup = await run.cleanup({ reason: "timeout", graceMs: 50 });
+
+    expect(cancelled).toBe(true);
+    expect(cleanup).toMatchObject({
+      status: "cancelled_settled",
+      hardKill: false,
+      reason: "timeout",
+      runtime: "cleanup-cancel",
+      resultStatus: "cancelled",
+    });
+  });
+
+  test("cleanup returns unsettled when cancellation does not settle within grace", async () => {
+    let cancelled = false;
+    const never = new Promise<never>(() => {});
+    const adapter: BackendAdapter = {
+      id: "cleanup-hang",
+      capabilities: [],
+      start(): BackendRun {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text", text: "started" } as LoopEvent;
+            await never;
+          },
+          result: never,
+          cancel() {
+            cancelled = true;
+          },
+        };
+      },
+    };
+    const loop = makeLoop("cleanup-hang", [], async () => adapter);
+    const run = loop.run("go");
+    const iter = run[Symbol.asyncIterator]();
+    await iter.next();
+
+    const cleanup = await run.cleanup({ reason: "timeout", graceMs: 10 });
+
+    expect(cancelled).toBe(true);
+    expect(cleanup).toMatchObject({
+      status: "unsettled",
+      hardKill: false,
+      reason: "timeout",
+      runtime: "cleanup-hang",
+      pidUnavailableReason: "adapter did not expose a process id",
+    });
   });
 });

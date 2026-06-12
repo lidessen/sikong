@@ -26,6 +26,7 @@ export type ChronicleType =
   | "wake.diagnostics"
   | "wake.commit"
   | "wake.review_required"
+  | "wake.cleanup"
   | "wake.end"
   | "wake.error"
   | "lead.message"
