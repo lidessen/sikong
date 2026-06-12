@@ -16,6 +16,7 @@ import {
 } from "agent-loop";
 import { buildDesignTools } from "./tools";
 import { WorkflowEngine, type EngineHooks, type LoopFactory, type WakeContext } from "./engine";
+import { JsonScopeLeaseStore } from "./engine/scope-lease";
 import { JsonSteerMailbox } from "./engine/steer-mailbox";
 import { _DESIGN_WORKFLOW_V4, _DEVELOPMENT_LEAD_WORKFLOW_V1, DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./workflow/builtin";
 import { assertValidWorkflow } from "./workflow/validate";
@@ -214,6 +215,7 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     registry,
     chronicle,
     steerMailbox,
+    scopeLeases: new JsonScopeLeaseStore(dir),
     projects,
     loop,
     // The worker boundary: a bare ai-sdk worker gets generic file/shell tools from

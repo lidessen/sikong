@@ -94,6 +94,13 @@ next wake.
 This is an in-process guarantee. Durable production use still needs storage
 level compare-and-set or expected-sequence semantics.
 
+Workspace-level parallelism is controlled by task scope leases
+([ADR 0037](../decisions/0037-task-scope-leases.md)). The per-task single-writer
+rule remains fixed, but different tasks may run concurrently when their declared
+read/write scopes do not conflict. The engine must not infer semantic
+independence from file paths. Leads declare the relevant scope, and the scheduler
+only applies simple read/write conflict rules.
+
 Wake diagnostics are observability facts, not progress judgments. The engine may
 record elapsed time, tool calls, state command counts, text previews, errors, and
 timeout components so a lead can inspect what happened. It must not use those
@@ -187,6 +194,7 @@ Production stores should preserve these boundaries but add:
 
 - append preconditions such as `expectedSeq`;
 - atomic append plus projection update or recoverable projection rebuild;
+- chronicle append sequencing that is safe under concurrent task writers;
 - workflow-version retention;
 - durable child-status evidence for parent advancement;
 - indexed queries for project, workflow, parent, and status.
@@ -194,6 +202,8 @@ Production stores should preserve these boundaries but add:
 ## Design Invariants
 
 - A task is reduced only against the workflow id/version it was created with.
+- One task has at most one active wake, even when workspace-level task
+  parallelism is enabled.
 - Terminal statuses are absorbing: `done` and `cancelled` tasks reject further
   commands and ignore later mutation events during projection.
 - Guards fail closed when comparisons are malformed.
@@ -204,7 +214,10 @@ Production stores should preserve these boundaries but add:
 ## Non-goals for the Current Kernel
 
 - A public workflow authoring language beyond the `WorkflowDef` data model.
-- Multi-process scheduling.
+- A general multi-process worker pool, queue priority system, or quota manager.
+  ADR 0037 only narrows when independent task wakes may overlap.
+- Keeping long-running workspace-wide run locks after task scope leases and
+  store-level append preconditions are implemented.
 - External side-effect orchestration.
 - Rich routing or model selection policy.
 - Full subtask orchestration and parent/child settlement semantics.

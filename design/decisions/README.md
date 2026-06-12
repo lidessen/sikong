@@ -66,3 +66,4 @@ Files use a monotonic four-digit prefix:
 | [0034](0034-operator-messages-require-lead-review.md) | Accepted | Operator messages require lead review before task topology changes |
 | [0035](0035-worker-tool-trace-and-abandoned-run-cleanup.md) | Accepted | Worker tool trace and abandoned-run cleanup facts |
 | [0036](0036-cooperative-runtime-cleanup-contract.md) | Accepted | Cooperative runtime cleanup contract |
+| [0037](0037-task-scope-leases.md) | Accepted | Task scope leases for parallel workspace execution |

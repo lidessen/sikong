@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import { mkdir, appendFile, readFile, writeFile, rename, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { matchesChronicle } from "./memory";
+import { withFileLock } from "./file-lock";
 import { dataFileCandidates, isDataFile, parseDataFile, stringifyYaml, yamlFile } from "../config-file";
 import {
   listProjectStateDirs,
@@ -108,7 +109,6 @@ class WriteQueue {
 
 export class JsonlEventStore implements EventStore {
   private readonly queue = new WriteQueue();
-  private readonly seqCache = new Map<string, number>();
 
   constructor(
     private readonly dir: string,
@@ -122,18 +122,18 @@ export class JsonlEventStore implements EventStore {
   append(taskId: string, events: readonly NewEvent[]): Promise<TaskEvent[]> {
     return this.queue.run(async () => {
       const file = this.file(taskId);
-      let base = this.seqCache.get(file);
-      if (base === undefined) base = maxSeq(await readJsonl<TaskEvent>(file));
-      const stamped: TaskEvent[] = events.map((e, i) => ({
-        ...e,
-        taskId,
-        seq: base + i + 1,
-        ts: this.clock(),
-      }));
-      await mkdir(dirname(file), { recursive: true });
-      await appendFile(file, stamped.map((s) => JSON.stringify(s)).join("\n") + "\n");
-      this.seqCache.set(file, base + events.length);
-      return stamped;
+      return await withFileLock(file, async () => {
+        const base = maxSeq(await readJsonl<TaskEvent>(file));
+        const stamped: TaskEvent[] = events.map((e, i) => ({
+          ...e,
+          taskId,
+          seq: base + i + 1,
+          ts: this.clock(),
+        }));
+        await mkdir(dirname(file), { recursive: true });
+        await appendFile(file, stamped.map((s) => JSON.stringify(s)).join("\n") + "\n");
+        return stamped;
+      });
     });
   }
 
@@ -168,10 +168,12 @@ export class JsonProjectionStore implements ProjectionStore {
     return this.queue.run(async () => {
       await mkdir(this.root, { recursive: true });
       const file = this.file(task.id);
-      const tmp = `${file}.${process.pid}.tmp`;
-      // Atomic: a concurrent reader sees the whole old or whole new file, never torn.
-      await writeFile(tmp, JSON.stringify(task, null, 2));
-      await rename(tmp, file);
+      await withFileLock(file, async () => {
+        const tmp = `${file}.${process.pid}.tmp`;
+        // Atomic: a concurrent reader sees the whole old or whole new file, never torn.
+        await writeFile(tmp, JSON.stringify(task, null, 2));
+        await rename(tmp, file);
+      });
     });
   }
 
@@ -366,7 +368,6 @@ export class JsonWorkerStore implements WorkerStore {
 
 export class JsonlChronicleStore implements ChronicleStore {
   private readonly queue = new WriteQueue();
-  private seqCache: number | undefined;
 
   constructor(
     private readonly dir: string,
@@ -379,12 +380,13 @@ export class JsonlChronicleStore implements ChronicleStore {
 
   append(entry: Omit<ChronicleEntry, "seq" | "ts">): Promise<ChronicleEntry> {
     return this.queue.run(async () => {
-      if (this.seqCache === undefined) this.seqCache = maxSeq(await readJsonl<ChronicleEntry>(this.file));
-      const full: ChronicleEntry = { ...entry, seq: this.seqCache + 1, ts: this.clock() };
-      await mkdir(this.dir, { recursive: true });
-      await appendFile(this.file, JSON.stringify(full) + "\n");
-      this.seqCache = full.seq;
-      return full;
+      return await withFileLock(this.file, async () => {
+        const base = maxSeq(await readJsonl<ChronicleEntry>(this.file));
+        const full: ChronicleEntry = { ...entry, seq: base + 1, ts: this.clock() };
+        await mkdir(this.dir, { recursive: true });
+        await appendFile(this.file, JSON.stringify(full) + "\n");
+        return full;
+      });
     });
   }
 

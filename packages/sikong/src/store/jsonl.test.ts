@@ -29,6 +29,26 @@ describe("JSONL durable stores", () => {
     }
   });
 
+  test("event store serializes concurrent appends from separate instances", async () => {
+    const dir = await tmp();
+    try {
+      await new JsonlEventStore(dir, () => 1).append(
+        "t",
+        initTask({ taskId: "t", projectId: "p", workflow: GENERAL_WORKFLOW }),
+      );
+      await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          new JsonlEventStore(dir, () => 1).append("t", [
+            { taskId: "t", source: "worker", type: "note.appended", payload: { text: `n${i}` } },
+          ]),
+        ),
+      );
+      expect((await new JsonlEventStore(dir).load("t")).map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("projection store persists, queries by status, and 404s cleanly", async () => {
     const dir = await tmp();
     try {
@@ -78,6 +98,22 @@ describe("JSONL durable stores", () => {
       await c.append({ type: "wake.error", taskId: "t", summary: "boom" });
       expect((await c.recent({ limit: 2 })).map((e) => e.summary)).toEqual(["boom", "b"]);
       expect((await c.recent({ type: "wake.error" })).map((e) => e.summary)).toEqual(["boom"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("chronicle store serializes concurrent appends from separate instances", async () => {
+    const dir = await tmp();
+    try {
+      await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          new JsonlChronicleStore(dir, () => 1).append({ type: "wake.end", taskId: `t${i}`, summary: `s${i}` }),
+        ),
+      );
+      expect((await new JsonlChronicleStore(dir).recent({ limit: 20 })).map((entry) => entry.seq).sort((a, b) => a - b)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8,
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

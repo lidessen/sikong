@@ -11,6 +11,7 @@ import type {
   StageCategory,
   StageDef,
   Task,
+  TaskScopes,
   TaskEvent,
   TaskStatus,
   WorkflowDef,
@@ -97,6 +98,11 @@ export function apply(
       const accIssues = validateAcceptanceChecks(command.acceptance, "create_subtask");
       if (accIssues.length)
         reject(`create_subtask has invalid acceptance checks: ${accIssues.map((i) => i.message).join("; ")}`);
+      const scopeIssues = validateTaskScopes(
+        { read: command.readScopes, write: command.writeScopes },
+        "create_subtask",
+      );
+      if (scopeIssues.length) reject(scopeIssues.join("; "));
       // The engine mints the child id before recording this; a blank id would be
       // a link to no task (and wedge a childrenDone gate forever).
       if (!command.childId.trim()) reject("create_subtask requires a non-empty child id (engine-minted)");
@@ -108,6 +114,8 @@ export function apply(
           blocksParent: command.blocksParent ?? false,
           ...(command.key ? { key: command.key } : {}),
           ...(command.effort ? { effort: command.effort } : {}),
+          ...(command.readScopes?.length ? { readScopes: [...command.readScopes] } : {}),
+          ...(command.writeScopes?.length ? { writeScopes: [...command.writeScopes] } : {}),
           ...(command.acceptance?.length ? { acceptance: [...command.acceptance] } : {}),
         }),
       ];
@@ -263,6 +271,8 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     if (typeof p.effort === "string") base.effort = p.effort;
     if (p.isolate === true) base.isolate = true;
     if (Array.isArray(p.dependsOn) && p.dependsOn.length) base.dependsOn = p.dependsOn.map(String);
+    const scopes = normalizeScopesPayload(p.scopes);
+    if (scopes) base.scopes = scopes;
     if (Array.isArray(p.acceptance) && p.acceptance.length) base.acceptance = p.acceptance as readonly AcceptanceCheck[];
     return base;
   }
@@ -440,6 +450,8 @@ export function initTask(params: {
   /** Lead-authored per-task acceptance checks (ADR 0027). */
   acceptance?: readonly AcceptanceCheck[];
   dependsOn?: readonly string[];
+  /** Declared read/write scopes for ADR 0037 scheduler leases. */
+  scopes?: TaskScopes;
   fields?: Record<string, unknown>;
   source?: EventSource;
   /** Depth in the team tree — set by the engine from parent.depth + 1. */
@@ -462,6 +474,11 @@ export function initTask(params: {
   if (params.effort) payload.effort = params.effort;
   if (params.isolate) payload.isolate = true;
   if (params.dependsOn && params.dependsOn.length) payload.dependsOn = [...params.dependsOn];
+  if (params.scopes) {
+    const issues = validateTaskScopes(params.scopes, "task.created");
+    if (issues.length) throw new Error(issues.join("; "));
+    payload.scopes = params.scopes;
+  }
   if (params.acceptance?.length) payload.acceptance = [...params.acceptance];
   return [{ taskId: params.taskId, source: params.source ?? "lead", type: "task.created", payload }];
 }
@@ -517,6 +534,30 @@ function isValidFieldValue(def: FieldDef, value: unknown): boolean {
 function isValidAcceptanceEvidence(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return typeof value.summary === "string" && value.summary.trim().length > 0;
+}
+
+function normalizeScopesPayload(value: unknown): TaskScopes | undefined {
+  if (!isRecord(value)) return undefined;
+  const read = Array.isArray(value.read) ? value.read.map(asString).filter(Boolean) : [];
+  const write = Array.isArray(value.write) ? value.write.map(asString).filter(Boolean) : [];
+  if (!read.length && !write.length) return undefined;
+  return {
+    ...(read.length ? { read } : {}),
+    ...(write.length ? { write } : {}),
+  };
+}
+
+function validateTaskScopes(scopes: TaskScopes | undefined, context: string): string[] {
+  const out: string[] = [];
+  for (const [mode, values] of Object.entries(scopes ?? {}) as [keyof TaskScopes, readonly string[] | undefined][]) {
+    for (const scope of values ?? []) {
+      const normalized = scope.trim();
+      if (!/^[a-z][a-z0-9_-]*:[^\s]+$/i.test(normalized)) {
+        out.push(`${context} ${mode} scope must look like "type:value", got ${JSON.stringify(scope)}`);
+      }
+    }
+  }
+  return out;
 }
 
 function asString(v: unknown): string {

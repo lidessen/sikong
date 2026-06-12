@@ -2,8 +2,9 @@
 /**
  * sikong CLI — the surface a lead agent (Claude Code) drives the
  * workspace through (no MCP; agent-browser-style). Each command operates on the
- * durable workspace dir; `run` drives pending tasks' wakes to quiescence. Write
- * commands take an exclusive dir lock — don't run two writers on one --dir.
+ * durable workspace dir; `run` drives pending tasks' wakes to quiescence.
+ * Metadata writes take an exclusive dir lock; long `run` commands use task
+ * scope leases so independent tasks can overlap.
  *
  *   create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>]   publish a task
  *   run [--task <id>]                                                 drive pending task(s) to done/quiet (exit 1 if any wake errored)
@@ -49,6 +50,7 @@ const VALUE_FLAGS = new Set([
   "--parent", "--interval",
   "--frame", "--ref",
   "--acceptance",
+  "--read-scope", "--write-scope",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--text", "--human", "--once"]);
 const fail = (msg: string, code = 2): never => {
@@ -354,6 +356,11 @@ function parseNonNegativeNumber(raw: string | undefined, name: string, fallback:
   return n;
 }
 
+function parseScopeList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw.split(",").map((scope) => scope.trim()).filter(Boolean);
+}
+
 async function waitForNextChronicleEvent(
   store: JsonWorkspaceChronicleStore,
   opts: { taskId?: string; afterSeq?: number; timeoutMs: number; pollMs: number },
@@ -481,8 +488,10 @@ async function buildSubmitCommand(ws: Workspace, taskId: string, op: string, res
   return { kind: "set_field", field, value };
 }
 
-// Write commands take the dir's exclusive write lock (released on process exit).
-const WRITE_CMDS = new Set(["create", "design", "release", "run", "submit", "register", "visual-design"]);
+// Metadata/state commands take the dir's exclusive write lock (released on
+// process exit). `run` intentionally does not: long worker wakes are controlled
+// by task scope leases, while short store writes use file-level locks.
+const WRITE_CMDS = new Set(["create", "design", "release", "submit", "register", "visual-design"]);
 const needsLock =
   (!!cmd && WRITE_CMDS.has(cmd) && !isLeadMessageSubmit) ||
   (cmd === "project" && positional[1] === "create") ||
@@ -694,6 +703,12 @@ switch (cmd) {
     const workflowId = flag("--workflow");
     const workerId = flag("--worker");
     const parentId = flag("--parent");
+    const readScopes = parseScopeList(flag("--read-scope"));
+    const writeScopes = parseScopeList(flag("--write-scope"));
+    const scopes =
+      readScopes.length || writeScopes.length
+        ? { ...(readScopes.length ? { read: readScopes } : {}), ...(writeScopes.length ? { write: writeScopes } : {}) }
+        : undefined;
     let acceptance: unknown = undefined;
     const acceptanceRaw = flag("--acceptance");
     if (acceptanceRaw !== undefined) {
@@ -720,6 +735,7 @@ switch (cmd) {
           ...(id ? { taskId: id } : {}),
           ...(workerId ? { workerId } : {}),
           ...(parentId ? { parentId } : {}),
+          ...(scopes ? { scopes } : {}),
           ...(Array.isArray(acceptance) && acceptance.length ? { acceptance: acceptance as AcceptanceCheck[] } : {}),
         });
       } else {
@@ -729,6 +745,7 @@ switch (cmd) {
           ...(id ? { taskId: id } : {}),
           ...(workerId ? { workerId } : {}),
           ...(parentId ? { parentId } : {}),
+          ...(scopes ? { scopes } : {}),
           ...(Array.isArray(acceptance) && acceptance.length ? { acceptance: acceptance as AcceptanceCheck[] } : {}),
         });
       }
@@ -1130,7 +1147,7 @@ switch (cmd) {
     console.log(
       `sikong CLI (dir: ${dir})\n\n` +
         "drive:\n" +
-        "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--parent <id>] [--id <id>]\n" +
+        "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--parent <id>] [--id <id>] [--read-scope a,b] [--write-scope x,y]\n" +
         "  design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>]\n" +
         "                                                               shorthand for --workflow design (generic technical blueprint design)\n" +
         "  visual-design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--frame <text>]\n" +

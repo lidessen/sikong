@@ -45,6 +45,8 @@ import { estimateWakeTimeout, type WakeTimeoutEstimate } from "./adaptive-timeou
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
 import { buildPrompt, buildSystem, type ToolCallFact } from "./prompt";
+import { ScopeLeaseScheduler } from "./scope-scheduler";
+import type { ScopeLeaseStore } from "./scope-lease";
 import type { SteerMailbox, SteerMailboxEntry } from "./steer-mailbox";
 import type { TeamMember } from "./team-status";
 
@@ -440,6 +442,8 @@ export interface WorkflowEngineOptions {
   chronicle?: ChronicleStore;
   /** Optional cross-process mailbox for lead steer messages while a wake is running. */
   steerMailbox?: SteerMailbox;
+  /** Optional workspace-level task scope leases (ADR 0037). */
+  scopeLeases?: ScopeLeaseStore;
   /** Optional project store: when wired, createTask validates the project exists. */
   projects?: ProjectStore;
   /** Override id generation (default: a deterministic per-engine counter). */
@@ -494,10 +498,13 @@ interface StateEntry {
 export class WorkflowEngine {
   private readonly state = new Map<string, StateEntry>();
   private readonly inflight = new Set<Promise<void>>();
+  private readonly scopeScheduler?: ScopeLeaseScheduler;
   /** Isolated tasks whose workspace has already been released (fire releaseWorkspace once). */
   private readonly released = new Set<string>();
 
-  constructor(private readonly o: WorkflowEngineOptions) {}
+  constructor(private readonly o: WorkflowEngineOptions) {
+    this.scopeScheduler = o.scopeLeases ? new ScopeLeaseScheduler(o.scopeLeases) : undefined;
+  }
 
   private newId(kind: "task" | "wake"): string {
     if (this.o.genId) return this.o.genId(kind);
@@ -525,6 +532,8 @@ export class WorkflowEngine {
     isolate?: boolean;
     /** Task ids this task must wait for before it runs (ADR 0011). */
     dependsOn?: readonly string[];
+    /** Declared task scopes used by the scheduler to decide wake overlap (ADR 0037). */
+    scopes?: Task["scopes"];
     source?: EventSource;
     /** Default true; pass false to create without an initial wake. */
     wake?: boolean;
@@ -551,6 +560,7 @@ export class WorkflowEngine {
         ...(params.effort ? { effort: params.effort } : {}),
         ...(params.isolate ? { isolate: true } : {}),
         ...(params.dependsOn && params.dependsOn.length ? { dependsOn: params.dependsOn } : {}),
+        ...(params.scopes ? { scopes: params.scopes } : {}),
         ...(params.acceptance?.length ? { acceptance: params.acceptance } : {}),
         source: params.source ?? "lead",
       }),
@@ -613,7 +623,15 @@ export class WorkflowEngine {
    */
   async intake(
     request: string,
-    opts: { projectId: string; taskId?: string; workerId?: string; parentId?: string; wake?: boolean; acceptance?: readonly AcceptanceCheck[] },
+    opts: {
+      projectId: string;
+      taskId?: string;
+      workerId?: string;
+      parentId?: string;
+      wake?: boolean;
+      acceptance?: readonly AcceptanceCheck[];
+      scopes?: Task["scopes"];
+    },
   ): Promise<Task> {
     const workflows = this.o.registry.list();
     const decision = await this.routeRequest(request, workflows);
@@ -638,6 +656,7 @@ export class WorkflowEngine {
       ...(opts.workerId ? { workerId: opts.workerId } : {}),
       ...(opts.parentId ? { parentId: opts.parentId } : {}),
       ...(opts.wake !== undefined ? { wake: opts.wake } : {}),
+      ...(opts.scopes ? { scopes: opts.scopes } : {}),
       ...(opts.acceptance?.length ? { acceptance: opts.acceptance } : {}),
     });
   }
@@ -757,6 +776,24 @@ export class WorkflowEngine {
     // (2) Run ONE bounded agent wake for the current stage.
     const wakeId = this.newId("wake");
     const stage = stageById(wf, task.stageId);
+    let leasesAcquired = false;
+    if (this.scopeScheduler) {
+      const acquired = await this.scopeScheduler.acquire(task, wf, wakeId);
+      if (!acquired.acquired) {
+        const st = this.state.get(taskId);
+        if (st) st.wakes = Math.max(0, st.wakes - 1);
+        await this.chron({
+          type: "wake.waiting",
+          taskId,
+          wakeId,
+          summary: acquired.summary,
+          data: acquired.data,
+        });
+        return;
+      }
+      leasesAcquired = true;
+    }
+    try {
     let project = this.o.projects ? ((await this.o.projects.get(task.projectId)) ?? undefined) : undefined;
     // Isolated tasks (ADR 0010) run in a workspace the worker boundary provides
     // (e.g. a git worktree). The engine forwards opaquely and uses whatever project
@@ -1088,6 +1125,12 @@ export class WorkflowEngine {
     // A new, non-terminal stage BEYOND the one the agent ran on means new work.
     // (In-stage iterative progress is by design left for an external nudge in M1.)
     if (task.stageId !== stageAgentRanOn && !isTerminal(task.status)) this.schedule(taskId);
+    } finally {
+      if (leasesAcquired) {
+        const waiters = await this.scopeScheduler?.release(taskId, wakeId).catch(() => []);
+        for (const id of waiters ?? []) this.schedule(id);
+      }
+    }
   }
 
   /**
@@ -1353,7 +1396,16 @@ export class WorkflowEngine {
   /** Create a child task for a create_subtask command and return its minted id. */
   private async spawnSubtask(
     parent: Task,
-    command: { childId: string; workflowId: string; input: string; isolate?: boolean; effort?: string; acceptance?: readonly AcceptanceCheck[] },
+    command: {
+      childId: string;
+      workflowId: string;
+      input: string;
+      isolate?: boolean;
+      effort?: string;
+      acceptance?: readonly AcceptanceCheck[];
+      readScopes?: readonly string[];
+      writeScopes?: readonly string[];
+    },
     deps: readonly string[],
   ): Promise<void> {
     const wf = this.o.registry.get(command.workflowId) ?? this.o.registry.get("general");
@@ -1383,6 +1435,14 @@ export class WorkflowEngine {
       depth: parent.depth + 1,
       ...(command.isolate ? { isolate: true } : {}),
       ...(deps.length ? { dependsOn: deps } : {}),
+      ...(command.readScopes?.length || command.writeScopes?.length
+        ? {
+            scopes: {
+              ...(command.readScopes?.length ? { read: command.readScopes } : {}),
+              ...(command.writeScopes?.length ? { write: command.writeScopes } : {}),
+            },
+          }
+        : {}),
       ...(command.acceptance?.length ? { acceptance: command.acceptance } : {}),
       parentId: parent.id,
       // A child with unmet dependencies is created un-scheduled (ADR 0011); it is

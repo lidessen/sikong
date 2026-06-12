@@ -22,6 +22,7 @@ export type ChronicleType =
   | "intake.routed"
   | "wake.start"
   | "wake.progress"
+  | "wake.waiting"
   | "wake.steer"
   | "wake.diagnostics"
   | "wake.commit"

@@ -16,6 +16,7 @@ import {
 } from "agent-loop";
 import { WorkflowEngine, type LoopFactory } from "./engine";
 import { buildPrompt } from "./prompt";
+import { JsonScopeLeaseStore } from "./scope-lease";
 import { JsonSteerMailbox } from "./steer-mailbox";
 import { DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "../workflow/builtin";
 import type { Task, WorkflowDef } from "../workflow/types";
@@ -683,6 +684,53 @@ describe("WorkflowEngine wake cycle", () => {
     expect(maxActive).toBe(1); // no two bodies ever overlapped
     expect(bodies).toBe(2); // s0 + s1 — the three nudges coalesced, not five wakes
     expect((await engine.getTask("c1"))?.status).toBe("done");
+  });
+
+  test("scope leases prevent overlapping wakes for conflicting tasks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sikong-engine-leases-"));
+    try {
+      const ran: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let firstStarted!: () => void;
+      const started = new Promise<void>((r) => {
+        firstStarted = r;
+      });
+      const loop: LoopFactory = (ctx) =>
+        scriptLoop(async () => {
+          ran.push(ctx.task.id);
+          if (ctx.task.id === "t1") {
+            firstStarted();
+            await gate;
+          }
+        });
+      const chronicle = new MemoryChronicleStore(() => 1);
+      const engine = new WorkflowEngine({
+        events: new MemoryEventStore(() => 1),
+        projections: new MemoryProjectionStore(),
+        registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+        chronicle,
+        scopeLeases: new JsonScopeLeaseStore(dir, () => Date.now()),
+        loop,
+      });
+
+      await engine.createTask({ projectId: "p", taskId: "t1", fields: {}, scopes: { write: ["file:README.md"] }, wake: false });
+      await engine.createTask({ projectId: "p", taskId: "t2", fields: {}, scopes: { write: ["file:README.md"] }, wake: false });
+      const running = engine.runPending("t1");
+      await started;
+      engine.nudge("t2");
+      await sleep(30);
+      expect(ran).toEqual(["t1"]);
+      expect((await chronicle.recent({ type: "wake.waiting" })).map((entry) => entry.taskId)).toContain("t2");
+
+      release();
+      await running;
+      expect(ran).toEqual(["t1", "t2"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("an errored agent run is surfaced, not silently swallowed as a no-op wake", async () => {

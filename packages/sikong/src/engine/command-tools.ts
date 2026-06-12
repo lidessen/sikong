@@ -230,6 +230,18 @@ export function buildCommandTools(
             description:
               "Keys of subtasks (created in this same pass) that must finish before this one starts. Use it to order a layered effort instead of running everything in parallel.",
           },
+          readScopes: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Read scopes this child needs, e.g. package:packages/ui or file:README.md. Read/read scopes can overlap.",
+          },
+          writeScopes: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Write scopes this child may change, e.g. file:packages/ui/src/Switch.tsx, package:packages/ui, api:ui-public-exports, or release:npm.",
+          },
           effort: {
             type: "string",
             enum: ["low", "medium", "high", "max"],
@@ -250,6 +262,12 @@ export function buildCommandTools(
           ...(typeof args.key === "string" && args.key ? { key: args.key } : {}),
           ...(Array.isArray(args.dependsOn) && args.dependsOn.length
             ? { dependsOn: args.dependsOn.map(String) }
+            : {}),
+          ...(Array.isArray(args.readScopes) && args.readScopes.length
+            ? { readScopes: args.readScopes.map(String) }
+            : {}),
+          ...(Array.isArray(args.writeScopes) && args.writeScopes.length
+            ? { writeScopes: args.writeScopes.map(String) }
             : {}),
           ...(typeof args.effort === "string" && ["low", "medium", "high", "max"].includes(args.effort)
             ? { effort: args.effort as "low" | "medium" | "high" | "max" }

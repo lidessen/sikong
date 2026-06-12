@@ -96,8 +96,10 @@ Agent-facing read commands default to JSON; add `--text` for human output.
    `dependsOn` order; a lead left to re-decompose can drift. Two subtasks touching
    the same files must chain via `dependsOn` or each set `isolate: true`.
 
-6. **One `sikong run` at a time per workspace** (single-writer). Serialize your
-   runs; concurrent runs race the write lock.
+6. **Concurrent `sikong run` is scope-lease controlled.** Independent tasks may
+   overlap, but conflicting task scopes wait. Undeclared coding work defaults to
+   the whole project, so use explicit `readScopes`/`writeScopes`, `dependsOn`, or
+   `isolate: true` when you want safe parallelism.
 
 7. **Let adaptive wake timeout run unless you need an explicit cap.** Default
    `sikong run` computes a per-wake budget from deterministic work units

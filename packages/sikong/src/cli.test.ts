@@ -137,7 +137,7 @@ describe("sikong CLI", () => {
     }
   });
 
-  test("operator messages bypass the run write lock while normal submits do not", async () => {
+  test("operator messages bypass the workspace write lock while normal submits do not", async () => {
     const dir = await tmp();
     try {
       const created = Bun.spawnSync([

@@ -34,7 +34,7 @@ input to the lead; lead decisions mutate task topology.
 
 ## Consequences
 
-- Operator correction is available even while `run` holds the main write lock.
+- Operator correction is available even while a long-running `run` is active.
 - External stop requests can halt token spend without cancelling the task.
 - Task topology remains a lead responsibility.
 - Broad delegation drift becomes reviewable and structurally gated instead of

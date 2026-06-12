@@ -119,6 +119,11 @@ export interface AcceptanceEvidence {
 
 export type AcceptanceDecision = "accepted" | "rejected";
 
+export interface TaskScopes {
+  read?: readonly string[];
+  write?: readonly string[];
+}
+
 export interface StageDef {
   id: string;
   category: StageCategory;
@@ -207,6 +212,8 @@ export interface Task {
   effort?: string;
   /** Task ids this task must wait for before it runs (ADR 0011); the engine defers its wakes until all are terminal. */
   dependsOn?: readonly string[];
+  /** Declared read/write scopes used by the scheduler to decide whether task wakes may overlap (ADR 0037). */
+  scopes?: TaskScopes;
   parentId?: string;
   childIds: readonly string[];
   /** Depth in the team tree: 0 for root, parent.depth + 1 for children. */
@@ -285,6 +292,10 @@ export type Command =
       key?: string;
       /** Keys of sibling subtasks (same delegate pass) this one must wait for before it runs. */
       dependsOn?: readonly string[];
+      /** Declared read scopes for this child task (ADR 0037). */
+      readScopes?: readonly string[];
+      /** Declared write scopes for this child task (ADR 0037). */
+      writeScopes?: readonly string[];
       /**
        * Reasoning-effort override for this subtask. The lead sets it to dial effort
        * up for hard pieces (design/dialectic → "high"/"max") or down for rote ones
