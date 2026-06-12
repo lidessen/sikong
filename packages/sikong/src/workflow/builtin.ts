@@ -154,15 +154,13 @@ export const VISUAL_DESIGN_WORKFLOW: WorkflowDef = {
 };
 
 /**
- * Generic design workflow: research, decision, document, and review
- * architectural/technical design choices — tradeoffs, DESIGN.md content,
- * ADRs, interfaces, architecture, and any software design that is NOT
- * UI/visual design. For UI/visual design (target-aware, philosophy-driven),
- * use `VISUAL_DESIGN_WORKFLOW` instead.
+ * The original generic technical design workflow, kept so that tasks already
+ * pinned to `design@4` can still load and replay their timeline. Registration
+ * happens in `workspace.ts` before the latest `DESIGN_WORKFLOW`. (ADR 0031)
  *
  * Stages: design → document → review → done.
  */
-export const DESIGN_WORKFLOW: WorkflowDef = {
+export const _DESIGN_WORKFLOW_V4: WorkflowDef = {
   id: "design",
   version: "4",
   name: "Design",
@@ -222,6 +220,133 @@ export const DESIGN_WORKFLOW: WorkflowDef = {
         op: "and",
         all: [
           { op: "field", field: "design", cmp: "exists" },
+          { op: "field", field: "summary", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+          { op: "acceptancePassed" },
+        ],
+      },
+    },
+  ],
+};
+
+/**
+ * Generic technical design workflow (ADR 0031): understand the world, find
+ * stable design anchors, shape the skeleton, design the parts, then assemble a
+ * concise construction blueprint. This is NOT visual design and not an
+ * implementation encyclopedia. The deliverable tells builders what must not
+ * move and where they may use judgment.
+ */
+export const DESIGN_WORKFLOW: WorkflowDef = {
+  id: "design",
+  version: "5",
+  name: "Design",
+  description:
+    "Technical design: deconstruct the problem with contradiction analysis, find stable anchors, shape the skeleton and parts, then assemble a concise construction blueprint. For UI/visual design, use visual-design instead.",
+  fields: {
+    request: { type: "string", description: "The original design requirement." },
+    world: { type: "string", description: "Problem deconstruction: what reality is being changed, the primary contradiction, secondary constraints, non-goals, and why this problem matters." },
+    alternatives: { type: "json", description: "Adversarial record of candidate problem readings or design approaches considered and rejected — a JSON array of { option, pros, why_rejected }." },
+    anchors: { type: "string", description: "Stable design anchors: invariants, identities, ownership boundaries, lifecycle facts, failure semantics, and decisions builders must not move." },
+    skeleton: { type: "string", description: "System skeleton: core boundaries, state/data flow, control flow, integration points, and the smallest architecture that preserves the anchors." },
+    parts: { type: "string", description: "Part design: modules, interfaces, policies, extension points, and which details are strict versus left to implementation judgment." },
+    blueprint: { type: "string", description: "Final concise design blueprint, usually mirrored into DESIGN.md or an ADR, with diagrams only where they clarify construction." },
+    design: { type: "string", description: "Compatibility summary of the accepted blueprint and key decisions." },
+    summary: { type: "string", description: "One-line final outcome." },
+  },
+  stages: [
+    {
+      id: "world",
+      category: "in_progress",
+      entry: { op: "always" },
+      effort: "high",
+      outputFields: ["world", "alternatives"],
+      instructions:
+        "Recognize the world before designing. Read existing docs/code/context. Use contradiction analysis: distinguish surface symptoms from essence; identify the primary contradiction the design must resolve, secondary contradictions/constraints, the principal aspect that should drive decisions, and explicit non-goals. Explore 2-3 materially different readings or approaches, steelman them, then reject the weaker ones without strawmen. Record the deconstruction in `world` and the rejected candidates in `alternatives` as JSON { option, pros, why_rejected }. Do not start implementation planning here. Block if the problem cannot be understood.",
+    },
+    {
+      id: "anchors",
+      category: "in_progress",
+      effort: "medium",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "world", cmp: "exists" },
+          { op: "field", field: "alternatives", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["anchors"],
+      instructions:
+        "Find the stable design points. Extract anchors that should remain true even when implementation details change: domain identities, state invariants, ownership boundaries, trust/safety boundaries, lifecycle transitions, data durability rules, failure semantics, and review/acceptance facts. State these as hard constraints, not preferences. Also note what is deliberately flexible. Set `anchors`, then request transition.",
+    },
+    {
+      id: "skeleton",
+      category: "in_progress",
+      effort: "medium",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "anchors", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["skeleton"],
+      instructions:
+        "Design the skeleton. Choose the smallest architecture that preserves the anchors: core boundaries, state/data flow, control flow, persistence shape, external interfaces, and where the system can later grow. Prefer a simple skeleton over a complete inventory. Set `skeleton`, then request transition.",
+    },
+    {
+      id: "parts",
+      category: "in_progress",
+      effort: "medium",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "skeleton", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["parts"],
+      instructions:
+        "Design the parts only to the depth needed for construction. Define modules, interfaces, policy points, data contracts, and extension points. For each important part, separate 'strict' details the builder must follow from 'flexible' details the builder may adapt. Avoid exhaustive implementation trees unless they are the anchor. Set `parts`, then request transition.",
+    },
+    {
+      id: "blueprint",
+      category: "in_progress",
+      effort: "medium",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "parts", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      outputFields: ["blueprint", "design"],
+      instructions:
+        "Assemble the blueprint. Write or update DESIGN.md/ADR with concise, plain language. Include architecture diagrams, flow diagrams, or sequence diagrams only where they clarify how to build. The document is a construction blueprint, not a full description of reality: it must clearly mark immovable constraints ('must follow') and flexible areas ('builder judgment'). Preserve the world/anchors/skeleton/parts decisions without bloating into a full implementation encyclopedia. Set `blueprint` with the final document summary and `design` with a compatibility summary, submit evidence with files changed, then request transition.",
+    },
+    {
+      id: "review",
+      category: "in_progress",
+      effort: "low",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "blueprint", cmp: "exists" },
+          { op: "hasEvent", eventType: "transition.requested" },
+        ],
+      },
+      acceptance: [{ kind: "projectGate", description: "Submit blueprint evidence for lead review" }],
+      outputFields: ["blueprint", "design", "summary"],
+      instructions:
+        "Present the blueprint for lead review. If the latest lead acceptance decision is rejected, FIRST revise the blueprint/docs according to the rejection reason, then update `blueprint` and `design` if the accepted design facts changed; do not merely restate the old evidence. Submit structured evidence with `submit_evidence` (design docs, diagrams if any, strict-vs-flexible boundaries), set `summary`, and request transition. The lead must accept/reject; do not claim acceptance yourself.",
+    },
+    {
+      id: "done",
+      category: "done",
+      entry: {
+        op: "and",
+        all: [
+          { op: "field", field: "blueprint", cmp: "exists" },
           { op: "field", field: "summary", cmp: "exists" },
           { op: "hasEvent", eventType: "transition.requested" },
           { op: "acceptancePassed" },

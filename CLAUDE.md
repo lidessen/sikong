@@ -135,12 +135,20 @@ transitions, child task creation, evidence submission, or an in-progress worker
 performing expected verification. A timeout or cancelled worker pass is not by
 itself a failure if the task state advanced or the chronicle shows useful work.
 
+Do not implement code that judges a worker's work progress from low-level
+telemetry such as elapsed time, tool counts, read/write counts, state command
+counts, or repeated diagnostics. Those are log facts only. Whether a worker is
+making meaningful progress must be decided by a lead or another review agent
+reading the worker's work log, task fields, evidence, and chronicle context.
+Code may surface observations and make the work log easier to inspect; it must
+not classify the worker's actual progress, quality, or intent.
+
 Intervene only when there is an actual abnormal signal: process failure,
-repeated identical no-progress wakes, missing required evidence, invalid state
-transition, blocked status, tool/auth/environment error, runaway cost, or a
-worker trying to complete without reviewable evidence. In those cases, record
-the evidence in Shilu first, then decide whether the lead should accept it as a
-Sikong task, test, ADR, or release blocker.
+lead/reviewer-judged repeated no-progress wakes, missing required evidence,
+invalid state transition, blocked status, tool/auth/environment error, runaway
+cost, or a worker trying to complete without reviewable evidence. In those
+cases, record the evidence in Shilu first, then decide whether the lead should
+accept it as a Sikong task, test, ADR, or release blocker.
 
 ## Work logs
 

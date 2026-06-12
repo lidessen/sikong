@@ -67,8 +67,10 @@ layer.
    - stop a run once it records terminal intent (`request_transition` / `block` /
      `cancel`) — lifecycle, not a budget;
    - a wall-clock wake timeout and a runaway wake backstop;
-   - a no-state-command commit fallback that re-drives a worker which recorded no
-     durable outcome (with generic typed-field validation on the commit tool);
+  - a no-state-command commit fallback that re-drives a worker which recorded no
+    durable outcome (with generic typed-field validation on the commit tool);
+    superseded by [0033](0033-worker-work-log-review.md), which records a
+    review-required worker work log instead;
    - generic, sanitized diagnostics/observability of what a run did.
 
 ## Consequences
@@ -98,8 +100,9 @@ layer.
   `agent-loop` project tools for an ai-sdk worker and passes them via `workerTools`.
 - Drop `StageDef.requiresProjectWrite`; built-in workflow instructions describe the
   *deliverable* (which fields to set), not which edit tool to use.
-- Simplify the commit fallback to one generic path: record a state command or
-  block; keep `commit_stage` schema generation and field-type validation.
+- Superseded by [0033](0033-worker-work-log-review.md): the engine records
+  `wake.review_required` for lead/reviewer inspection instead of running an
+  automatic commit fallback.
 - Keep `closesCurrentRun` / run-stop-on-terminal-intent and the sanitized
   diagnostics as task-agnostic mechanisms.
 

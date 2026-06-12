@@ -121,14 +121,15 @@ describe("sikong CLI", () => {
         ok: true,
         taskId: "steer-task",
         command: { kind: "steer", message: "prefer the accepted repair, do not block" },
-        next: { note: "active wake will receive this steer if one is running" },
+        next: { note: "lead will review this message before task topology changes" },
       });
 
       const entries = await new JsonSteerMailbox(dir).list("steer-task");
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({
         taskId: "steer-task",
-        source: "lead",
+        source: "operator",
+        kind: "steer",
         message: "prefer the accepted repair, do not block",
       });
     } finally {
@@ -136,7 +137,7 @@ describe("sikong CLI", () => {
     }
   });
 
-  test("submit steer bypasses the run write lock while normal submits do not", async () => {
+  test("operator messages bypass the run write lock while normal submits do not", async () => {
     const dir = await tmp();
     try {
       const created = Bun.spawnSync([
@@ -168,6 +169,22 @@ describe("sikong CLI", () => {
       expect(steer.exitCode).toBe(0);
       expect((await new JsonSteerMailbox(dir).list("locked-steer-task")).map((entry) => entry.message)).toEqual([
         "correct the active wake",
+      ]);
+
+      const cancel = Bun.spawnSync([
+        process.execPath,
+        cliPath,
+        "submit",
+        "locked-steer-task",
+        "cancel",
+        "stop broad subtasks",
+        "--dir",
+        dir,
+      ]);
+      expect(cancel.exitCode).toBe(0);
+      expect((await new JsonSteerMailbox(dir).list("locked-steer-task")).map((entry) => entry.kind)).toEqual([
+        "steer",
+        "stop_requested",
       ]);
 
       const transition = Bun.spawnSync([
@@ -231,13 +248,12 @@ describe("sikong CLI", () => {
         },
       });
       await store.append({
-        type: "wake.commit",
+        type: "wake.review_required",
         taskId: "t1",
         wakeId: "w1",
-        summary: "commit fallback",
+        summary: "worker pass requires lead review",
         data: {
           reason: "no_state_commands",
-          allowedTools: ["commit_stage", "block"],
           outputFields: ["summary"],
         },
       });
@@ -260,8 +276,69 @@ describe("sikong CLI", () => {
         "wake.diagnostics t1 — worker pass [phase=worker stateCommands=0 tools=readFile:2,rg:1]",
       );
       expect(text).toContain(
-        "wake.commit t1 — commit fallback [reason=no_state_commands allowed=commit_stage,block outputFields=summary]",
+        "wake.review_required t1 — worker pass requires lead review [reason=no_state_commands outputFields=summary]",
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("trace renders the latest wake tool and state-command summary", async () => {
+    const dir = await tmp();
+    try {
+      const events = new JsonWorkspaceEventStore(dir);
+      const projections = new JsonWorkspaceProjectionStore(dir);
+      const chronicle = new JsonWorkspaceChronicleStore(dir);
+      const timeline = await events.append(
+        "t1",
+        initTask({
+          taskId: "t1",
+          projectId: "p1",
+          workflow: GENERAL_WORKFLOW,
+          workerId: "flash",
+          fields: { request: "observe worker status" },
+        }),
+      );
+      await projections.put(project(timeline, GENERAL_WORKFLOW));
+      await chronicle.append({ type: "wake.start", taskId: "t1", wakeId: "w1", summary: "wake @ design" });
+      await chronicle.append({
+        type: "wake.progress",
+        taskId: "t1",
+        wakeId: "w1",
+        summary: "tool Read started",
+        data: { phase: "worker", event: "tool_call_start", tool: "Read", argsPreview: "{\"file\":\"a.ts\"}" },
+      });
+      await chronicle.append({
+        type: "wake.diagnostics",
+        taskId: "t1",
+        wakeId: "w1",
+        summary: "worker pass",
+        data: { phase: "worker", stateCommands: 0, toolCallStarts: { Read: 3, Bash: 1 } },
+      });
+      await chronicle.append({
+        type: "wake.review_required",
+        taskId: "t1",
+        wakeId: "w1",
+        summary: "worker pass requires lead review",
+        data: { reason: "no_state_commands" },
+      });
+
+      const textOut = Bun.spawnSync([process.execPath, cliPath, "trace", "t1", "--dir", dir, "--text"]);
+      expect(textOut.exitCode).toBe(0);
+      const text = new TextDecoder().decode(textOut.stdout);
+      expect(text).toContain("Trace t1 [in_progress]");
+      expect(text).toContain("worker=flash");
+      expect(text).toContain("Latest wake: w1 status=active");
+      expect(text).toContain("worker stateCommands=0 tools=Bash:1,Read:3");
+      expect(text).toContain("last tool=Read");
+      expect(text).toContain("review required: ");
+
+      const jsonOut = Bun.spawnSync([process.execPath, cliPath, "trace", "t1", "--dir", dir]);
+      expect(jsonOut.exitCode).toBe(0);
+      expect(JSON.parse(new TextDecoder().decode(jsonOut.stdout))).toMatchObject({
+        task: { id: "t1", workerId: "flash" },
+        latestWake: { wakeId: "w1", status: "active", lastTool: "Read", stateCommands: 0, tools: "Bash:1,Read:3" },
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

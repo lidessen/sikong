@@ -7,6 +7,7 @@ export const COMMAND_TOOL_NAMES = [
   "request_transition",
   "append_note",
   "submit_evidence",
+  "ack_lead_messages",
   "block",
   "cancel",
   "create_subtask",
@@ -34,6 +35,7 @@ export function buildCommandTools(
   const allow = stage?.tools ? new Set(stage.tools) : null; // null ⇒ all defaults
   // `create_subtask` is a deliberate capability — opt-in only (a stage must list it).
   const on = (name: CommandToolName): boolean =>
+    name === "ack_lead_messages" ? true :
     name === "create_subtask" ? (allow?.has(name) ?? false) : allow === null || allow.has(name);
 
   const fieldNames = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
@@ -142,6 +144,41 @@ export function buildCommandTools(
             ...(Array.isArray(args.changedFiles) ? { changedFiles: args.changedFiles.map(String) } : {}),
             ...(Array.isArray(args.artifacts) ? { artifacts: args.artifacts.map(String) } : {}),
           },
+        }),
+    });
+
+  if (on("ack_lead_messages"))
+    tools.ack_lead_messages = defineTool({
+      description:
+        "Acknowledge pending operator/lead messages before changing task topology. Use this to say whether you accept, reject, or defer the requested adjustment and what you will do next.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "Message ids being reviewed.",
+          },
+          decision: {
+            type: "string",
+            enum: ["accepted", "rejected", "deferred"],
+          },
+          response: {
+            type: "string",
+            description: "Lead decision and next action in plain language.",
+          },
+        },
+        required: ["ids", "decision", "response"],
+        additionalProperties: false,
+      },
+      execute: (args) =>
+        push({
+          kind: "ack_lead_messages",
+          ids: Array.isArray(args.ids) ? args.ids.map(String) : [],
+          decision: ["accepted", "rejected", "deferred"].includes(String(args.decision))
+            ? (String(args.decision) as "accepted" | "rejected" | "deferred")
+            : "deferred",
+          response: String(args.response),
         }),
     });
 

@@ -156,6 +156,18 @@ export function apply(
       if (!message) reject("steer requires a non-empty message");
       return [mk("steer.requested", { message })];
     }
+    case "ack_lead_messages": {
+      const ids = [...new Set(command.ids.map((id) => id.trim()).filter(Boolean))];
+      if (!ids.length) reject("ack_lead_messages requires at least one message id");
+      if (!command.response.trim()) reject("ack_lead_messages requires a non-empty response");
+      return [
+        mk("lead.messages.acknowledged", {
+          ids,
+          decision: command.decision,
+          response: command.response,
+        }),
+      ];
+    }
   }
 }
 
@@ -299,6 +311,7 @@ function foldEvent(task: Task | null, ev: EventLike, wf: WorkflowDef): Task {
     case "acceptance.accepted":
     case "acceptance.rejected":
     case "steer.requested":
+    case "lead.messages.acknowledged":
       break; // signal / audit only — no projection change
   }
 
@@ -397,6 +410,19 @@ export function deriveAcceptanceStatus(
     if (ev?.type === "stage.entered" || ev?.type === "task.created") break;
   }
   return sawEvidence ? "pending" : "none";
+}
+
+/** Return the latest lead acceptance/rejection reason within the current stage. */
+export function deriveAcceptanceReason(events: readonly EventLike[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev?.type === "acceptance.accepted" || ev?.type === "acceptance.rejected") {
+      const reason = ev.payload?.["reason"];
+      return typeof reason === "string" ? reason : undefined;
+    }
+    if (ev?.type === "stage.entered" || ev?.type === "task.created") break;
+  }
+  return undefined;
 }
 
 // ---- create + small helpers -----------------------------------------------

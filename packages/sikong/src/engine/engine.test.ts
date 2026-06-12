@@ -15,9 +15,10 @@ import {
   type ToolSet,
 } from "agent-loop";
 import { WorkflowEngine, type LoopFactory } from "./engine";
+import { buildPrompt } from "./prompt";
 import { JsonSteerMailbox } from "./steer-mailbox";
 import { DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW } from "../workflow/builtin";
-import type { WorkflowDef } from "../workflow/types";
+import type { Task, WorkflowDef } from "../workflow/types";
 import {
   MemoryChronicleStore,
   MemoryEventStore,
@@ -28,6 +29,46 @@ import {
 import { JsonWorkspaceChronicleStore, JsonWorkspaceEventStore, JsonWorkspaceProjectionStore } from "../store";
 
 const cliPath = new URL("../cli.ts", import.meta.url).pathname;
+
+test("wake prompt exposes lead acceptance rejection reason for single-task repair", () => {
+  const wf: WorkflowDef = {
+    id: "reviewable",
+    version: "1",
+    name: "Reviewable",
+    description: "reviewable workflow",
+    fields: {
+      blueprint: { type: "string", description: "blueprint" },
+      summary: { type: "string", description: "summary" },
+    },
+    stages: [
+      { id: "review", category: "in_progress", entry: { op: "always" }, outputFields: ["summary"] },
+      { id: "done", category: "done", entry: { op: "always" } },
+    ],
+  };
+  const task: Task = {
+    id: "t1",
+    projectId: "p",
+    workflowId: "reviewable",
+    workflowVersion: "1",
+    stageId: "review",
+    fields: { blueprint: "old" },
+    status: "in_progress",
+    childIds: [],
+    depth: 0,
+    cursor: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  const prompt = buildPrompt(task, wf, wf.stages[0], [], {
+    eventTypes: new Set(["transition.requested"]),
+    acceptanceStatus: "rejected",
+    acceptanceReason: "fix the evidence state wording",
+  });
+
+  expect(prompt).toContain("acceptance: rejected");
+  expect(prompt).toContain("latest acceptance reason: fix the evidence state wording");
+});
 
 function newEngine(loop: LoopFactory, extra: WorkflowDef[] = [], hooks = {}) {
   const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
@@ -50,6 +91,10 @@ async function leadAccept(engine: WorkflowEngine, taskId: string, reason = "lead
   await engine.idle();
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const TWO_STEP: WorkflowDef = {
   id: "eng",
   version: "1",
@@ -70,7 +115,7 @@ const SIMPLE_COMMIT: WorkflowDef = {
   id: "simple-commit",
   version: "1",
   name: "Simple Commit",
-  description: "single-stage workflow used to test commit fallback behavior",
+  description: "single-stage workflow used to test worker work-log review behavior",
   fields: {
     summary: { type: "string", description: "result summary" },
   },
@@ -202,7 +247,7 @@ describe("WorkflowEngine wake cycle", () => {
       await running;
 
       expect(seen).toEqual(["Use the accepted repair constraints before deciding."]);
-      expect(await mailbox.list("steer-me")).toHaveLength(0);
+      expect(await mailbox.list("steer-me")).toHaveLength(1);
       expect((await events.load("steer-me")).map((event) => event.type)).toContain("steer.requested");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -293,7 +338,7 @@ describe("WorkflowEngine wake cycle", () => {
       await running;
 
       expect(seen).toEqual(["use the live correction channel"]);
-      expect(await mailbox.list("cli-steer-live")).toHaveLength(0);
+      expect(await mailbox.list("cli-steer-live")).toHaveLength(1);
       expect((await events.load("cli-steer-live")).map((event) => event.type)).toContain("steer.requested");
       expect((await chronicle.recent({ taskId: "cli-steer-live", type: "wake.steer" }))).toHaveLength(1);
     } finally {
@@ -387,26 +432,16 @@ describe("WorkflowEngine wake cycle", () => {
     expect(task?.fields.changedFiles).toEqual(["packages/sikong/src/worker.ts"]);
   });
 
-  test("runs a forced commit pass when a worker returns text without state commands", async () => {
+  test("records review-required work log when a worker returns text without state commands", async () => {
     const root = await mkdtemp(join(tmpdir(), "sikong-commit-tools-"));
     await writeFile(join(root, "marker.txt"), "done\n", "utf8");
     const chronicle = new MemoryChronicleStore(() => 1);
     let calls = 0;
-    let commitRuntimeOptions: unknown;
-    let commitInputSchema: unknown;
     const loop: LoopFactory = () =>
       scriptLoop(async (input) => {
         calls++;
-        if (calls === 1) {
-          return "Updated marker but forgot to commit sikong state.";
-        }
-        commitRuntimeOptions = input.runtimeOptions;
-        commitInputSchema = input.tools?.commit_stage?.inputSchema;
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
-        await input.tools?.commit_stage?.execute?.(
-          { fields: { summary: "validated by worker commit pass" }, reason: "committed" },
-          {},
-        );
+        expect(input.tools?.commit_stage).toBeUndefined();
+        return "Updated marker but did not record sikong state.";
       }, "ai-sdk");
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
@@ -421,17 +456,9 @@ describe("WorkflowEngine wake cycle", () => {
     await engine.idle();
 
     const task = await engine.getTask("commit1");
-    expect(calls).toBe(2);
-    expect(task?.status).toBe("done");
-    expect(task?.fields.summary).toBe("validated by worker commit pass");
-    expect(commitRuntimeOptions).toMatchObject({ toolChoice: "required" });
-    expect(commitRuntimeOptions).toMatchObject({ activeTools: ["commit_stage", "block", "cancel"] });
-    expect(commitRuntimeOptions).toMatchObject({
-      providerOptions: { deepseek: { thinking: { type: "disabled" } } },
-    });
-    expect(commitInputSchema).toMatchObject({
-      properties: { fields: { properties: { summary: { type: "string" } } } },
-    });
+    expect(calls).toBe(1);
+    expect(task?.status).toBe("in_progress");
+    expect(task?.fields.summary).toBeUndefined();
     const entries = await chronicle.recent({ taskId: "commit1", limit: 20 });
     const workerDiagnostics = entries.find(
       (entry) => entry.type === "wake.diagnostics" && entry.data?.phase === "worker",
@@ -439,101 +466,46 @@ describe("WorkflowEngine wake cycle", () => {
     expect(workerDiagnostics?.data).toMatchObject({
       status: "completed",
       stateCommands: 0,
-      textPreview: "Updated marker but forgot to commit sikong state.",
+      textPreview: "Updated marker but did not record sikong state.",
     });
-    const fallback = entries.find((entry) => entry.type === "wake.commit");
-    expect(fallback?.data).toMatchObject({
+    const reviewRequired = entries.find((entry) => entry.type === "wake.review_required");
+    expect(reviewRequired?.data).toMatchObject({
       reason: "no_state_commands",
-      allowedTools: ["commit_stage", "block", "cancel"],
-      firstPassTextPreview: "Updated marker but forgot to commit sikong state.",
+      firstPassTextPreview: "Updated marker but did not record sikong state.",
     });
-    const commitDiagnostics = entries.find(
-      (entry) => entry.type === "wake.diagnostics" && entry.data?.phase === "commit",
-    );
-    expect(commitDiagnostics?.data).toMatchObject({
-      status: "completed",
-      stateCommands: 2,
-      allowedTools: ["commit_stage", "block", "cancel"],
-    });
+    expect(entries.map((entry) => entry.type)).not.toContain("wake.commit");
+    expect(entries.map((entry) => entry.type)).toContain("wake.end");
   });
 
-  test("commit_stage rejects fields with invalid workflow types before reducer rejection", async () => {
-    const root = await mkdtemp(join(tmpdir(), "sikong-commit-field-types-"));
-    await writeFile(join(root, "marker.txt"), "before\n", "utf8");
+  test("records review-required when a worker emits commands without a stage commit signal", async () => {
     const chronicle = new MemoryChronicleStore(() => 1);
     let calls = 0;
-    let invalidCommit: unknown;
     const loop: LoopFactory = () =>
       scriptLoop(async (input) => {
         calls++;
-        if (calls === 1) return;
-        await input.tools?.block?.execute?.({ reason: "invalid commit payload" }, {});
-        invalidCommit = await input.tools?.commit_stage?.execute?.(
-          { fields: { summary: { bad: true } }, reason: "bad payload" },
-          {},
-        );
+        await input.tools?.append_note?.execute?.({ text: "looked around" }, {});
       }, "ai-sdk");
     const engine = new WorkflowEngine({
       events: new MemoryEventStore(() => 1),
       projections: new MemoryProjectionStore(),
-      projects: new MemoryProjectStore([{ id: "p", name: "Project", root }]),
       registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
       chronicle,
       loop,
     });
 
-    await engine.createTask({ projectId: "p", taskId: "commit-field-types", fields: { request: "edit marker" } });
+    await engine.createTask({ projectId: "p", taskId: "note-only", fields: { request: "inspect" } });
     await engine.idle();
 
-    expect(invalidCommit).toMatchObject({ error: 'field "summary" must be string' });
-    expect((await engine.getTask("commit-field-types"))?.status).toBe("blocked");
-    const entries = await chronicle.recent({ taskId: "commit-field-types", limit: 20 });
-    expect(entries.map((entry) => entry.type)).not.toContain("command.rejected");
-  });
-
-  test("stops the commit fallback after a successful commit_stage", async () => {
-    const chronicle = new MemoryChronicleStore(() => 1);
-    let calls = 0;
-    let commitStageAttempts = 0;
-    const loop: LoopFactory = () =>
-      cancellableScriptLoop(async (input, isCancelled) => {
-        calls++;
-        if (calls === 1) return;
-        expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
-        for (let i = 0; i < 20 && !isCancelled(); i++) {
-          commitStageAttempts++;
-          await input.tools?.commit_stage?.execute?.(
-            { fields: { summary: `committed ${i}` }, reason: `complete ${i}` },
-            {},
-          );
-        }
-      }, "ai-sdk");
-    const registry = new MemoryWorkflowRegistry(SIMPLE_COMMIT);
-    const engine = new WorkflowEngine({
-      events: new MemoryEventStore(() => 1),
-      projections: new MemoryProjectionStore(),
-      registry,
-      chronicle,
-      loop,
-    });
-
-    await engine.createTask({ projectId: "p", workflowId: "simple-commit", taskId: "commit-stage-once" });
-    await engine.idle();
-
-    expect(calls).toBe(2);
-    expect(commitStageAttempts).toBe(1);
-    expect((await engine.getTask("commit-stage-once"))?.status).toBe("done");
-    const commitDiagnostics = (
-      await chronicle.recent({ taskId: "commit-stage-once", type: "wake.diagnostics", limit: 20 })
-    ).find((entry) => entry.data?.phase === "commit");
-    expect(commitDiagnostics?.data).toMatchObject({
-      status: "cancelled",
-      stateCommands: 2,
-      allowedTools: ["commit_stage", "block", "cancel"],
+    expect(calls).toBe(1);
+    expect((await engine.getTask("note-only"))?.status).toBe("in_progress");
+    const reviewRequired = (await chronicle.recent({ taskId: "note-only", type: "wake.review_required", limit: 10 }))[0];
+    expect(reviewRequired?.data).toMatchObject({
+      reason: "no_stage_commit_commands",
+      commandKinds: ["append_note"],
     });
   });
 
-  test("allows a no-write forced commit pass on development planning stages", async () => {
+  test("development planning stages wait for review instead of using an automatic no-write commit pass", async () => {
     const root = await mkdtemp(join(tmpdir(), "sikong-dev-plan-commit-"));
     await writeFile(
       join(root, "package.json"),
@@ -546,12 +518,6 @@ describe("WorkflowEngine wake cycle", () => {
         calls++;
         if (ctx.stageId === "plan") {
           planPasses++;
-          if (planPasses === 1) return;
-          expect(Object.keys(input.tools ?? {}).sort()).toEqual(["block", "cancel", "commit_stage"]);
-          await input.tools?.commit_stage?.execute?.(
-            { fields: { plan: "Plan first, then implement." }, reason: "planned" },
-            {},
-          );
           return;
         }
         if (ctx.stageId === "design") {
@@ -587,64 +553,33 @@ describe("WorkflowEngine wake cycle", () => {
       fields: { request: "plan the change" },
     });
     await engine.idle();
-    await leadAccept(engine, "dev-plan-commit");
 
     const task = await engine.getTask("dev-plan-commit");
-    expect(calls).toBe(5);
-    expect(planPasses).toBe(2);
-    expect(task?.stageId).toBe("done");
-    expect(task?.status).toBe("done");
-    expect(task?.fields.plan).toBe("Plan first, then implement.");
-  });
-
-  test("forced commit stage wins over block in the same commit pass", async () => {
-    let calls = 0;
-    let commitSystem = "";
-    const loop: LoopFactory = () =>
-      scriptLoop(async (input) => {
-        calls++;
-        if (calls === 1) return;
-        if (!input.tools?.commit_stage) return;
-        commitSystem = input.system ?? "";
-        await input.tools?.block?.execute?.({ reason: "confused" }, {});
-        // At the design stage, only `design` and `alternatives` are in outputFields.
-        await input.tools?.commit_stage?.execute?.(
-          { fields: { design: "Design the bounded change." }, reason: "designed" },
-          {},
-        );
-        await input.tools?.block?.execute?.({ reason: "late confusion" }, {});
-      }, "ai-sdk");
-    const engine = newEngine(loop, [DEVELOPMENT_WORKFLOW]);
-
-    await engine.createTask({
-      projectId: "p",
-      workflowId: "development",
-      taskId: "commit-stage-wins",
-      fields: { request: "plan the change" },
-    });
-    await engine.idle();
-
-    const task = await engine.getTask("commit-stage-wins");
-    expect(commitSystem).toContain("Current task fields");
-    expect(commitSystem).toContain("plan the change");
+    expect(calls).toBe(2);
+    expect(planPasses).toBe(1);
     expect(task?.stageId).toBe("plan");
     expect(task?.status).toBe("in_progress");
-    expect(task?.fields.design).toBe("Design the bounded change.");
+    expect(task?.fields.plan).toBeUndefined();
   });
 
-  test("reports a wake error when even the forced commit pass emits no state commands", async () => {
+  test("a worker pass with no state commands ends normally and leaves review to lead", async () => {
     const errors: string[] = [];
-    const engine = newEngine(
-      () => scriptLoop(async () => {}),
-      [],
-      { onError: ({ error }: { error: Error }) => errors.push(error.message) },
-    );
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop: () => scriptLoop(async () => {}),
+      chronicle,
+      hooks: { onError: ({ error }: { error: Error }) => errors.push(error.message) },
+    });
 
     await engine.createTask({ projectId: "p", taskId: "commit-empty", fields: { request: "validate" } });
     await engine.idle();
 
     expect((await engine.getTask("commit-empty"))?.status).toBe("in_progress");
-    expect(errors).toContain("worker completed without calling any sikong state tool");
+    expect(errors).toEqual([]);
+    expect((await chronicle.recent({ taskId: "commit-empty", type: "wake.review_required", limit: 10 })).length).toBe(1);
   });
 
   test("an external command can finish a stage with no agent wake (pre-advance)", async () => {
@@ -792,6 +727,172 @@ describe("WorkflowEngine wake cycle", () => {
     expect(cancelAt).toBeGreaterThanOrEqual(0);
     expect(log.slice(cancelAt + 1).some((e) => e.source === "worker")).toBe(false);
     expect(log.some((e) => e.type === "field.set" || e.type === "transition.requested")).toBe(false);
+  });
+
+  test("lead cancel preempts the in-flight worker pass", async () => {
+    let started!: () => void;
+    const startedP = new Promise<void>((r) => {
+      started = r;
+    });
+    let cancelled = false;
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop: () =>
+        cancellableScriptLoop(async (_input, isCancelled) => {
+          started();
+          while (!isCancelled()) await sleep(5);
+          cancelled = true;
+        }),
+      wakeTimeoutMs: 2_000,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "cancel-preempts-worker", fields: {} });
+    await startedP;
+    const began = Date.now();
+    await engine.submitCommand("cancel-preempts-worker", { kind: "cancel", reason: "operator stop" }, "lead");
+    await engine.idle();
+
+    expect(cancelled).toBe(true);
+    expect(Date.now() - began).toBeLessThan(500);
+    expect((await engine.getTask("cancel-preempts-worker"))?.status).toBe("cancelled");
+  });
+
+  test("lead cancel from another engine process preempts through the event log", async () => {
+    let started!: () => void;
+    const startedP = new Promise<void>((r) => {
+      started = r;
+    });
+    let cancelled = false;
+    const events = new MemoryEventStore(() => 1);
+    const projections = new MemoryProjectionStore();
+    const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+    const runner = new WorkflowEngine({
+      events,
+      projections,
+      registry,
+      loop: () =>
+        cancellableScriptLoop(async (_input, isCancelled) => {
+          started();
+          while (!isCancelled()) await sleep(5);
+          cancelled = true;
+        }),
+      wakeTimeoutMs: 5_000,
+    });
+    const submitter = new WorkflowEngine({
+      events,
+      projections,
+      registry,
+      loop: () => mockLoop({ response: "unused" }),
+    });
+
+    await runner.createTask({ projectId: "p", taskId: "cross-process-cancel", fields: {} });
+    await startedP;
+    const began = Date.now();
+    await submitter.submitCommand("cross-process-cancel", { kind: "cancel", reason: "operator stop" }, "lead", {
+      schedule: false,
+    });
+    await runner.idle();
+
+    expect(cancelled).toBe(true);
+    expect(Date.now() - began).toBeLessThan(2_000);
+    expect((await runner.getTask("cross-process-cancel"))?.status).toBe("cancelled");
+  });
+
+  test("lead block can resolve a review-required worker pass", async () => {
+    let calls = 0;
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      loop: () =>
+        cancellableScriptLoop(async () => {
+          calls++;
+          return "plain text without state commands";
+        }, "ai-sdk"),
+      wakeTimeoutMs: 2_000,
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "block-preempts-commit", fields: {} });
+    const began = Date.now();
+    await engine.submitCommand("block-preempts-commit", { kind: "block", reason: "operator hold" }, "lead");
+    await engine.idle();
+
+    expect(calls).toBe(1);
+    expect(Date.now() - began).toBeLessThan(500);
+    expect((await engine.getTask("block-preempts-commit"))?.status).toBe("blocked");
+  });
+
+  test("pending operator messages gate subtask creation until the lead acknowledges them", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sikong-lead-message-"));
+    try {
+      const mailbox = new JsonSteerMailbox(dir);
+      const chronicle = new MemoryChronicleStore(() => 1);
+      const delegateWorkflow: WorkflowDef = {
+        id: "delegate-test",
+        version: "1",
+        name: "Delegate Test",
+        description: "delegation gate test",
+        fields: {},
+        stages: [
+          {
+            id: "delegate",
+            category: "in_progress",
+            entry: { op: "always" },
+            tools: ["create_subtask"],
+          },
+          {
+            id: "done",
+            category: "done",
+            entry: { op: "hasEvent", eventType: "transition.requested" },
+          },
+        ],
+      };
+      const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
+      registry.register(delegateWorkflow);
+      let pass = 0;
+      let messageId = "";
+      const engine = new WorkflowEngine({
+        events: new MemoryEventStore(() => 1),
+        projections: new MemoryProjectionStore(),
+        chronicle,
+        registry,
+        steerMailbox: mailbox,
+        loop: () =>
+          scriptLoop(async (input) => {
+            pass++;
+            if (pass === 1) {
+              await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "too broad" }, {});
+              return;
+            }
+            await input.tools?.ack_lead_messages?.execute?.({
+              ids: [messageId],
+              decision: "accepted",
+              response: "scope limit accepted; creating one bounded child",
+            }, {});
+            await input.tools?.create_subtask?.execute?.({ workflowId: "general", input: "bounded child" }, {});
+          }),
+      });
+
+      await engine.createTask({ projectId: "p", workflowId: "delegate-test", taskId: "lead-gated", wake: false });
+      const entry = await mailbox.submit("lead-gated", "keep this to one narrow slice", "scope_limit");
+      messageId = entry.id;
+
+      await engine.runPending("lead-gated");
+      expect((await engine.getTask("lead-gated"))?.childIds).toHaveLength(0);
+      expect(await mailbox.list("lead-gated")).toHaveLength(1);
+      expect((await chronicle.recent({ taskId: "lead-gated", type: "command.rejected", limit: 10 }))[0]?.summary)
+        .toContain("create_subtask requires lead message acknowledgement");
+
+      await engine.runPending("lead-gated");
+      expect((await engine.getTask("lead-gated"))?.childIds).toHaveLength(1);
+      expect(await mailbox.list("lead-gated")).toHaveLength(0);
+      const timeline = await (engine["o"].events as MemoryEventStore).load("lead-gated");
+      expect(timeline.map((event) => event.type)).toContain("lead.messages.acknowledged");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("a hung wake is bounded by wakeTimeoutMs and reported, never left to hang", async () => {
@@ -1034,10 +1135,39 @@ describe("WorkflowEngine wake cycle", () => {
     expect(entries.indexOf(progressEnd!)).toBeLessThan(wakeEndIndex);
   });
 
-  test("commit fallback sees compact tool call facts from the worker pass", async () => {
+  test("diagnostics distinguish terminal-intent closure from runtime cancellation", async () => {
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const engine = new WorkflowEngine({
+      events: new MemoryEventStore(() => 1),
+      projections: new MemoryProjectionStore(),
+      registry: new MemoryWorkflowRegistry(GENERAL_WORKFLOW),
+      chronicle,
+      loop: () =>
+        cancellableScriptLoop(async (input) => {
+          await input.tools?.set_field?.execute?.({ field: "summary", value: "done" }, {});
+          await input.tools?.request_transition?.execute?.({ reason: "done" }, {});
+        }),
+    });
+
+    await engine.createTask({ projectId: "p", taskId: "terminal-intent-diagnostics" });
+    await engine.idle();
+
+    const diagnostics = (
+      await chronicle.recent({ taskId: "terminal-intent-diagnostics", type: "wake.diagnostics", limit: 10 })
+    )[0];
+    expect(diagnostics?.summary).toContain("status=closed_by_state_command");
+    expect(diagnostics?.data).toMatchObject({
+      status: "closed_by_state_command",
+      runtimeStatus: "cancelled",
+      closeCommandKinds: ["request_transition"],
+      stateCommands: 2,
+    });
+    expect((await engine.getTask("terminal-intent-diagnostics"))?.status).toBe("done");
+  });
+
+  test("review-required work log carries compact tool call facts from the worker pass", async () => {
     const chronicle = new MemoryChronicleStore(() => 1);
     let runCount = 0;
-    let commitSystem = "";
     const loop: LoopFactory = () => ({
       id: "ai-sdk",
       capabilities: ["tools"],
@@ -1060,14 +1190,7 @@ describe("WorkflowEngine wake cycle", () => {
             },
           ]);
         }
-        commitSystem = input.system ?? "";
-        const result = input.tools?.commit_stage?.execute?.(
-          { fields: { summary: "verified from facts" }, reason: "commit facts" },
-          {},
-        );
-        return bodyRunHandle(async () => {
-          await result;
-        });
+        throw new Error("unexpected second run");
       },
       preflight: async () => ({ ok: true }),
       dispose: async () => {},
@@ -1083,12 +1206,12 @@ describe("WorkflowEngine wake cycle", () => {
     await engine.createTask({ projectId: "p", workflowId: "simple-commit", taskId: "facts" });
     await engine.idle();
 
-    expect(commitSystem).toContain("## Observed tool facts");
-    expect(commitSystem).toContain("bunx --bun vitest run packages/agent-loop/src/test/project-tools.test.ts");
-    expect(commitSystem).toContain("1 test file passed");
-    expect(commitSystem).not.toContain("hidden");
-    const wakeCommit = (await chronicle.recent({ taskId: "facts", type: "wake.commit", limit: 10 }))[0];
-    expect(String(JSON.stringify(wakeCommit?.data?.toolCallFacts))).toContain("vitest run");
+    expect(runCount).toBe(1);
+    const reviewRequired = (await chronicle.recent({ taskId: "facts", type: "wake.review_required", limit: 10 }))[0];
+    const toolFacts = String(JSON.stringify(reviewRequired?.data?.toolCallFacts));
+    expect(toolFacts).toContain("bunx --bun vitest run packages/agent-loop/src/test/project-tools.test.ts");
+    expect(toolFacts).toContain("1 test file passed");
+    expect(toolFacts).not.toContain("hidden");
   });
 });
 

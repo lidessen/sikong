@@ -241,7 +241,8 @@ export type TaskEventType =
   | "acceptance.evidence"
   | "acceptance.accepted"
   | "acceptance.rejected"
-  | "steer.requested";
+  | "steer.requested"
+  | "lead.messages.acknowledged";
 
 export interface TaskEvent {
   /** Monotonic per task, starting at 1. Assigned by the EventStore on append. */
@@ -308,7 +309,13 @@ export type Command =
       decision: AcceptanceDecision;
       reason: string;
     }
-  | { kind: "steer"; message: string };
+  | { kind: "steer"; message: string }
+  | {
+      kind: "ack_lead_messages";
+      ids: readonly string[];
+      decision: "accepted" | "rejected" | "deferred";
+      response: string;
+    };
 
 /** Provenance applied to events a command/advance produces. */
 export interface ReduceContext {

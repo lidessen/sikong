@@ -2,16 +2,19 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+export type LeadMessageKind = "steer" | "concern" | "scope_limit" | "stop_requested";
+
 export interface SteerMailboxEntry {
   id: string;
   taskId: string;
+  kind: LeadMessageKind;
   message: string;
   createdAt: number;
-  source: "lead";
+  source: "operator" | "lead";
 }
 
 export interface SteerMailbox {
-  submit(taskId: string, message: string): Promise<SteerMailboxEntry>;
+  submit(taskId: string, message: string, kind?: LeadMessageKind): Promise<SteerMailboxEntry>;
   list(taskId: string): Promise<SteerMailboxEntry[]>;
   remove(taskId: string, id: string): Promise<void>;
 }
@@ -32,6 +35,10 @@ function isEntry(value: unknown): value is SteerMailboxEntry {
   );
 }
 
+function isLeadMessageKind(value: unknown): value is LeadMessageKind {
+  return value === "steer" || value === "concern" || value === "scope_limit" || value === "stop_requested";
+}
+
 export class JsonSteerMailbox implements SteerMailbox {
   constructor(private readonly dir: string) {}
 
@@ -39,13 +46,14 @@ export class JsonSteerMailbox implements SteerMailbox {
     return join(this.dir, "state", "steer", sanitize(taskId));
   }
 
-  async submit(taskId: string, message: string): Promise<SteerMailboxEntry> {
+  async submit(taskId: string, message: string, kind: LeadMessageKind = "steer"): Promise<SteerMailboxEntry> {
     const entry: SteerMailboxEntry = {
       id: randomUUID(),
       taskId,
+      kind,
       message,
       createdAt: Date.now(),
-      source: "lead",
+      source: "operator",
     };
     const root = this.taskDir(taskId);
     await mkdir(root, { recursive: true });
@@ -70,7 +78,15 @@ export class JsonSteerMailbox implements SteerMailbox {
       if (!name.endsWith(".json")) continue;
       try {
         const parsed = JSON.parse(await readFile(join(root, name), "utf8")) as unknown;
-        if (isEntry(parsed)) entries.push(parsed);
+        if (isEntry(parsed)) {
+          entries.push({
+            ...parsed,
+            kind: isLeadMessageKind((parsed as Partial<SteerMailboxEntry>).kind)
+              ? (parsed as SteerMailboxEntry).kind
+              : "steer",
+            source: (parsed as Partial<SteerMailboxEntry>).source === "lead" ? "lead" : "operator",
+          });
+        }
       } catch {
         // Ignore a corrupt mailbox file for this poll; the next operator action
         // can remove it without endangering the task event log.

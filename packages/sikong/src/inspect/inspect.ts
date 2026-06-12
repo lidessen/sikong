@@ -88,12 +88,13 @@ export interface PendingLeadAction {
   projectId: string;
   workflowId: string;
   stageId: string;
-  classification: LeadTeamStatus["classification"];
+  classification: LeadTeamStatus["classification"] | "worker_log_review_required";
   next: string;
   suggestedCommand: string;
   childCount: number;
   activeChildren: number;
   updatedAt: number;
+  wakeId?: string;
 }
 
 const ZERO_COUNTS: () => Record<TaskStatus, number> = () => ({
@@ -130,7 +131,7 @@ export async function workspaceStatus(
     total: tasks.length,
     counts,
     tasks: summaries,
-    pendingLeadActions: await pendingLeadActions(tasks, projections, opts.events),
+    pendingLeadActions: await pendingLeadActions(tasks, projections, chronicle, opts.events),
     recentActivity: await chronicle.recent({ limit: opts.activityLimit ?? 15 }),
     recentErrors: await chronicle.recent({ limit: 10, type: ["wake.error", "command.rejected"] }),
   };
@@ -230,7 +231,7 @@ export async function workspaceOverview(
     totalTasks: allTasks.length,
     counts,
     recentTasks: taskSummaries.slice(0, opts.taskLimit ?? 20),
-    pendingLeadActions: await pendingLeadActions(allTasks, stores.projections, stores.events),
+    pendingLeadActions: await pendingLeadActions(allTasks, stores.projections, stores.chronicle, stores.events),
     recentActivity: await stores.chronicle.recent({ limit: opts.activityLimit ?? 10 }),
     recentErrors: await stores.chronicle.recent({ limit: 10, type: ["wake.error", "command.rejected"] }),
   };
@@ -239,6 +240,7 @@ export async function workspaceOverview(
 async function pendingLeadActions(
   tasks: readonly Task[],
   projections: ProjectionStore,
+  chronicle: ChronicleStore,
   events?: EventStore,
 ): Promise<PendingLeadAction[]> {
   const actionable = new Set<LeadTeamStatus["classification"]>([
@@ -248,6 +250,30 @@ async function pendingLeadActions(
     "ready_to_close",
   ]);
   const rows: PendingLeadAction[] = [];
+  const byTask = new Map(tasks.map((task) => [task.id, task]));
+  const latestReviewRequired = new Map<string, ChronicleEntry>();
+  for (const entry of await chronicle.recent({ type: "wake.review_required", limit: 1_000 })) {
+    if (!entry.taskId || latestReviewRequired.has(entry.taskId)) continue;
+    latestReviewRequired.set(entry.taskId, entry);
+  }
+  for (const [taskId, entry] of latestReviewRequired) {
+    const task = byTask.get(taskId);
+    if (!task || task.status === "done" || task.status === "cancelled" || task.status === "blocked") continue;
+    const team = await teamMembers(task, projections);
+    rows.push({
+      taskId: task.id,
+      projectId: task.projectId,
+      workflowId: task.workflowId,
+      stageId: task.stageId,
+      classification: "worker_log_review_required",
+      next: "Review the worker work log and decide whether to steer, repair, continue, block, or accept.",
+      suggestedCommand: `sikong trace ${task.id} --text`,
+      childCount: team.length,
+      activeChildren: team.filter((child) => child.status !== "done" && child.status !== "cancelled").length,
+      updatedAt: entry.ts,
+      ...(entry.wakeId ? { wakeId: entry.wakeId } : {}),
+    });
+  }
   for (const task of tasks) {
     if (task.status === "done" || task.status === "cancelled" || task.status === "blocked") continue;
     const team = await teamMembers(task, projections);
@@ -273,8 +299,10 @@ async function pendingLeadActions(
   return rows.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-function suggestedLeadCommand(taskId: string, classification: LeadTeamStatus["classification"]): string {
+function suggestedLeadCommand(taskId: string, classification: PendingLeadAction["classification"]): string {
   switch (classification) {
+    case "worker_log_review_required":
+      return `sikong trace ${taskId} --text`;
     case "ready_to_close":
       return `sikong run --task ${taskId}`;
     case "waiting_for_lead_acceptance":
@@ -370,7 +398,7 @@ export function renderLeadActions(actions: readonly PendingLeadAction[]): string
   for (const action of actions)
     lines.push(
       `  ${action.taskId} [${action.classification}] project=${action.projectId} ${action.workflowId}@${action.stageId}` +
-        ` children=${action.childCount} active=${action.activeChildren}`,
+        ` children=${action.childCount} active=${action.activeChildren}${action.wakeId ? ` wake=${action.wakeId}` : ""}`,
       `    next: ${action.next}`,
       `    command: ${action.suggestedCommand}`,
     );

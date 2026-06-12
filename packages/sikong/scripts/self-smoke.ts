@@ -22,6 +22,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { JsonWorkspaceChronicleStore, JsonWorkspaceEventStore, JsonWorkspaceProjectionStore } from "../src/store";
+import { GENERAL_WORKFLOW } from "../src/workflow/builtin";
+import { initTask, project } from "../src/workflow/reducer";
 
 // ---- preamble --------------------------------------------------------------
 
@@ -125,6 +128,53 @@ async function build(): Promise<void> {
   }
 }
 
+async function seedReviewRequiredTask(taskId: string): Promise<void> {
+  const events = new JsonWorkspaceEventStore(tmpDir);
+  const projections = new JsonWorkspaceProjectionStore(tmpDir);
+  const chronicle = new JsonWorkspaceChronicleStore(tmpDir);
+  const timeline = await events.append(
+    taskId,
+    initTask({
+      taskId,
+      projectId: "default",
+      workflow: GENERAL_WORKFLOW,
+      fields: { request: "self-smoke review-required work log" },
+    }),
+  );
+  await projections.put(project(timeline, GENERAL_WORKFLOW));
+  await chronicle.append({
+    type: "wake.start",
+    taskId,
+    wakeId: "self-smoke-wake",
+    summary: "wake @ general",
+  });
+  await chronicle.append({
+    type: "wake.diagnostics",
+    taskId,
+    wakeId: "self-smoke-wake",
+    summary: "worker pass",
+    data: {
+      phase: "worker",
+      status: "completed",
+      stateCommands: 0,
+      toolCallStarts: { readFile: 1 },
+      toolCallEnds: { readFile: 1 },
+      textPreview: "looked at the work but did not record durable state",
+    },
+  });
+  await chronicle.append({
+    type: "wake.review_required",
+    taskId,
+    wakeId: "self-smoke-wake",
+    summary: "worker pass ended without durable stage state; lead/reviewer must inspect the work log",
+    data: {
+      reason: "no_state_commands",
+      outputFields: ["summary"],
+      firstPassTextPreview: "looked at the work but did not record durable state",
+    },
+  });
+}
+
 // ---- self-smoke checks -----------------------------------------------------
 
 function registerChecks(): void {
@@ -132,7 +182,7 @@ function registerChecks(): void {
   check("help (no args) prints usage and exits 0", async () => {
     const { exitCode, stdout, stderr } = await runBin([], { expectExit: 0 });
     const stripped = stripAnsi(stdout);
-    const expectedTerms = ["create", "run", "submit", "overview", "status", "worker", "project", "chronicle", "usage", "watch", "inspect", "register"];
+    const expectedTerms = ["create", "run", "submit", "overview", "status", "trace", "worker", "project", "chronicle", "usage", "watch", "inspect", "register"];
     const missing = expectedTerms.filter((t) => !stripped.includes(t));
     if (missing.length) return `help missing commands: ${missing.join(", ")}`;
     if (stderr.trim()) return `unexpected stderr: ${stderr.trim().slice(0, 200)}`;
@@ -328,7 +378,46 @@ function registerChecks(): void {
     return null;
   });
 
-  // 18. Task with nonexistent id — exits 1 with error.
+  // 18. Review-required work log — compiled binary surfaces it in actions/trace/chronicle.
+  check("review-required work log is visible in actions, trace, and chronicle", async () => {
+    const taskId = "review-smoke";
+    await seedReviewRequiredTask(taskId);
+
+    const actions = await runBin(["actions", "--json", "--dir", tmpDir]);
+    if (actions.exitCode !== 0) return `actions exit ${actions.exitCode}: ${actions.stderr.trim()}`;
+    let actionsParsed: Record<string, unknown>;
+    try {
+      actionsParsed = JSON.parse(actions.stdout);
+    } catch {
+      return `invalid actions JSON: ${actions.stdout.slice(0, 200)}`;
+    }
+    const rows = Array.isArray(actionsParsed.actions) ? actionsParsed.actions : [];
+    if (
+      !rows.some(
+        (row) =>
+          typeof row === "object" &&
+          row !== null &&
+          (row as Record<string, unknown>).classification === "worker_log_review_required",
+      )
+    ) {
+      return `actions missing worker_log_review_required: ${actions.stdout.slice(0, 400)}`;
+    }
+
+    const trace = await runBin(["trace", taskId, "--text", "--dir", tmpDir]);
+    if (trace.exitCode !== 0) return `trace exit ${trace.exitCode}: ${trace.stderr.trim()}`;
+    const traceText = stripAnsi(trace.stdout);
+    if (!traceText.includes("review required")) return "trace output missing review required line";
+    if (!traceText.includes("stateCommands=0")) return "trace output missing stateCommands fact";
+
+    const chronicle = await runBin(["chronicle", "--task", taskId, "--text", "-n", "3", "--dir", tmpDir]);
+    if (chronicle.exitCode !== 0) return `chronicle exit ${chronicle.exitCode}: ${chronicle.stderr.trim()}`;
+    const chronicleText = stripAnsi(chronicle.stdout);
+    if (!chronicleText.includes("wake.review_required")) return "chronicle output missing wake.review_required";
+    if (!chronicleText.includes("reason=no_state_commands")) return "chronicle output missing review reason";
+    return null;
+  });
+
+  // 19. Task with nonexistent id — exits 1 with error.
   check("task <nonexistent> exits 1 with error", async () => {
     const { exitCode, stderr, stdout } = await runBin(["task", "no-such-task", "--dir", tmpDir]);
     if (exitCode !== 1) return `expected exit 1, got ${exitCode}`;
@@ -339,7 +428,7 @@ function registerChecks(): void {
     return null;
   });
 
-  // 19. Usage — returns report structure.
+  // 20. Usage — returns report structure.
   check("usage --json returns report structure", async () => {
     const { exitCode, stdout, stderr } = await runBin(["usage", "--json", "--dir", tmpDir]);
     if (exitCode !== 0) return `exit ${exitCode}: ${stderr.trim()}`;
@@ -358,7 +447,7 @@ function registerChecks(): void {
     return null;
   });
 
-  // 20. Watch --once — renders a single frame of the dashboard.
+  // 21. Watch --once — renders a single frame of the dashboard.
   check("watch --once renders without error", async () => {
     const { exitCode, stdout, stderr } = await runBin(["watch", "--once", "--dir", tmpDir]);
     if (exitCode !== 0) return `exit ${exitCode}: ${stderr.trim()}`;
@@ -367,7 +456,7 @@ function registerChecks(): void {
     return null;
   });
 
-  // 21. Empty workspace with default response shapes — no panics.
+  // 22. Workspace with default response shapes — no panics.
   check("all --json output for empty workspace is consistent", async () => {
     // Run status without creating any data — just ensure no crash.
     const { exitCode, stderr } = await runBin(["status", "--json", "--dir", tmpDir]);
@@ -375,7 +464,7 @@ function registerChecks(): void {
     return null;
   });
 
-  // 22. Register with missing file — exits 1.
+  // 23. Register with missing file — exits 1.
   check("register without file exits 2", async () => {
     const { exitCode, stderr } = await runBin(["register"]);
     if (exitCode !== 2) return `expected exit 2, got ${exitCode}`;

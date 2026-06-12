@@ -1,5 +1,6 @@
 import type { StageDef, TaskStatus, WorkflowDef, Task } from "../workflow/types";
 import { COMMAND_TOOL_NAMES, type CommandToolName } from "./command-tools";
+import type { LeadMessageKind } from "./steer-mailbox";
 import { deriveLeadTeamStatus, type LeadStatusContext, type TeamMember } from "./team-status";
 
 export interface ToolCallFact {
@@ -10,9 +11,12 @@ export interface ToolCallFact {
   error?: string;
 }
 
-/** Facts carried from the worker pass into the commit fallback (task-agnostic). */
-export interface CommitEvidence {
-  toolCallFacts?: readonly ToolCallFact[];
+export interface LeadMessageForPrompt {
+  id: string;
+  kind: LeadMessageKind;
+  message: string;
+  createdAt: number;
+  source: string;
 }
 
 function stageToolNames(stage: StageDef | undefined): readonly CommandToolName[] {
@@ -100,6 +104,7 @@ export function buildPrompt(
   stage: StageDef | undefined,
   team: readonly TeamMember[] = [],
   status: LeadStatusContext = {},
+  leadMessages: readonly LeadMessageForPrompt[] = [],
 ): string {
   const lines: string[] = [];
   const fieldNames = Object.keys(wf.fields);
@@ -107,6 +112,26 @@ export function buildPrompt(
     lines.push("## Current field values");
     for (const name of fieldNames) {
       lines.push(`- ${name}: ${renderValue(task.fields[name])}`);
+    }
+  }
+  const transitionRequested = Boolean(status.eventTypes?.has("transition.requested"));
+  const acceptanceStatus = status.acceptanceStatus ?? "none";
+  lines.push(
+    "",
+    "## Task status",
+    `- current stage: ${task.stageId}; transition requested: ${transitionRequested ? "yes" : "no"}; acceptance: ${acceptanceStatus}`,
+  );
+  if (status.acceptanceReason) lines.push(`- latest acceptance reason: ${status.acceptanceReason}`);
+  if (leadMessages.length) {
+    lines.push(
+      "",
+      "## Pending operator messages",
+      "These messages are control intent for the lead. Review them before changing task topology. If you accept, reject, or defer them, call `ack_lead_messages` with the message ids and your decision before creating subtasks.",
+    );
+    for (const msg of leadMessages) {
+      lines.push(
+        `- ${msg.id} (${msg.kind}, ${new Date(msg.createdAt).toISOString()}, ${msg.source}): ${renderValue(msg.message)}`,
+      );
     }
   }
   if (team.length) {
@@ -117,6 +142,7 @@ export function buildPrompt(
       `- classification: ${digest.classification}`,
       `- children: total=${digest.total} done=${digest.done} cancelled=${digest.cancelled} active=${digest.active}`,
       `- current stage: ${task.stageId}; transition requested: ${digest.transitionRequested ? "yes" : "no"}; acceptance: ${digest.acceptanceStatus}`,
+      ...(digest.acceptanceReason ? [`- latest acceptance reason: ${digest.acceptanceReason}`] : []),
       `- next: ${digest.next}`,
     );
     lines.push("", "## Team (your subtasks)");
@@ -132,48 +158,5 @@ export function buildPrompt(
     );
   }
   lines.push("", `Advance task ${task.id} now: do this stage's work and update the task via the tools.`);
-  return lines.join("\n");
-}
-
-export function buildCommitSystem(
-  task: Task,
-  wf: WorkflowDef,
-  stage: StageDef | undefined,
-  priorText: string,
-  evidence: CommitEvidence = {},
-): string {
-  const lines = [
-    `# Workflow: ${wf.name}`,
-    "",
-    `You are committing durable progress for task ${task.id}.`,
-    `Current stage: ${task.stageId}${stage?.instructions ? ` — ${stage.instructions}` : ""}`,
-    "",
-    "## Current task fields",
-    ...Object.keys(wf.fields).map((name) => {
-      const def = wf.fields[name];
-      return `- ${name} (${def?.type})${def?.description ? ` — ${def.description}` : ""}: ${renderValue(task.fields[name])}`;
-    }),
-    "",
-    "The previous worker pass ended without recording any durable sikong state.",
-    stage?.outputFields?.length ? `Stage output fields: ${stage.outputFields.join(", ")}.` : "Stage output fields: unrestricted by stage.",
-    "You must now call at least one provided state tool. Do not answer in plain text.",
-    "Use `commit_stage` to set the fields this stage requires and request transition if the stage is complete. If the task cannot be completed, call `block` with a concrete reason.",
-  ];
-  if (evidence.toolCallFacts?.length) {
-    lines.push(
-      "",
-      "## Observed tool facts",
-      "These compact sanitized previews are the facts from the previous worker pass. Base your durable summary on them; block if the facts are insufficient.",
-      ...evidence.toolCallFacts.map((fact) => {
-        const parts = [`- ${fact.tool}`];
-        if (fact.callId) parts.push(`[${fact.callId}]`);
-        if (fact.argsPreview) parts.push(`args=${fact.argsPreview}`);
-        if (fact.resultPreview) parts.push(`result=${fact.resultPreview}`);
-        if (fact.error) parts.push(`error=${fact.error}`);
-        return parts.join(" ");
-      }),
-    );
-  }
-  if (priorText.trim()) lines.push("", "## Previous worker text", priorText.trim());
   return lines.join("\n");
 }

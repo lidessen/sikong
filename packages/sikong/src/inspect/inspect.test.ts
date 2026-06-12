@@ -112,6 +112,41 @@ describe("inspect", () => {
     expect(renderLeadActions(overview.pendingLeadActions)).toContain("command: sikong task parent --text");
   });
 
+  test("workspaceStatus surfaces worker work-log review actions from chronicle", async () => {
+    const events = new MemoryEventStore(() => 1);
+    const projections = new MemoryProjectionStore();
+    const chronicle = new MemoryChronicleStore(() => 1);
+    const timeline = await events.append(
+      "needs-review",
+      initTask({
+        taskId: "needs-review",
+        projectId: "p",
+        workflow: GENERAL_WORKFLOW,
+        fields: { request: "inspect" },
+      }),
+    );
+    await projections.put(project(timeline, GENERAL_WORKFLOW));
+    await chronicle.append({
+      type: "wake.review_required",
+      taskId: "needs-review",
+      wakeId: "w1",
+      summary: "worker pass ended without durable state",
+      data: { reason: "no_state_commands" },
+    });
+
+    const status = await workspaceStatus(projections, chronicle, { events });
+
+    expect(status.pendingLeadActions).toHaveLength(1);
+    expect(status.pendingLeadActions[0]).toMatchObject({
+      taskId: "needs-review",
+      classification: "worker_log_review_required",
+      suggestedCommand: "sikong trace needs-review --text",
+      wakeId: "w1",
+    });
+    expect(renderLeadActions(status.pendingLeadActions)).toContain("needs-review [worker_log_review_required]");
+    expect(renderLeadActions(status.pendingLeadActions)).toContain("wake=w1");
+  });
+
   test("taskDetail shows the log even when the projection isn't materialized yet", async () => {
     const events = new MemoryEventStore(() => 1);
     const projections = new MemoryProjectionStore();

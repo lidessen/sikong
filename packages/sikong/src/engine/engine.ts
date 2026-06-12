@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   addUsage,
-  defineTool,
   emptyUsage,
   type AgentLoop,
   type EffortLevel,
@@ -13,6 +12,7 @@ import {
   type ToolSet,
 } from "agent-loop";
 import {
+  deriveAcceptanceReason,
   deriveAcceptanceStatus,
   eventTypesInCurrentStage,
   filterValidFields,
@@ -26,8 +26,8 @@ import type {
   AcceptanceCheck,
   Command,
   EventSource,
-  FieldDef,
   Task,
+  TaskEvent,
   TaskStatus,
   WorkflowDef,
 } from "../workflow/types";
@@ -43,8 +43,8 @@ import type { Project } from "../project";
 import { estimateWakeTimeout, type WakeTimeoutEstimate } from "./adaptive-timeout";
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
-import { buildCommitSystem, buildPrompt, buildSystem, type ToolCallFact } from "./prompt";
-import type { SteerMailbox } from "./steer-mailbox";
+import { buildPrompt, buildSystem, type ToolCallFact } from "./prompt";
+import type { SteerMailbox, SteerMailboxEntry } from "./steer-mailbox";
 import type { TeamMember } from "./team-status";
 
 function isTerminal(status: TaskStatus): boolean {
@@ -71,6 +71,8 @@ interface RunDiagnostics {
   textPreview: string;
   toolCallFacts: ToolCallFact[];
 }
+
+type RunDiagnosticStatus = RunResult["status"] | "closed_by_state_command";
 
 function createRunDiagnostics(phase: RunDiagnostics["phase"]): RunDiagnostics {
   return {
@@ -195,12 +197,25 @@ function observeLoopEvent(diagnostics: RunDiagnostics, event: LoopEvent): void {
   }
 }
 
-function finalizeRunDiagnostics(diagnostics: RunDiagnostics, result: RunResult): Record<string, unknown> {
+function runDiagnosticStatus(result: RunResult, commands: readonly Command[]): RunDiagnosticStatus {
+  if (result.status === "cancelled" && commands.some(closesCurrentRun)) return "closed_by_state_command";
+  return result.status;
+}
+
+function finalizeRunDiagnostics(
+  diagnostics: RunDiagnostics,
+  result: RunResult,
+  commands: readonly Command[] = [],
+): Record<string, unknown> {
   const text = result.text || diagnostics.textPreview;
   const preview = compactPreview(text);
+  const status = runDiagnosticStatus(result, commands);
+  const closeCommandKinds = commands.filter(closesCurrentRun).map((command) => command.kind);
   return {
     phase: diagnostics.phase,
-    status: result.status,
+    status,
+    ...(status !== result.status ? { runtimeStatus: result.status } : {}),
+    ...(closeCommandKinds.length ? { closeCommandKinds } : {}),
     eventCount: diagnostics.eventCount,
     toolCallStarts: diagnostics.toolCallStarts,
     toolCallEnds: diagnostics.toolCallEnds,
@@ -255,41 +270,6 @@ function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<
   }
 }
 
-function fieldJsonSchema(def: FieldDef | undefined): Record<string, unknown> {
-  switch (def?.type) {
-    case "string":
-    case "ref":
-      return { type: "string" };
-    case "number":
-      return { type: "number" };
-    case "boolean":
-      return { type: "boolean" };
-    case "enum":
-      return { type: "string", ...(def.enum ? { enum: [...def.enum] } : {}) };
-    case "json":
-    default:
-      return {};
-  }
-}
-
-function commitFieldValueValid(def: FieldDef | undefined, value: unknown): boolean {
-  switch (def?.type) {
-    case "string":
-    case "ref":
-      return typeof value === "string";
-    case "number":
-      return typeof value === "number" && Number.isFinite(value);
-    case "boolean":
-      return typeof value === "boolean";
-    case "enum":
-      return typeof value === "string" && !!def.enum?.includes(value);
-    case "json":
-      return true;
-    default:
-      return false;
-  }
-}
-
 function isStageCommitSignal(command: Command, stage: ReturnType<typeof stageById>): boolean {
   switch (command.kind) {
     case "request_transition":
@@ -313,6 +293,35 @@ function closesCurrentRun(command: Command): boolean {
     default:
       return false;
   }
+}
+
+function ackedLeadMessageIds(commands: readonly Command[]): Set<string> {
+  const ids = new Set<string>();
+  for (const command of commands) {
+    if (command.kind !== "ack_lead_messages") continue;
+    for (const id of command.ids) {
+      const normalized = id.trim();
+      if (normalized) ids.add(normalized);
+    }
+  }
+  return ids;
+}
+
+function summarizeLeadMessage(entry: SteerMailboxEntry): Record<string, unknown> {
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    source: entry.source,
+    createdAt: entry.createdAt,
+    message: entry.message,
+  };
+}
+
+function stopReasonFromEvent(event: TaskEvent): string | undefined {
+  if (event.source !== "lead" && event.source !== "engine") return undefined;
+  if (event.type !== "task.cancelled" && event.type !== "task.blocked") return undefined;
+  const reason = typeof event.payload.reason === "string" ? event.payload.reason : event.type;
+  return `sikong ${event.type}: ${reason}`;
 }
 
 /** Task ids become filenames in the durable stores — keep them collision- and traversal-safe. */
@@ -458,6 +467,14 @@ export interface WorkflowEngineOptions {
   maxTeamDepth?: number;
 }
 
+interface StateEntry {
+  running: boolean;
+  pending: boolean;
+  wakes: number;
+  errors: number;
+  stopWake?: (reason: string) => void;
+}
+
 /**
  * The wake engine (M1): a self-built minimal virtual actor. Each task is a
  * single-writer with a coalescing mailbox — at most one wake runs per task at a
@@ -472,7 +489,7 @@ export interface WorkflowEngineOptions {
  * about coding, files, or shells — a worker's own tools arrive via workerTools.
  */
 export class WorkflowEngine {
-  private readonly state = new Map<string, { running: boolean; pending: boolean; wakes: number; errors: number }>();
+  private readonly state = new Map<string, StateEntry>();
   private readonly inflight = new Set<Promise<void>>();
   /** Isolated tasks whose workspace has already been released (fire releaseWorkspace once). */
   private readonly released = new Set<string>();
@@ -565,6 +582,10 @@ export class WorkflowEngine {
     if (events.length) {
       await this.o.events.append(taskId, events);
       if (command.kind !== "steer") await this.persist(taskId, wf);
+      if ((source === "lead" || source === "engine") && (command.kind === "cancel" || command.kind === "block")) {
+        const reason = command.kind === "block" ? command.reason : (command.reason ?? "cancel requested");
+        this.state.get(taskId)?.stopWake?.(`sikong ${command.kind}: ${reason}`);
+      }
     }
     // The CLI persists with schedule:false and drives wakes separately via `run`.
     if (command.kind !== "steer" && opts.schedule !== false) this.schedule(taskId);
@@ -698,6 +719,16 @@ export class WorkflowEngine {
     void p.finally(() => this.inflight.delete(p));
   }
 
+  private setStopWake(taskId: string, stopWake: (reason: string) => void): void {
+    const st = this.state.get(taskId);
+    if (st) st.stopWake = stopWake;
+  }
+
+  private clearStopWake(taskId: string, stopWake: (reason: string) => void): void {
+    const st = this.state.get(taskId);
+    if (st?.stopWake === stopWake) delete st.stopWake;
+  }
+
   // ---- the wake cycle ------------------------------------------------------
 
   private async runWake(taskId: string): Promise<void> {
@@ -782,9 +813,11 @@ export class WorkflowEngine {
     const team = await this.teamSnapshots(task);
     const taskEventsForPrompt = await this.o.events.load(task.id);
     const steerFromSeq = taskEventsForPrompt.at(-1)?.seq ?? 0;
+    const pendingLeadMessages = await this.o.steerMailbox?.list(taskId) ?? [];
     const leadStatus = {
       eventTypes: eventTypesInCurrentStage(taskEventsForPrompt),
       acceptanceStatus: deriveAcceptanceStatus(stage, taskEventsForPrompt),
+      acceptanceReason: deriveAcceptanceReason(taskEventsForPrompt),
     };
     // Resolve effort per-wake: task override > stage default > workspace default.
     const effort: EffortLevel | undefined = (task.effort ?? stage?.effort ?? "medium") as EffortLevel | undefined;
@@ -806,9 +839,19 @@ export class WorkflowEngine {
       summary: `wake @ "${task.stageId}" — timeout=${Math.round(timeout.timeoutMs / 1000)}s`,
       data: timeoutData(timeout),
     });
+    if (pendingLeadMessages.length) {
+      await this.chron({
+        type: "lead.message",
+        taskId,
+        wakeId,
+        summary: `${pendingLeadMessages.length} pending operator message(s) for lead review`,
+        data: { messages: pendingLeadMessages.map(summarizeLeadMessage) },
+      });
+    }
+    this.setStopWake(taskId, stopWorkerRun);
     const run = loop.run({
       system: buildSystem(task, wf, stage, workerToolNames, project?.memory),
-      prompt: buildPrompt(task, wf, stage, team, leadStatus),
+      prompt: buildPrompt(task, wf, stage, team, leadStatus, pendingLeadMessages),
       tools,
       signal: controller.signal,
       effort,
@@ -817,7 +860,7 @@ export class WorkflowEngine {
     });
     workerRun = run;
     if (pendingWorkerStop) stopWorkerRun(pendingWorkerStop);
-    const stopWorkerSteerPump = this.startSteerPump(taskId, wakeId, run, steerFromSeq, workerSteerStartedAt);
+    const stopWorkerSteerPump = this.startSteerPump(taskId, wakeId, run, steerFromSeq, workerSteerStartedAt, stopWorkerRun);
     const consumeRun = async (
       runHandle: ReturnType<AgentLoop["run"]>,
       diagnostics: RunDiagnostics,
@@ -840,16 +883,19 @@ export class WorkflowEngine {
       });
     } finally {
       stopWorkerSteerPump();
+      this.clearStopWake(taskId, stopWorkerRun);
     }
     let wakeUsage: TokenUsage = result.usage;
     let commands = drain();
+    const ackedMessageIds = ackedLeadMessageIds(commands);
+    const workerDiagnosticStatus = runDiagnosticStatus(result, commands);
     await this.chron({
       type: "wake.diagnostics",
       taskId,
       wakeId,
-      summary: `worker pass: status=${result.status} stateCommands=${commands.length} toolStarts=${toolCountsSummary(workerDiagnostics.toolCallStarts)}`,
+      summary: `worker pass: status=${workerDiagnosticStatus} stateCommands=${commands.length} toolStarts=${toolCountsSummary(workerDiagnostics.toolCallStarts)}`,
       data: {
-        ...finalizeRunDiagnostics(workerDiagnostics, result),
+        ...finalizeRunDiagnostics(workerDiagnostics, result, commands),
         stageId: task.stageId,
         stateCommands: commands.length,
       },
@@ -857,167 +903,28 @@ export class WorkflowEngine {
 
     const hasStageCommitSignal = commands.some((command) => isStageCommitSignal(command, stage));
     if (!hasStageCommitSignal && result.status !== "error") {
-      // Commit fallback: the worker pass recorded no durable state (it answered in
-      // plain text or only inspected). Re-drive it with a constrained set of state
-      // tools so the turn produces an outcome — record stage progress, or block.
-      const firstPassText = compactPreview(result.text || workerDiagnostics.textPreview);
-      const firstPassCommands = commands;
-      const commitCommands: Command[] = [];
-      let stageCommitted = false;
-      let commitRun: ReturnType<AgentLoop["run"]> | undefined;
-      let pendingCommitStop: string | undefined;
-      const commitController = new AbortController();
-      const stopCommitRun = (reason: string) => {
-        if (commitRun) {
-          commitController.abort(reason);
-          commitRun.cancel(reason);
-        } else {
-          pendingCommitStop = reason;
-        }
-      };
-      const pushCommit = (command: Command): { acknowledged: true } => {
-        if (stageCommitted && (command.kind === "block" || command.kind === "cancel")) return { acknowledged: true };
-        if (
-          (command.kind === "block" || command.kind === "cancel") &&
-          commitCommands.some((existing) => existing.kind === "block" || existing.kind === "cancel")
-        )
-          return { acknowledged: true };
-        commitCommands.push(command);
-        if (closesCurrentRun(command)) stopCommitRun(`sikong ${command.kind} recorded`);
-        return { acknowledged: true };
-      };
-      const allowedFields = (stage?.outputFields?.length ? stage.outputFields : Object.keys(wf.fields)).filter(
-        (name) => wf.fields[name],
-      );
-      const commitTools: ToolSet = {};
-      commitTools.commit_stage = defineTool({
-        description:
-          "Atomically commit this stage's durable workflow fields and request transition if the stage is complete.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            fields: {
-              type: "object",
-              properties: Object.fromEntries(allowedFields.map((field) => [field, fieldJsonSchema(wf.fields[field])])),
-              ...(allowedFields.length ? { required: allowedFields } : {}),
-              additionalProperties: !stage?.outputFields?.length,
-            },
-            reason: { type: "string" },
+      const liveBeforeCommit = (await this.loadPinned(taskId)).task;
+      if (isTerminal(liveBeforeCommit.status) || liveBeforeCommit.status === "blocked") {
+        commands = [];
+      } else {
+        const firstPassText = compactPreview(result.text || workerDiagnostics.textPreview);
+        await this.chron({
+          type: "wake.review_required",
+          taskId,
+          wakeId,
+          summary: "worker pass ended without durable stage state; lead/reviewer must inspect the work log",
+          data: {
+            reason: commands.length === 0 ? "no_state_commands" : "no_stage_commit_commands",
+            stageId: task.stageId,
+            commandKinds: commands.map((command) => command.kind),
+            ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
+            ...(workerDiagnostics.toolCallFacts.length ? { toolCallFacts: workerDiagnostics.toolCallFacts } : {}),
+            firstPassTextChars: firstPassText.chars,
+            ...(firstPassText.preview ? { firstPassTextPreview: firstPassText.preview } : {}),
+            firstPassTextTruncated: firstPassText.truncated,
           },
-          required: ["fields"],
-          additionalProperties: false,
-        },
-        execute: (args) => {
-          const fields = isRecord(args.fields) ? args.fields : {};
-          for (const field of allowedFields) {
-            if (
-              Object.prototype.hasOwnProperty.call(fields, field) &&
-              !commitFieldValueValid(wf.fields[field], fields[field])
-            ) {
-              return {
-                error: `field "${field}" must be ${wf.fields[field]?.type ?? "a valid workflow field value"}`,
-              };
-            }
-          }
-          commitCommands.length = 0;
-          stageCommitted = true;
-          for (const field of allowedFields) {
-            if (Object.prototype.hasOwnProperty.call(fields, field))
-              pushCommit({ kind: "set_field", field, value: fields[field] });
-          }
-          return pushCommit({
-            kind: "request_transition",
-            reason: args.reason ? String(args.reason) : "stage committed",
-          });
-        },
-      });
-      commitTools.block = defineTool({
-        description: "Block the task when it cannot be completed. State the concrete reason.",
-        inputSchema: {
-          type: "object",
-          properties: { reason: { type: "string" } },
-          required: ["reason"],
-          additionalProperties: false,
-        },
-        execute: (args) => pushCommit({ kind: "block", reason: String(args.reason) }),
-      });
-      commitTools.cancel = defineTool({
-        description:
-          "Request cancellation when this task should not be completed at all. Worker requests are audit-only until a lead approves cancellation.",
-        inputSchema: {
-          type: "object",
-          properties: { reason: { type: "string" } },
-          additionalProperties: false,
-        },
-        execute: (args) => pushCommit({ kind: "cancel", ...(args.reason ? { reason: String(args.reason) } : {}) }),
-      });
-      const commitSteerStartedAt = Date.now();
-      await this.chron({
-        type: "wake.commit",
-        taskId,
-        wakeId,
-        summary: `worker produced no stage commit commands; commit fallback tools: ${Object.keys(commitTools).join(", ")}`,
-        data: {
-          reason: firstPassCommands.length === 0 ? "no_state_commands" : "no_stage_commit_commands",
-          stageId: task.stageId,
-          firstPassCommands: firstPassCommands.map((command) => command.kind),
-          allowedTools: Object.keys(commitTools),
-          ...(stage?.outputFields?.length ? { outputFields: [...stage.outputFields] } : {}),
-          ...(workerDiagnostics.toolCallFacts.length ? { toolCallFacts: workerDiagnostics.toolCallFacts } : {}),
-          firstPassTextChars: firstPassText.chars,
-          ...(firstPassText.preview ? { firstPassTextPreview: firstPassText.preview } : {}),
-          firstPassTextTruncated: firstPassText.truncated,
-        },
-      });
-      commitRun = loop.run({
-        system: buildCommitSystem(task, wf, stage, result.text, {
-          toolCallFacts: workerDiagnostics.toolCallFacts,
-        }),
-        prompt:
-          "Commit durable sikong progress now. Call `commit_stage` with this stage's output fields if the stage is complete, or `block` with a concrete reason if it cannot be done. Do not answer in plain text.",
-        tools: commitTools,
-        signal: commitController.signal,
-        runtimeOptions:
-          loop.id === "ai-sdk"
-            ? {
-                toolChoice: "required",
-                activeTools: Object.keys(commitTools),
-                providerOptions: { deepseek: { thinking: { type: "disabled" } } },
-              }
-            : undefined,
-      });
-      if (pendingCommitStop) stopCommitRun(pendingCommitStop);
-      const commitDiagnostics = createRunDiagnostics("commit");
-      const commitEventsForSteer = await this.o.events.load(task.id);
-      const stopCommitSteerPump = this.startSteerPump(
-        taskId,
-        wakeId,
-        commitRun,
-        commitEventsForSteer.at(-1)?.seq ?? 0,
-        commitSteerStartedAt,
-      );
-      try {
-        result = await this.boundedRun(consumeRun(commitRun, commitDiagnostics), timeout.timeoutMs, () => {
-          commitController.abort();
-          commitRun.cancel("wake commit timeout");
         });
-      } finally {
-        stopCommitSteerPump();
       }
-      wakeUsage = addUsage(wakeUsage, result.usage);
-      commands = [...firstPassCommands, ...drain(), ...commitCommands];
-      await this.chron({
-        type: "wake.diagnostics",
-        taskId,
-        wakeId,
-        summary: `commit pass: status=${result.status} stateCommands=${commands.length} toolStarts=${toolCountsSummary(commitDiagnostics.toolCallStarts)}`,
-        data: {
-          ...finalizeRunDiagnostics(commitDiagnostics, result),
-          stageId: task.stageId,
-          stateCommands: commands.length,
-          allowedTools: Object.keys(commitTools),
-        },
-      });
     }
 
     // (3) Apply the agent's commands against the LIVE task (re-loaded so a command
@@ -1033,6 +940,25 @@ export class WorkflowEngine {
       // within this batch (ADR 0011), then create each child in declared order.
       const dropped = new Set<Command>();
       const subtaskCmds = commands.filter((c): c is Extract<Command, { kind: "create_subtask" }> => c.kind === "create_subtask");
+      const unackedLeadMessages = pendingLeadMessages.filter((entry) => !ackedMessageIds.has(entry.id));
+      if (unackedLeadMessages.length && subtaskCmds.length) {
+        for (const command of subtaskCmds) {
+          dropped.add(command);
+          this.o.hooks?.onReject?.({
+            taskId,
+            wakeId,
+            command,
+            reason: "pending operator messages require ack_lead_messages before creating subtasks",
+          });
+        }
+        await this.chron({
+          type: "command.rejected",
+          taskId,
+          wakeId,
+          summary: `create_subtask requires lead message acknowledgement (${unackedLeadMessages.length} pending)`,
+          data: { pendingMessageIds: unackedLeadMessages.map((entry) => entry.id) },
+        });
+      }
       // Idempotency by (parent, key): re-running the delegate stage (the lead is
       // re-woken on each child completion while childrenDone is unmet) must NOT
       // re-spawn. Seed key→id from already-spawned children so a keyed subtask is
@@ -1077,17 +1003,13 @@ export class WorkflowEngine {
         await this.o.events.append(taskId, events);
         await this.persist(taskId, wf); // re-sync the projection even with no transition
       }
+      for (const id of ackedMessageIds) await this.o.steerMailbox?.remove(taskId, id);
     }
 
     // (4) Post-advance, then report + self-continue.
     task = await this.advance(taskId, wf, "engine", wakeId);
     const advancedTo = task.stageId !== stageAtStart ? task.stageId : undefined;
-    const error =
-      result.status === "error"
-        ? (result.error ?? new Error("wake run failed"))
-        : commands.length === 0
-          ? new Error("worker completed without calling any sikong state tool")
-          : undefined;
+    const error = result.status === "error" ? (result.error ?? new Error("wake run failed")) : undefined;
     this.o.hooks?.onWakeEnd?.({
       taskId,
       wakeId,
@@ -1231,10 +1153,13 @@ export class WorkflowEngine {
     run: RunHandle,
     fromSeq: number,
     startedAt: number,
+    stopRun?: (reason: string) => void,
   ): () => void {
     let cursor = fromSeq;
     let stopped = false;
     let polling = false;
+    let stopRequested = false;
+    const deliveredMailboxIds = new Set<string>();
 
     const applySteer = async (
       message: string,
@@ -1271,6 +1196,19 @@ export class WorkflowEngine {
         for (const event of events) {
           if (stopped) break;
           cursor = Math.max(cursor, event.seq);
+          const stopReason = stopReasonFromEvent(event);
+          if (stopReason && !stopRequested) {
+            stopRequested = true;
+            stopRun?.(stopReason);
+            await this.chron({
+              type: "wake.error",
+              taskId,
+              wakeId,
+              summary: `wake preempted by ${event.type}`,
+              data: { eventSeq: event.seq, source: event.source, reason: stopReason },
+            });
+            continue;
+          }
           if (event.type !== "steer.requested") continue;
           const message = typeof event.payload.message === "string" ? event.payload.message.trim() : "";
           if (!message) continue;
@@ -1279,13 +1217,23 @@ export class WorkflowEngine {
 
         for (const entry of await this.o.steerMailbox?.list(taskId) ?? []) {
           if (stopped) break;
-          if (entry.createdAt < startedAt) {
-            await this.o.steerMailbox?.remove(taskId, entry.id);
+          if (entry.createdAt < startedAt || deliveredMailboxIds.has(entry.id)) continue;
+          deliveredMailboxIds.add(entry.id);
+          const message = entry.message.trim();
+          if (!message) continue;
+          if (entry.kind === "stop_requested" && !stopRequested) {
+            stopRequested = true;
+            stopRun?.(`operator stop requested: ${message}`);
+            await this.chron({
+              type: "wake.error",
+              taskId,
+              wakeId,
+              summary: "wake stopped for operator lead review request",
+              data: { mailboxId: entry.id, kind: entry.kind, createdAt: entry.createdAt, message },
+            });
             continue;
           }
-          const message = entry.message.trim();
-          if (message) await applySteer(message, { mailboxId: entry.id, createdAt: entry.createdAt }, true);
-          await this.o.steerMailbox?.remove(taskId, entry.id);
+          await applySteer(message, { mailboxId: entry.id, kind: entry.kind, createdAt: entry.createdAt }, entry.kind === "steer");
         }
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));

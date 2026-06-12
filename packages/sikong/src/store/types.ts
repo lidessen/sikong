@@ -25,8 +25,10 @@ export type ChronicleType =
   | "wake.steer"
   | "wake.diagnostics"
   | "wake.commit"
+  | "wake.review_required"
   | "wake.end"
   | "wake.error"
+  | "lead.message"
   | "task.advanced"
   | "task.terminal"
   | "command.rejected";

@@ -7,10 +7,10 @@
  *
  *   create <request> [--workflow <id>] [--project <id>] [--parent <id>] [--id <id>]   publish a task
  *   run [--task <id>]                                                 drive pending task(s) to done/quiet (exit 1 if any wake errored)
- *   submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | unblock>
+ *   submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | concern <message> | scope-limit <message> | stop [reason] | unblock>
  *   register <workflow.yaml>                                          register a workflow definition
  *   overview [--project <id>] [--json]                                  human workspace dashboard
- *   status [--project <id>] [--text] | task <id> [--text] | chronicle [--task <id>] [-n N] [--text]
+ *   status [--project <id>] [--text] | task <id> [--text] | trace <id> [--text] | chronicle [--task <id>] [-n N] [--text]
  *   inspect wait [--task <id>] [--after <seq>] [--timeout <ms>] [--text]
  *   --dir <path>   workspace dir override (default $SIKONG_HOME or ~/.sikong; legacy $SIKONG_DIR still works)
  *
@@ -33,10 +33,11 @@ import { renderLeadActions, renderOverview, renderStatus, renderTaskDetail, task
 import { renderUsage, summarizeUsage } from "./usage";
 import { acquireLock, getDefaultWorker, openWorkspace, reconcileWorktrees, saveWorkflow, setDefaultWorker, type Workspace } from "./workspace";
 import { parseDataFile } from "./config-file";
-import { JsonSteerMailbox } from "./engine/steer-mailbox";
+import { JsonSteerMailbox, type LeadMessageKind } from "./engine/steer-mailbox";
 import { isValidProjectId, type Project } from "./project";
 import { discoverWorkers, discoveredRoster, isValidWorkerId, type Worker, type WorkerProvider, type WorkerRuntime } from "./worker";
 import type { WorkerPermissionMode } from "./worker";
+import type { ChronicleEntry } from "./store";
 import type { AcceptanceCheck, AcceptanceEvidence, Command } from "./workflow";
 import { resolveWorkspaceDir } from "./workspace-layout";
 
@@ -88,7 +89,8 @@ const workspaceDir = resolveWorkspaceDir({ dirFlag: flag("--dir") });
 const dir = workspaceDir.dir;
 const text = (hasFlag("--text") || hasFlag("--human")) && !hasFlag("--json");
 const cmd = positional[0];
-const isSteerSubmit = cmd === "submit" && positional[2] === "steer";
+const LEAD_MESSAGE_OPS = new Set(["steer", "cancel", "block", "concern", "scope-limit", "stop"]);
+const isLeadMessageSubmit = cmd === "submit" && LEAD_MESSAGE_OPS.has(positional[2] ?? "");
 const argv1 = process.argv[1] ?? "sikong";
 const cli = argv1.endsWith(".ts") ? `bun ${argv1}` : argv1;
 const PERMISSION_MODES = new Set<WorkerPermissionMode>([
@@ -148,6 +150,14 @@ function chronicleDataSuffix(e: { type: string; data?: Record<string, unknown> }
     if (outputFields) parts.push(`outputFields=${outputFields}`);
     return ` [${parts.join(" ")}]`;
   }
+  if (e.type === "wake.review_required") {
+    const parts = [`reason=${String(data.reason ?? "")}`];
+    const outputFields = csv(data.outputFields);
+    if (outputFields) parts.push(`outputFields=${outputFields}`);
+    const commandKinds = csv(data.commandKinds);
+    if (commandKinds) parts.push(`commands=${commandKinds}`);
+    return ` [${parts.join(" ")}]`;
+  }
   if (e.type === "wake.progress") {
     const parts = [
       `phase=${String(data.phase ?? "")}`,
@@ -164,6 +174,112 @@ function chronicleDataSuffix(e: { type: string; data?: Record<string, unknown> }
 
 function chronicleLine(e: { ts: number; type: string; taskId?: string; summary: string; data?: Record<string, unknown> }): string {
   return `${new Date(e.ts).toISOString().slice(11, 19)} ${e.type}${e.taskId ? ` ${e.taskId}` : ""} — ${e.summary}${chronicleDataSuffix(e)}`;
+}
+
+function latestWakeId(entries: readonly ChronicleEntry[]): string | undefined {
+  return entries.find((entry) => entry.wakeId)?.wakeId;
+}
+
+function latestWakeStatus(entries: readonly ChronicleEntry[]): "active" | "ended" | "error" | "unknown" {
+  if (entries.some((entry) => entry.type === "wake.error")) return "error";
+  if (entries.some((entry) => entry.type === "wake.end")) return "ended";
+  if (
+    entries.some(
+      (entry) =>
+        entry.type === "wake.start" ||
+        entry.type === "wake.progress" ||
+        entry.type === "wake.diagnostics" ||
+        entry.type === "wake.review_required",
+    )
+  )
+    return "active";
+  return "unknown";
+}
+
+function renderTrace(view: {
+  task: Awaited<ReturnType<JsonWorkspaceProjectionStore["get"]>>;
+  latestWake?: {
+    wakeId: string;
+    status: "active" | "ended" | "error" | "unknown";
+    lastEventType: string;
+    lastEventAgeMs: number;
+    lastTool?: string;
+    stateCommands?: unknown;
+    tools?: string;
+    lastProgress?: ChronicleEntry;
+    diagnostics?: ChronicleEntry;
+    reviewRequired?: ChronicleEntry;
+    error?: ChronicleEntry;
+  };
+  recent: ChronicleEntry[];
+}): string {
+  const task = view.task;
+  if (!task) return "Trace: task not found";
+  const lines = [
+    `Trace ${task.id} [${task.status}]`,
+    `  project=${task.projectId} workflow=${task.workflowId}@${task.workflowVersion} stage=${task.stageId}`,
+  ];
+  if (task.workerId) lines.push(`  worker=${task.workerId}`);
+  lines.push(`  updated=${new Date(task.updatedAt).toISOString()}`);
+  if (!view.latestWake) {
+    lines.push("\nLatest wake: none");
+  } else {
+    const wake = view.latestWake;
+    lines.push(
+      `\nLatest wake: ${wake.wakeId} status=${wake.status} last=${wake.lastEventType} age=${Math.round(wake.lastEventAgeMs / 1000)}s`,
+    );
+    lines.push(`  worker stateCommands=${String(wake.stateCommands ?? "unknown")} tools=${wake.tools || "none"}`);
+    if (wake.lastTool) lines.push(`  last tool=${wake.lastTool}`);
+    if (wake.lastProgress) lines.push(`  progress: ${chronicleLine(wake.lastProgress)}`);
+    if (wake.diagnostics) lines.push(`  diagnostics: ${chronicleLine(wake.diagnostics)}`);
+    if (wake.reviewRequired) lines.push(`  review required: ${chronicleLine(wake.reviewRequired)}`);
+    if (wake.error) lines.push(`  error: ${chronicleLine(wake.error)}`);
+  }
+  lines.push("\nRecent:");
+  if (view.recent.length === 0) lines.push("  (none)");
+  else for (const entry of view.recent.slice(0, 12)) lines.push(`  ${chronicleLine(entry)}`);
+  return lines.join("\n");
+}
+
+async function taskTrace(
+  taskId: string,
+  stores: {
+    projections: JsonWorkspaceProjectionStore;
+    chronicle: JsonWorkspaceChronicleStore;
+  },
+) {
+  const task = await stores.projections.get(taskId);
+  const recent = await stores.chronicle.recent({ taskId, limit: 80 });
+  const wakeId = latestWakeId(recent);
+  const wakeEntries = wakeId ? recent.filter((entry) => entry.wakeId === wakeId) : [];
+  const latest = wakeEntries[0];
+  const diagnostics = wakeEntries.find((entry) => entry.type === "wake.diagnostics");
+  const reviewRequired = wakeEntries.find((entry) => entry.type === "wake.review_required");
+  const lastProgress = wakeEntries.find((entry) => entry.type === "wake.progress");
+  const error = wakeEntries.find((entry) => entry.type === "wake.error");
+  const data = diagnostics?.data;
+  const progressData = lastProgress?.data;
+  return {
+    task,
+    ...(wakeId && latest
+      ? {
+          latestWake: {
+            wakeId,
+            status: latestWakeStatus(wakeEntries),
+            lastEventType: latest.type,
+            lastEventAgeMs: Date.now() - latest.ts,
+            ...(typeof progressData?.tool === "string" ? { lastTool: progressData.tool } : {}),
+            ...(data && "stateCommands" in data ? { stateCommands: data.stateCommands } : {}),
+            tools: toolStarts(data?.toolCallStarts),
+            ...(lastProgress ? { lastProgress } : {}),
+            ...(diagnostics ? { diagnostics } : {}),
+            ...(reviewRequired ? { reviewRequired } : {}),
+            ...(error ? { error } : {}),
+          },
+        }
+      : {}),
+    recent,
+  };
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -243,6 +359,45 @@ function parseLeadCommand(op: string, rest: string[]): Command {
   }
 }
 
+function leadMessageFromSubmit(
+  op: string,
+  rest: string[],
+): { kind: LeadMessageKind; message: string; command: Command | { kind: LeadMessageKind; message: string } } {
+  const message = rest.join(" ").trim();
+  switch (op) {
+    case "steer":
+      if (!message) throw new Error("steer needs <message>");
+      return { kind: "steer", message, command: { kind: "steer", message } };
+    case "cancel": {
+      const reason = message || "operator requested cancellation review";
+      return {
+        kind: "stop_requested",
+        message: `Cancellation requested for lead review: ${reason}`,
+        command: { kind: "stop_requested", message: reason },
+      };
+    }
+    case "block":
+      if (!message) throw new Error("block needs <reason>");
+      return {
+        kind: "stop_requested",
+        message: `Block requested for lead review: ${message}`,
+        command: { kind: "stop_requested", message },
+      };
+    case "concern":
+      if (!message) throw new Error("concern needs <message>");
+      return { kind: "concern", message, command: { kind: "concern", message } };
+    case "scope-limit":
+      if (!message) throw new Error("scope-limit needs <message>");
+      return { kind: "scope_limit", message, command: { kind: "scope_limit", message } };
+    case "stop": {
+      const reason = message || "operator requested wake stop for lead review";
+      return { kind: "stop_requested", message: reason, command: { kind: "stop_requested", message: reason } };
+    }
+    default:
+      throw new Error(`unknown lead message op "${op}"`);
+  }
+}
+
 /** Build a lead command; `set-field` coerces the value by the field's declared type. */
 async function buildSubmitCommand(ws: Workspace, taskId: string, op: string, rest: string[]): Promise<Command> {
   if (op !== "set-field") return parseLeadCommand(op, rest);
@@ -266,7 +421,7 @@ async function buildSubmitCommand(ws: Workspace, taskId: string, op: string, res
 // Write commands take the dir's exclusive write lock (released on process exit).
 const WRITE_CMDS = new Set(["create", "design", "release", "run", "submit", "register", "visual-design"]);
 const needsLock =
-  (!!cmd && WRITE_CMDS.has(cmd) && !isSteerSubmit) ||
+  (!!cmd && WRITE_CMDS.has(cmd) && !isLeadMessageSubmit) ||
   (cmd === "project" && positional[1] === "create") ||
   (cmd === "project" && positional[1] === "memory" && positional.length > 3) ||
   (cmd === "worker" && (positional[1] === "create" || positional[1] === "default"));
@@ -358,6 +513,20 @@ switch (cmd) {
       break;
     }
     for (const e of entries) console.log(chronicleLine(e));
+    break;
+  }
+  case "trace": {
+    const taskId = positional[1] ?? flag("--task") ?? fail("usage: cli trace <id> [--text]");
+    const view = await taskTrace(taskId, {
+      projections: new JsonWorkspaceProjectionStore(dir),
+      chronicle: new JsonWorkspaceChronicleStore(dir),
+    });
+    if (!view.task) {
+      if (text) console.log(`no such task: ${taskId}`);
+      else printJson({ error: "not_found", taskId });
+      process.exit(1);
+    }
+    printView(view, renderTrace);
     break;
   }
   case "usage": {
@@ -546,46 +715,55 @@ switch (cmd) {
   case "submit": {
     const id = positional[1];
     const op = positional[2];
-    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | unblock>");
-    const taskId = id!;
-    if (op === "steer") {
-      const message = positional.slice(3).join(" ").trim();
-      if (!message) fail("steer needs <message>");
-      const steerCommand: Extract<Command, { kind: "steer" }> = { kind: "steer", message };
+    if (!id || !op) fail("usage: cli submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | concern <message> | scope-limit <message> | stop [reason] | unblock>");
+    const taskId = id as string;
+    const submitOp = op as string;
+    if (LEAD_MESSAGE_OPS.has(submitOp)) {
+      const leadMessage = ((): ReturnType<typeof leadMessageFromSubmit> => {
+        try {
+          return leadMessageFromSubmit(submitOp, positional.slice(3));
+        } catch (err) {
+          return fail((err as Error).message);
+        }
+      })();
       const task = await new JsonWorkspaceProjectionStore(dir).get(taskId);
       if (!task) fail(`task ${taskId} not found`, 1);
-      await new JsonSteerMailbox(dir).submit(taskId, steerCommand.message);
-      if (text) console.log(`submitted steer to ${taskId} — an active wake will receive it if one is running`);
-      else printJson({ ok: true, taskId, command: steerCommand, next: { note: "active wake will receive this steer if one is running" } });
+      await new JsonSteerMailbox(dir).submit(taskId, leadMessage.message, leadMessage.kind);
+      const note =
+        leadMessage.kind === "stop_requested"
+          ? "current wake will stop for lead review if one is running; task state is not directly changed"
+          : "lead will review this message before task topology changes";
+      if (text) console.log(`submitted ${leadMessage.kind} to ${taskId} — ${note}`);
+      else printJson({ ok: true, taskId, command: leadMessage.command, next: { note } });
       break;
     }
     const ws = await openWorkspace(dir);
     let command: Command;
     try {
-      command = await buildSubmitCommand(ws, id!, op!, positional.slice(3));
+      command = await buildSubmitCommand(ws, taskId, submitOp, positional.slice(3));
     } catch (err) {
       fail((err as Error).message);
       throw err; // unreachable (fail exits) — satisfies definite assignment
     }
     try {
-      await ws.engine.submitCommand(id!, command, "lead", { schedule: false });
+      await ws.engine.submitCommand(taskId, command, "lead", { schedule: false });
     } catch (err) {
       fail((err as Error).message, 1);
     }
     if (text)
       console.log(
         command.kind === "steer"
-          ? `submitted steer to ${id} — an active wake will receive it if one is running`
-          : `submitted ${op} to ${id} — apply with: ${cli} run --task ${id} --dir ${dir}`,
+          ? `submitted steer to ${taskId} — an active wake will receive it if one is running`
+          : `submitted ${submitOp} to ${taskId} — apply with: ${cli} run --task ${taskId} --dir ${dir}`,
       );
     else
       printJson({
         ok: true,
-        taskId: id,
+        taskId,
         command,
         ...(command.kind === "steer"
           ? { next: { note: "active wake will receive this steer if one is running" } }
-          : { next: { command: "run", taskId: id, dir, argv: ["run", "--task", id, "--dir", dir] } }),
+          : { next: { command: "run", taskId, dir, argv: ["run", "--task", taskId, "--dir", dir] } }),
       });
     break;
   }
@@ -891,13 +1069,14 @@ switch (cmd) {
         "drive:\n" +
         "  create <request> [--workflow <id>] [--project <id>] [--worker <id>] [--parent <id>] [--id <id>]\n" +
         "  design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>]\n" +
-        "                                                               shorthand for --workflow design (generic architectural/technical design)\n" +
+        "                                                               shorthand for --workflow design (generic technical blueprint design)\n" +
         "  visual-design <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--frame <text>]\n" +
         "                                                               shorthand for --workflow visual-design; --frame pre-fills the design frame (ADR 0028)\n" +
         "  release <request> [--project <id>] [--id <id>] [--worker <id>] [--parent <id>] [--ref <ref>]\n" +
         "                                                               shorthand for --workflow release; --ref pre-fills the releaseRef field\n" +
         "  run [--task <id>]\n" +
-        "  submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | unblock>\n" +
+        "  submit <id> <set-field <f> <v> | transition [reason] | evidence <json> | accept <reason> | reject <reason> | steer <message> | cancel [reason] | block <reason> | concern <message> | scope-limit <message> | stop [reason] | unblock>\n" +
+        "                                                               cancel/block/concern/scope-limit/stop are operator messages for lead review; they do not directly mutate task topology\n" +
         "  register <workflow.yaml>\n" +
         "  project create <id> [--name <n>] [--root <path>] [--workflow <id>] [--worker <id>] [--permission <mode>]\n" +
         "  project memory <id> [markdown]\n" +
@@ -909,6 +1088,7 @@ switch (cmd) {
       "  status [--project <id>] [--text]\n" +
       "  actions [--project <id>] [--text]     pending lead review/decision queue\n" +
       "  task <id> [--text]\n" +
+      "  trace <id> [--text]                    one-task wake/tool/state-command trace\n" +
       "  chronicle [--task <id>] [-n <N>] [--text]\n" +
       "  usage [--project <id>] [--text]        token usage + cost (5h/7d/30d windows)\n" +
       "  watch [--project <id>] [--interval <s>] [--once]   live dashboard (overview + usage)\n" +

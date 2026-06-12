@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { assertValidWorkflow, validateWorkflow, type ValidateOptions } from "./validate";
-import { DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./builtin";
+import { _DESIGN_WORKFLOW_V4, DESIGN_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./builtin";
 import { WorkflowValidationError } from "./errors";
 import type { Guard, WorkflowDef } from "./types";
 
@@ -167,20 +167,23 @@ describe("validateWorkflow", () => {
   });
 });
 
-// ── DESIGN_WORKFLOW (v4, generic architectural/technical design) adversarial edge-case tests ─────
+// ── DESIGN_WORKFLOW (v5, generic technical blueprint design) adversarial edge-case tests ─────
 
-describe("DESIGN_WORKFLOW edge cases (v4, generic design)", () => {
+describe("DESIGN_WORKFLOW edge cases (v5, generic technical blueprint design)", () => {
   const wf = DESIGN_WORKFLOW;
 
   test("has no workerRole (any worker can do design)", () => {
     expect(wf.workerRole).toBeUndefined();
   });
 
-  test("has the full 4-stage sequence: design → document → review → done", () => {
+  test("has the full blueprint sequence: world → anchors → skeleton → parts → blueprint → review → done", () => {
     const ids = wf.stages.map((s) => s.id);
     expect(ids).toEqual([
-      "design",
-      "document",
+      "world",
+      "anchors",
+      "skeleton",
+      "parts",
+      "blueprint",
       "review",
       "done",
     ]);
@@ -205,23 +208,32 @@ describe("DESIGN_WORKFLOW edge cases (v4, generic design)", () => {
     }
   });
 
-  test("design stage outputs are (design, alternatives) — the key design artifacts", () => {
-    const design = wf.stages[0];
-    expect(design?.id).toBe("design");
-    expect(design?.outputFields).toContain("design");
-    expect(design?.outputFields).toContain("alternatives");
+  test("world stage deconstructs the problem and records alternatives", () => {
+    const world = wf.stages[0];
+    expect(world?.id).toBe("world");
+    expect(world?.outputFields).toContain("world");
+    expect(world?.outputFields).toContain("alternatives");
+    expect((world?.instructions ?? "").toLowerCase()).toContain("contradiction analysis");
   });
 
-  test("document stage has no outputFields (purely side-effectful, writes to files)", () => {
-    const doc = wf.stages[1];
-    expect(doc?.id).toBe("document");
-    expect(doc?.outputFields).toEqual([]);
+  test("blueprint stage writes the final construction blueprint and compatibility design summary", () => {
+    const blueprint = wf.stages[4];
+    expect(blueprint?.id).toBe("blueprint");
+    expect(blueprint?.outputFields).toContain("blueprint");
+    expect(blueprint?.outputFields).toContain("design");
+    expect((blueprint?.instructions ?? "").toLowerCase()).toContain("construction blueprint");
+    expect((blueprint?.instructions ?? "").toLowerCase()).toContain("builder judgment");
   });
 
-  test("review stage outputs summary", () => {
-    const review = wf.stages[2];
+  test("review stage can refresh blueprint fields after lead rejection", () => {
+    const review = wf.stages[5];
     expect(review?.id).toBe("review");
+    expect(review?.outputFields).toContain("blueprint");
+    expect(review?.outputFields).toContain("design");
     expect(review?.outputFields).toContain("summary");
+    expect((review?.instructions ?? "").toLowerCase()).toContain("if the latest lead acceptance decision is rejected");
+    expect((review?.instructions ?? "").toLowerCase()).toContain("revise");
+    expect((review?.instructions ?? "").toLowerCase()).toContain("update `blueprint` and `design`");
   });
 
   test("all outputFields in every stage are declared as workflow fields with a compatible type", () => {
@@ -253,8 +265,8 @@ describe("DESIGN_WORKFLOW edge cases (v4, generic design)", () => {
     }
   });
 
-  test("done stage's entry guard references fields set by earlier stages (design from design stage, summary from review)", () => {
-    const done = wf.stages[3];
+  test("done stage's entry guard references fields set by earlier stages (blueprint from blueprint stage, summary from review)", () => {
+    const done = wf.stages[6];
     expect(done?.id).toBe("done");
 
     // Collect output fields from all non-terminal stages
@@ -272,6 +284,14 @@ describe("DESIGN_WORKFLOW edge cases (v4, generic design)", () => {
       expect(earlierOutputs.has(ref)).toBe(true);
     }
   });
+});
+
+test("_DESIGN_WORKFLOW_V4 backward compat constant is valid and matches the pre-ADR 0031 technical design shape", () => {
+  expect(validateWorkflow(_DESIGN_WORKFLOW_V4)).toEqual([]);
+  expect(_DESIGN_WORKFLOW_V4.version).toBe("4");
+  expect(_DESIGN_WORKFLOW_V4.stages.map((s) => s.id)).toEqual([
+    "design", "document", "review", "done",
+  ]);
 });
 
 /** Collect field names referenced by an {@link op: "field"} guard within a nested guard tree. */

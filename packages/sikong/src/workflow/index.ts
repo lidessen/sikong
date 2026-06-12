@@ -29,6 +29,7 @@ export { evalGuard, type AcceptanceStatus, type GuardEnv } from "./guard";
 export {
   apply,
   applyEventsToTask,
+  deriveAcceptanceReason,
   deriveAcceptanceStatus,
   filterValidFields,
   initTask,
@@ -44,4 +45,4 @@ export {
   type ValidationIssue,
 } from "./validate";
 export { CommandRejectedError, WorkflowValidationError } from "./errors";
-export { DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./builtin";
+export { _DESIGN_WORKFLOW_V4, DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./builtin";

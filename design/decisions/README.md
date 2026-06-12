@@ -59,3 +59,8 @@ Files use a monotonic four-digit prefix:
 | [0027](0027-lead-authored-task-acceptance.md) | Accepted | Lead-authored per-task acceptance criteria (Task.acceptance + create_subtask/CLI) — worker evidence must address criteria the worker cannot redefine |
 | [0028](0028-target-aware-design-workflow.md) | Accepted | Target-aware design workflow — native/SwiftUI support (target field; assemble/review branch web-semajsx vs swiftui; tokens stay universal) |
 | [0029](0029-interactive-monitor-dashboard.md) | Accepted | Interactive monitor dashboard — semajsx hydration + live SSE (filter/sort/drill-down, in-place updates) replacing the SSR meta-refresh snapshot |
+| [0030](0030-adaptive-wake-timeout.md) | Accepted | Adaptive wake timeout from deterministic work units |
+| [0031](0031-technical-design-blueprint-workflow.md) | Accepted | Technical design blueprint workflow — world → anchors → skeleton → parts → blueprint → review |
+| [0032](0032-wake-preemption-and-repair-fields.md) | Accepted | Wake preemption (lead cancel/block interrupts in-flight wake) + acceptance rejection reason in per-wake prompt |
+| [0033](0033-worker-work-log-review.md) | Accepted | Worker work-log review replaces automatic commit fallback |
+| [0034](0034-operator-messages-require-lead-review.md) | Accepted | Operator messages require lead review before task topology changes |

@@ -27,6 +27,7 @@ export type LeadTeamClassification =
 export interface LeadStatusContext {
   eventTypes?: ReadonlySet<string>;
   acceptanceStatus?: AcceptanceStatus;
+  acceptanceReason?: string;
 }
 
 export interface LeadTeamStatus {
@@ -37,6 +38,7 @@ export interface LeadTeamStatus {
   active: number;
   transitionRequested: boolean;
   acceptanceStatus: AcceptanceStatus;
+  acceptanceReason?: string;
   next: string;
 }
 
@@ -52,6 +54,7 @@ export function deriveLeadTeamStatus(
   const active = team.filter((m) => m.status !== "done" && m.status !== "cancelled").length;
   const transitionRequested = Boolean(status.eventTypes?.has("transition.requested"));
   const acceptanceStatus = status.acceptanceStatus ?? "none";
+  const acceptanceReason = status.acceptanceReason;
   const hasAcceptanceGate = Boolean(stage?.acceptance?.length || task.acceptance?.length);
 
   let classification: LeadTeamClassification = "no_team";
@@ -78,5 +81,5 @@ export function deriveLeadTeamStatus(
     next = "A lead decision is required: accept or reject the submitted evidence.";
   }
 
-  return { classification, total, done, cancelled, active, transitionRequested, acceptanceStatus, next };
+  return { classification, total, done, cancelled, active, transitionRequested, acceptanceStatus, ...(acceptanceReason ? { acceptanceReason } : {}), next };
 }

@@ -94,29 +94,58 @@ next wake.
 This is an in-process guarantee. Durable production use still needs storage
 level compare-and-set or expected-sequence semantics.
 
-### Continuously steerable (task-level, bounded lag, no preemption)
+Wake diagnostics are observability facts, not progress judgments. The engine may
+record elapsed time, tool calls, state command counts, text previews, errors, and
+timeout components so a lead can inspect what happened. It must not use those
+signals to classify whether a worker is making meaningful progress, doing good
+work, over-exploring, or failing the task. Those judgments belong to a lead or
+another reviewer agent reading the worker's work log, task fields, submitted
+evidence, and chronicle context.
 
-The client can steer the system at any time, but steering is at the **task** level
-— never by editing a running task's content. A task is a stable unit of work (a
-fixed setpoint); a worker runs its current task to completion or the task is
-cancelled. New input is **not** injected into a running worker — that would mutate
-the task's scope mid-flight. Instead the client (or, later, the PM) either:
+### Continuously steerable (lead-mediated, bounded lag)
 
-- **enqueues a new task** — it runs at the next tick, after or alongside current
-  work (`createTask`/`intake` + the pending queue); or
-- **interrupts** — cancels (or supersedes) the current task, then starts a new one
-  (a lead `cancel`).
+The client can steer the system at any time, but task arrangement remains a lead
+decision. External operators do not directly create, cancel, block, delete, or
+reorder tasks. They submit durable operator messages (`steer`, `concern`,
+`scope_limit`, `stop_requested`) for the lead to review.
 
-External input (`submitCommand`, `intake`, `nudge`) is accepted whenever and lands
-in the event timeline. Because each task is a single-writer with a coalescing
-mailbox and every wake re-projects from the live log — re-loading the live task
-before applying worker commands — a `cancel` that races an in-flight wake is
-respected at the next tick (the wake's discarded work is simply not committed).
+These messages use a short-lock mailbox, separate from the main workspace write
+lock, so an operator can correct a running `sikong run` without corrupting the
+event log. A running wake may receive the message as live steer. A
+`stop_requested` message may stop the current wake to save tokens, but it does
+not make the task terminal or blocked.
 
-The wake is the control tick, so the settling lag is at most one wake. We do
-**not** preempt an in-flight wake; bounded lag is the deliberate, simpler choice.
-(Hard-aborting the in-flight run on a lead `cancel` — to save the discarded wake's
-tokens — is an optional later optimization, not needed for correctness.)
+When the lead wakes next, pending operator messages appear in the prompt. Before
+changing task topology, especially by creating subtasks, the lead must acknowledge
+the messages with `ack_lead_messages` and record whether the requested adjustment
+is accepted, rejected, or deferred. The engine rejects `create_subtask` commands
+while operator messages remain unacknowledged.
+
+**Wake preemption.** When a lead or engine-sourced `cancel` (or `block`) is
+submitted for a task that has an in-flight wake, the engine aborts the running
+agent run instead of letting it finish (ADR 0032). Same-process submissions call
+the per-task `stopWake` callback after the terminal/blocking event is appended.
+Separate CLI processes are handled by the wake's control pump: it polls the event
+log, notices lead/engine `task.cancelled` or `task.blocked`, then calls
+`controller.abort()` and `run.cancel()` on the current phase's handle. The wake
+post-phase loads the live task (now terminal/blocked) and drops all unprocessed
+worker commands. Any partial file writes from the aborted run are orphaned —
+acceptable for a cancelled task.
+
+Preemption is limited to lead- and engine-sourced commands. External operator
+`cancel`/`block` CLI inputs are not lead commands; they are mailbox messages for
+lead review (ADR 0034). A worker-emitted
+`cancel` is only a `cancellation.requested` event (ADR 0004): it may close the
+current worker pass like other stage-closing command tools, but it does not
+terminally cancel the task and does not use the external `submitCommand`
+preemption path. The existing `boundedRun` wall-clock timeout remains the safety
+net if the SDK ignores cancellation.
+
+The wake is the control tick. Before ADR 0032, the settling lag was at most one
+wake (bounded lag, the original simple choice). With preemption, the settling
+lag between a lead `cancel`/`block` and the task entering its new state is
+reduced to the SDK cancellation latency (typically sub-second), saving token
+waste on cancelled work.
 
 ## Stage-scoped Subtasks
 

@@ -17,7 +17,7 @@ import {
 import { buildDesignTools } from "./tools";
 import { WorkflowEngine, type EngineHooks, type LoopFactory, type WakeContext } from "./engine";
 import { JsonSteerMailbox } from "./engine/steer-mailbox";
-import { _DEVELOPMENT_LEAD_WORKFLOW_V1, DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./workflow/builtin";
+import { _DESIGN_WORKFLOW_V4, _DEVELOPMENT_LEAD_WORKFLOW_V1, DESIGN_WORKFLOW, DEVELOPMENT_LEAD_WORKFLOW, DEVELOPMENT_WORKFLOW, GENERAL_WORKFLOW, RELEASE_WORKFLOW, VISUAL_DESIGN_WORKFLOW } from "./workflow/builtin";
 import { assertValidWorkflow } from "./workflow/validate";
 import type { WorkflowDef } from "./workflow/types";
 import { discoveredRoster, selectWorker, workerSandboxConfig, type Worker } from "./worker";
@@ -148,7 +148,8 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
 
   const registry = new MemoryWorkflowRegistry(GENERAL_WORKFLOW);
   registry.register(VISUAL_DESIGN_WORKFLOW); // visual-design@v3, the UI/visual design workflow
-  registry.register(DESIGN_WORKFLOW); // design@v4, the generic architectural/technical design workflow
+  registry.register(_DESIGN_WORKFLOW_V4); // backward compat for design@v4 (pre-ADR 0031 technical design)
+  registry.register(DESIGN_WORKFLOW); // design@v5, the generic technical blueprint workflow
   registry.register(DEVELOPMENT_WORKFLOW);
   registry.register(DEVELOPMENT_LEAD_WORKFLOW);
   registry.register(_DEVELOPMENT_LEAD_WORKFLOW_V1); // backward compat for development-lead@v1 (one transition release)
@@ -159,7 +160,8 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
   registry.register(DEVELOPMENT_LEAD_WORKFLOW); // builtin lead alias wins over persisted definitions
   registry.register(_DEVELOPMENT_LEAD_WORKFLOW_V1); // backward compat (stale-pin recovery)
   registry.register(VISUAL_DESIGN_WORKFLOW); // builtin visual-design@v3 wins over persisted definitions
-  registry.register(DESIGN_WORKFLOW); // builtin design workflow (v4) wins over persisted definitions
+  registry.register(_DESIGN_WORKFLOW_V4); // backward compat for design@v4 (stale-pin recovery; must be before v5)
+  registry.register(DESIGN_WORKFLOW); // builtin design workflow (v5) wins over persisted definitions
   registry.register(GENERAL_WORKFLOW); // builtin fallback always wins over a persisted "general"
 
   // Sikong staffs each task itself (ADR 0008): the operator only provisions the
