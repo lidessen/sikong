@@ -114,7 +114,9 @@ The install step machine-validates that evidence checks all passed, the evidence
 was generated from a clean git status, the evidence sha matches the current HEAD,
 the candidate binary hash matches, and recorded paths are repo-relative. It then copies the candidate to
 `${SIKONG_HOME:-~/.sikong}/local-stable/versions/...`, atomically updates the
-`current` symlink, and writes a receipt. It still does not publish anything.
+`current` symlink to that version directory, and writes a receipt. The promoted
+command is `${SIKONG_HOME:-~/.sikong}/local-stable/current/sikong`. It still
+does not publish anything.
 
 Releasing builds every platform binary, publishes each `sikong-<platform>`
 package, then publishes the `sikong` launcher last (so its optional

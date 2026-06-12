@@ -114,12 +114,13 @@ describe("promotion install validation", () => {
       sourceEvidence: "promotion-evidence/evidence.json",
       sourceCandidate: "packages/sikong/dist/sikong-candidate",
       sourceCandidateSha256: e.candidate.sha256,
+      currentCommand: "current/sikong",
       acceptedBy: "lead",
       reason: "accepted in thread",
     } satisfies Partial<PromotionInstallReceipt>);
   });
 
-  test("installs candidate with a relative current symlink", async () => {
+  test("installs candidate with current pointing to a version directory", async () => {
     const dir = await mkdtemp(join(tmpdir(), "sikong-promotion-install-"));
     try {
       const repo = join(dir, "repo");
@@ -137,9 +138,10 @@ describe("promotion install validation", () => {
         generatedAt: "2026-06-06T08:00:00.000Z",
       }, e);
       await installPromotionCandidate(plan);
-      expect(await readlink(plan.currentLink)).toBe("versions/0.1.7-abcdef123456/sikong");
+      expect(await readlink(plan.currentLink)).toBe("versions/0.1.7-abcdef123456");
       expect(JSON.parse(await readFile(plan.currentReceiptPath, "utf8"))).toMatchObject({
         currentLink: "current",
+        currentCommand: "current/sikong",
         installedBin: "versions/0.1.7-abcdef123456/sikong",
       });
     } finally {

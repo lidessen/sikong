@@ -19,6 +19,7 @@ export interface PromotionInstallPlan {
   versionDir: string;
   installedBin: string;
   currentLink: string;
+  currentCommand: string;
   currentReceiptPath: string;
   receiptPath: string;
   receipt: PromotionInstallReceipt;
@@ -35,6 +36,7 @@ export interface PromotionInstallReceipt {
   sourceCandidateSha256: string;
   installedBin: string;
   currentLink: string;
+  currentCommand: string;
   acceptedBy: string;
   reason?: string;
 }
@@ -88,6 +90,7 @@ export function buildPromotionInstallPlan(opts: PromotionInstallOptions, evidenc
   const versionDir = join(opts.installRoot, "versions", versionKey);
   const installedBin = join(versionDir, "sikong");
   const currentLink = join(opts.installRoot, "current");
+  const currentCommand = join(currentLink, "sikong");
   const sourceBin = join(opts.repoRoot, evidence.candidate.binPath);
   const sourceEvidence = relativePath(opts.repoRoot, opts.evidencePath);
   const currentReceiptPath = join(opts.installRoot, "current.json");
@@ -103,10 +106,11 @@ export function buildPromotionInstallPlan(opts: PromotionInstallOptions, evidenc
     sourceCandidateSha256: evidence.candidate.sha256,
     installedBin: relativePath(opts.installRoot, installedBin),
     currentLink: relativePath(opts.installRoot, currentLink),
+    currentCommand: relativePath(opts.installRoot, currentCommand),
     acceptedBy: opts.acceptedBy.trim(),
     ...(opts.reason?.trim() ? { reason: opts.reason.trim() } : {}),
   };
-  return { sourceBin, versionDir, installedBin, currentLink, currentReceiptPath, receiptPath, receipt };
+  return { sourceBin, versionDir, installedBin, currentLink, currentCommand, currentReceiptPath, receiptPath, receipt };
 }
 
 export async function verifyCandidateBinaryHash(sourceBin: string, expectedSha256: string): Promise<string[]> {
@@ -125,7 +129,7 @@ export async function installPromotionCandidate(plan: PromotionInstallPlan): Pro
 
   const tmpLink = `${plan.currentLink}.tmp-${process.pid}`;
   try {
-    await symlink(plan.receipt.installedBin, tmpLink);
+    await symlink(relativePath(dirname(plan.currentLink), plan.versionDir), tmpLink);
     await rename(tmpLink, plan.currentLink);
   } catch (error) {
     throw new Error(`failed to update local stable symlink: ${(error as Error).message}`);

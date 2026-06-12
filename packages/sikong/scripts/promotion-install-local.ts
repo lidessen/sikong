@@ -98,6 +98,7 @@ async function main(): Promise<void> {
   console.log(`version: ${plan.receipt.packageVersion}`);
   console.log(`git: ${plan.receipt.gitSha}`);
   console.log(`current: ${plan.receipt.currentLink}`);
+  console.log(`command: ${plan.receipt.currentCommand}`);
   console.log(`receipt: ${relative(installRoot, plan.receiptPath).replaceAll("\\", "/")}`);
 }
 
