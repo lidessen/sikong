@@ -1,16 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
-  addUsage,
-  type CleanupResult,
-  emptyUsage,
   type AgentLoop,
   type EffortLevel,
-  type Hooks,
   type LoopEvent,
   type RunHandle,
   type RunResult,
   type TokenUsage,
-  type ToolSet,
 } from "agent-loop";
 import {
   deriveAcceptanceReason,
@@ -28,451 +23,57 @@ import type {
   Command,
   EventSource,
   Task,
-  TaskEvent,
   TaskStatus,
   WorkflowDef,
 } from "../workflow/types";
-import type {
-  ChronicleEntry,
-  ChronicleStore,
-  EventStore,
-  ProjectionStore,
-  ProjectStore,
-  WorkflowRegistry,
-} from "../store/types";
-import type { Project } from "../project";
+import type { ChronicleEntry } from "../store/types";
 import { estimateWakeTimeout, type WakeTimeoutEstimate } from "./adaptive-timeout";
 import { buildCommandTools } from "./command-tools";
 import { buildIntakeSystem, buildRouteTool, type RouteDecision } from "./intake";
-import { buildPrompt, buildSystem, type ToolCallFact } from "./prompt";
+import { buildPrompt, buildSystem } from "./prompt";
+import { boundedRun, cleanupRun, INTAKE_TIMEOUT_MS } from "./run-boundary";
 import { ScopeLeaseScheduler } from "./scope-scheduler";
-import type { ScopeLeaseStore } from "./scope-lease";
-import type { SteerMailbox, SteerMailboxEntry } from "./steer-mailbox";
 import type { TeamMember } from "./team-status";
+import type { WakeContext, WorkflowEngineOptions } from "./types";
+import {
+  compactPreview,
+  createRunDiagnostics,
+  finalizeRunDiagnostics,
+  observeLoopEvent,
+  progressData,
+  progressSummary,
+  runDiagnosticStatus,
+  timeoutData,
+  toolCountsSummary,
+  type RunDiagnostics,
+} from "./wake-diagnostics";
+import {
+  ackedLeadMessageIds,
+  assertValidTaskId,
+  closesCurrentRun,
+  isStageCommitSignal,
+  stopReasonFromEvent,
+  summarizeLeadMessage,
+} from "./wake-signals";
+
+export type {
+  DescribeWorker,
+  EngineHooks,
+  IsolateWorkspace,
+  LoopFactory,
+  ReleaseWorkspace,
+  WakeContext,
+  WorkerHooksFactory,
+  WorkerInfo,
+  WorkerToolsFactory,
+  WorkflowEngineOptions,
+} from "./types";
 
 function isTerminal(status: TaskStatus): boolean {
   return status === "done" || status === "cancelled";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-const DIAGNOSTIC_TEXT_LIMIT = 800;
-const TOOL_FACT_LIMIT = 40;
-const TOOL_PREVIEW_LIMIT = 600;
-const INTAKE_TIMEOUT_MS = 90_000;
-const RUN_CLEANUP_GRACE_MS = 1_000;
-const RUN_CLEANUP_TIMEOUT_MS = RUN_CLEANUP_GRACE_MS + 250;
 const STEER_POLL_MS = 1_000;
-
-interface RunDiagnostics {
-  phase: "worker" | "commit";
-  eventCount: number;
-  toolCallStarts: Record<string, number>;
-  toolCallEnds: Record<string, number>;
-  toolCallErrors: Record<string, number>;
-  textChars: number;
-  textPreview: string;
-  toolCallFacts: ToolCallFact[];
-}
-
-type RunDiagnosticStatus = RunResult["status"] | "closed_by_state_command";
-
-function createRunDiagnostics(phase: RunDiagnostics["phase"]): RunDiagnostics {
-  return {
-    phase,
-    eventCount: 0,
-    toolCallStarts: {},
-    toolCallEnds: {},
-    toolCallErrors: {},
-    textChars: 0,
-    textPreview: "",
-    toolCallFacts: [],
-  };
-}
-
-function incrementCount(counts: Record<string, number>, key: string): void {
-  counts[key] = (counts[key] ?? 0) + 1;
-}
-
-function appendPreview(existing: string, text: string, limit = DIAGNOSTIC_TEXT_LIMIT): string {
-  if (existing.length >= limit) return existing;
-  const remaining = limit - existing.length;
-  return existing + text.slice(0, remaining);
-}
-
-function compactPreview(text: string, limit = DIAGNOSTIC_TEXT_LIMIT): { preview?: string; chars: number; truncated: boolean } {
-  const compact = text.trim();
-  if (!compact) return { chars: text.length, truncated: false };
-  return {
-    preview: compact.slice(0, limit),
-    chars: text.length,
-    truncated: compact.length > limit,
-  };
-}
-
-function timeoutData(timeout: WakeTimeoutEstimate): Record<string, unknown> {
-  return {
-    timeoutMs: timeout.timeoutMs,
-    rawMs: timeout.rawMs,
-    minMs: timeout.minMs,
-    maxMs: timeout.maxMs,
-    effort: timeout.effort,
-    components: timeout.components,
-  };
-}
-
-function sensitiveFieldName(key: string): boolean {
-  const normalized = key.toLowerCase().replaceAll("_", "").replaceAll("-", "");
-  return (
-    normalized.includes("token") ||
-    normalized.includes("secret") ||
-    normalized.includes("password") ||
-    normalized.includes("authorization") ||
-    normalized.includes("apikey") ||
-    normalized.includes("credential")
-  );
-}
-
-function sanitizePreviewValue(value: unknown, depth = 0): unknown {
-  if (depth > 4) return "[max-depth]";
-  if (typeof value === "string") return value.length > 1_000 ? `${value.slice(0, 1_000)}...` : value;
-  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
-  if (Array.isArray(value)) {
-    const out = value.slice(0, 20).map((item) => sanitizePreviewValue(item, depth + 1));
-    if (value.length > 20) out.push(`[truncated ${value.length - 20} items]`);
-    return out;
-  }
-  if (isRecord(value)) {
-    const out: Record<string, unknown> = {};
-    const entries = Object.entries(value).slice(0, 30);
-    for (const [key, entryValue] of entries) {
-      out[key] = sensitiveFieldName(key) ? "[redacted]" : sanitizePreviewValue(entryValue, depth + 1);
-    }
-    if (Object.keys(value).length > entries.length) out["[truncated]"] = `${Object.keys(value).length - entries.length} fields`;
-    return out;
-  }
-  if (value === undefined) return undefined;
-  return String(value);
-}
-
-function compactValuePreview(value: unknown, limit = TOOL_PREVIEW_LIMIT): string | undefined {
-  if (value === undefined) return undefined;
-  let text: string;
-  try {
-    text = JSON.stringify(sanitizePreviewValue(value));
-  } catch {
-    text = String(value);
-  }
-  if (!text) return undefined;
-  return text.length > limit ? `${text.slice(0, limit)}...` : text;
-}
-
-function rememberToolFact(diagnostics: RunDiagnostics, fact: ToolCallFact): void {
-  if (diagnostics.toolCallFacts.length >= TOOL_FACT_LIMIT) return;
-  diagnostics.toolCallFacts.push(fact);
-}
-
-function observeLoopEvent(diagnostics: RunDiagnostics, event: LoopEvent): void {
-  diagnostics.eventCount++;
-  switch (event.type) {
-    case "text":
-      diagnostics.textChars += event.text.length;
-      diagnostics.textPreview = appendPreview(diagnostics.textPreview, event.text);
-      break;
-    case "tool_call_start":
-      incrementCount(diagnostics.toolCallStarts, event.name);
-      rememberToolFact(diagnostics, {
-        tool: event.name,
-        ...(event.callId ? { callId: event.callId } : {}),
-        ...(compactValuePreview(event.args) ? { argsPreview: compactValuePreview(event.args) } : {}),
-      });
-      break;
-    case "tool_call_end":
-      incrementCount(diagnostics.toolCallEnds, event.name);
-      if (event.error) incrementCount(diagnostics.toolCallErrors, event.name);
-      rememberToolFact(diagnostics, {
-        tool: event.name,
-        ...(event.callId ? { callId: event.callId } : {}),
-        ...(compactValuePreview(event.result) ? { resultPreview: compactValuePreview(event.result) } : {}),
-        ...(event.error ? { error: event.error } : {}),
-      });
-      break;
-  }
-}
-
-function runDiagnosticStatus(result: RunResult, commands: readonly Command[]): RunDiagnosticStatus {
-  if (result.status === "cancelled" && commands.some(closesCurrentRun)) return "closed_by_state_command";
-  return result.status;
-}
-
-function finalizeRunDiagnostics(
-  diagnostics: RunDiagnostics,
-  result: RunResult,
-  commands: readonly Command[] = [],
-): Record<string, unknown> {
-  const text = result.text || diagnostics.textPreview;
-  const preview = compactPreview(text);
-  const status = runDiagnosticStatus(result, commands);
-  const closeCommandKinds = commands.filter(closesCurrentRun).map((command) => command.kind);
-  return {
-    phase: diagnostics.phase,
-    status,
-    ...(status !== result.status ? { runtimeStatus: result.status } : {}),
-    ...(closeCommandKinds.length ? { closeCommandKinds } : {}),
-    eventCount: diagnostics.eventCount,
-    toolCallStarts: diagnostics.toolCallStarts,
-    toolCallEnds: diagnostics.toolCallEnds,
-    toolCallErrors: diagnostics.toolCallErrors,
-    textChars: result.text ? result.text.length : diagnostics.textChars,
-    ...(preview.preview ? { textPreview: preview.preview, textTruncated: preview.truncated } : {}),
-    ...(diagnostics.toolCallFacts.length ? { toolCallFacts: diagnostics.toolCallFacts } : {}),
-    ...(result.status === "error" ? { error: result.error?.message ?? "unknown error" } : {}),
-  };
-}
-
-function toolCountsSummary(counts: Record<string, number>): string {
-  const parts = Object.entries(counts)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, count]) => `${name}:${count}`);
-  return parts.length ? parts.join(", ") : "none";
-}
-
-function progressSummary(event: LoopEvent): string | null {
-  switch (event.type) {
-    case "tool_call_start":
-      return `tool ${event.name} started`;
-    case "tool_call_end":
-      return event.error ? `tool ${event.name} failed` : `tool ${event.name} ended`;
-    default:
-      return null;
-  }
-}
-
-function progressData(phase: RunDiagnostics["phase"], event: LoopEvent): Record<string, unknown> | null {
-  switch (event.type) {
-    case "tool_call_start":
-      return {
-        phase,
-        event: event.type,
-        tool: event.name,
-        ...(event.callId ? { callId: event.callId } : {}),
-        ...(compactValuePreview(event.args) ? { argsPreview: compactValuePreview(event.args) } : {}),
-      };
-    case "tool_call_end":
-      return {
-        phase,
-        event: event.type,
-        tool: event.name,
-        ...(event.callId ? { callId: event.callId } : {}),
-        ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
-        ...(compactValuePreview(event.result) ? { resultPreview: compactValuePreview(event.result) } : {}),
-        ...(event.error ? { error: event.error } : {}),
-      };
-    default:
-      return null;
-  }
-}
-
-function isStageCommitSignal(command: Command, stage: ReturnType<typeof stageById>): boolean {
-  switch (command.kind) {
-    case "request_transition":
-    case "block":
-    case "cancel":
-    case "create_subtask":
-      return true;
-    case "set_field":
-      return !stage?.outputFields?.length || stage.outputFields.includes(command.field);
-    default:
-      return false;
-  }
-}
-
-function closesCurrentRun(command: Command): boolean {
-  switch (command.kind) {
-    case "request_transition":
-    case "block":
-    case "cancel":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function ackedLeadMessageIds(commands: readonly Command[]): Set<string> {
-  const ids = new Set<string>();
-  for (const command of commands) {
-    if (command.kind !== "ack_lead_messages") continue;
-    for (const id of command.ids) {
-      const normalized = id.trim();
-      if (normalized) ids.add(normalized);
-    }
-  }
-  return ids;
-}
-
-function summarizeLeadMessage(entry: SteerMailboxEntry): Record<string, unknown> {
-  return {
-    id: entry.id,
-    kind: entry.kind,
-    source: entry.source,
-    createdAt: entry.createdAt,
-    message: entry.message,
-  };
-}
-
-function stopReasonFromEvent(event: TaskEvent): string | undefined {
-  if (event.source !== "lead" && event.source !== "engine") return undefined;
-  if (event.type !== "task.cancelled" && event.type !== "task.blocked") return undefined;
-  const reason = typeof event.payload.reason === "string" ? event.payload.reason : event.type;
-  return `sikong ${event.type}: ${reason}`;
-}
-
-/** Task ids become filenames in the durable stores — keep them collision- and traversal-safe. */
-function assertValidTaskId(id: string): void {
-  if (!id || id === "." || id === ".." || !/^[A-Za-z0-9._-]+$/.test(id))
-    throw new Error(`invalid task id "${id}": must match [A-Za-z0-9._-]+ and not be "." or ".."`);
-}
-
-/** Context handed to the loop factory so a wake can pick runtime/provider per task. */
-export interface WakeContext {
-  task: Task;
-  workflow: WorkflowDef;
-  stageId: string;
-  /** The task's project (for cwd/model/env isolation), when a ProjectStore is wired. */
-  project?: Project;
-  /**
-   * Model tier for this wake. "fast" by default; "strong" once a task's prior
-   * wake(s) failed — the worker boundary escalates to a stronger model for the
-   * retry (pro is reserved for where the fast model demonstrably struggles).
-   */
-  modelTier?: "fast" | "strong";
-}
-
-/** Builds the worker loop for a wake. Lets each wake choose runtime/provider. */
-export type LoopFactory = (ctx: WakeContext) => AgentLoop;
-
-/**
- * Resolves the worker's own tools (its "hands") for a wake. This is the worker
- * boundary: coding/file/shell tooling belongs to the agent, not the coordination
- * engine. The engine merges whatever this returns with the wake's command tools
- * without knowing what the tools are. Unset ⇒ the worker runs with command tools
- * only (e.g. a coding-agent runtime that carries its own interface natively).
- */
-export type WorkerToolsFactory = (ctx: WakeContext, loop: AgentLoop) => ToolSet | Promise<ToolSet>;
-
-/**
- * Supplies per-run lifecycle hooks for the worker loop (the worker boundary).
- * Used to apply sandbox-escalation policy (ADR 0026) via `onToolUse` so a
- * claude-code worker can auto-approve allow-listed build/test commands. Opaque to
- * the engine — it just forwards the hooks to `loop.run`.
- */
-export type WorkerHooksFactory = (
-  ctx: WakeContext,
-  loop: AgentLoop,
-) => Hooks | undefined | Promise<Hooks | undefined>;
-
-/** What worker a wake hired — recorded with usage so the report can cost it. */
-export interface WorkerInfo {
-  model?: string;
-  provider?: string;
-  /** "token" = pay-per-token (priced in $); "subscription" = quota/window-based ($ n/a). */
-  billingMode?: "token" | "subscription";
-}
-
-/** Describes the worker a wake will hire (model/provider/billing), for usage accounting. */
-export type DescribeWorker = (ctx: WakeContext) => WorkerInfo | undefined;
-
-/**
- * Provide an isolated workspace for a task that requested it (`Task.isolate`, ADR
- * 0010). Opaque to the engine — the worker boundary maps it to e.g. a git worktree
- * (or a no-op off git). Returns the effective project the wake should use (e.g.
- * rooted at the worktree), which then drives cwd/allowedPaths/tools.
- */
-export type IsolateWorkspace = (ctx: WakeContext, project: Project) => Project | Promise<Project>;
-
-/** Release an isolated task's workspace when it terminates (commit + cleanup). Idempotent. */
-export type ReleaseWorkspace = (task: Task, project: Project) => void | Promise<void>;
-
-export interface EngineHooks {
-  onWakeStart?(info: { taskId: string; wakeId: string; stageId: string }): void;
-  onWakeEnd?(info: {
-    taskId: string;
-    wakeId: string;
-    commands: readonly Command[];
-    /** The stage the task ended in, when the wake net-advanced from where it started. */
-    advancedTo?: string;
-    status: TaskStatus;
-    /** Set when the agent run itself failed (result.status === "error"). */
-    error?: Error;
-  }): void;
-  onLoopEvent?(info: { taskId: string; wakeId: string; event: LoopEvent }): void;
-  onReject?(info: { taskId: string; wakeId: string; command: Command; reason: string }): void;
-  onError?(info: { taskId: string; error: Error }): void;
-}
-
-export interface WorkflowEngineOptions {
-  events: EventStore;
-  projections: ProjectionStore;
-  registry: WorkflowRegistry;
-  /** Builds the worker loop per wake (e.g. deepseek-v4-flash over claude-code/ai-sdk). */
-  loop: LoopFactory;
-  /**
-   * Supplies the worker's own tools per wake (the worker boundary). Optional: a
-   * worker that carries its own interface (a coding-agent runtime) needs none.
-   */
-  workerTools?: WorkerToolsFactory;
-  /**
-   * Supplies per-run worker hooks (the worker boundary). Optional: used to apply
-   * sandbox-escalation policy (ADR 0026) so a claude-code worker can auto-approve
-   * allow-listed build/test commands and self-verify.
-   */
-  workerHooks?: WorkerHooksFactory;
-  /** Optional: describe the worker a wake hires (model/provider/billing) for usage costing. */
-  describeWorker?: DescribeWorker;
-  /** Provide an isolated workspace for `isolate` tasks (ADR 0010); opaque to the engine. */
-  isolateWorkspace?: IsolateWorkspace;
-  /** Release an isolated task's workspace when it terminates (commit + cleanup). */
-  releaseWorkspace?: ReleaseWorkspace;
-  /** Builds the intake-router loop (classifies a raw request → workflow). Optional. */
-  intakeLoop?: () => AgentLoop;
-  hooks?: EngineHooks;
-  /** Optional durable observability log of engine/wake activity (read by the CLI). */
-  chronicle?: ChronicleStore;
-  /** Optional cross-process mailbox for lead steer messages while a wake is running. */
-  steerMailbox?: SteerMailbox;
-  /** Optional workspace-level task scope leases (ADR 0037). */
-  scopeLeases?: ScopeLeaseStore;
-  /** Optional project store: when wired, createTask validates the project exists. */
-  projects?: ProjectStore;
-  /** Override id generation (default: a deterministic per-engine counter). */
-  genId?: (kind: "task" | "wake") => string;
-  /**
-   * Explicit wall-clock cap per wake. When unset, the engine computes an
-   * adaptive watchdog budget from the current wake's deterministic work units.
-   * A wake exceeding its budget is aborted/cancelled and reported as an errored
-   * run, so a wedged backend that ignores cancellation can never hang a task.
-   * Set 0 only for tests or emergency debugging where no timeout is desired.
-   */
-  wakeTimeoutMs?: number;
-  /** Max wakes per task per engine session (runaway backstop). Default 50. */
-  maxWakesPerTask?: number;
-  /**
-   * How many times a task whose wake itself FAILED (timeout / run error) is retried
-   * before the engine terminally fails it (staleness circuit-breaker, ADR 0010), so
-   * a stuck task can't wedge a parent's `childrenDone` forever. Default 1 (one retry).
-   */
-  maxWakeRetries?: number;
-  /**
-   * Default max team depth for workflows that don't set their own `maxTeamDepth`.
-   * A task at D >= maxTeamDepth cannot spawn subtasks — its `create_subtask`
-   * commands are rejected. The per-workflow cap (when set) takes precedence if it
-   * is more restrictive. When unset, workflows without their own maxTeamDepth
-   * have no engine-enforced depth limit (Infinity). Default 2 in `openWorkspace`.
-   */
-  maxTeamDepth?: number;
-}
 
 interface StateEntry {
   running: boolean;
@@ -674,9 +275,9 @@ export class WorkflowEngine {
       tools,
       signal: controller.signal,
     });
-    const result = await this.boundedRun(run.result, this.o.wakeTimeoutMs ?? INTAKE_TIMEOUT_MS, async () => {
+    const result = await boundedRun(run.result, this.o.wakeTimeoutMs ?? INTAKE_TIMEOUT_MS, async () => {
       controller.abort();
-      return this.cleanupRun(run, "intake timeout");
+      return cleanupRun(run, "intake timeout");
     });
     if (result.status === "error") {
       await this.chron({ type: "wake.error", summary: `intake failed: ${result.error?.message ?? "unknown"}` });
@@ -920,13 +521,13 @@ export class WorkflowEngine {
     const workerDiagnostics = createRunDiagnostics("worker");
     let result: RunResult;
     try {
-      result = await this.boundedRun(
+      result = await boundedRun(
         consumeRun(run, workerDiagnostics, () => recordingWorkerEvents),
         timeout.timeoutMs,
         async () => {
           recordingWorkerEvents = false;
           controller.abort();
-          return this.cleanupRun(run, "wake timeout");
+          return cleanupRun(run, "wake timeout");
         },
         (cleanup) => {
           return this.chron({
@@ -1315,78 +916,6 @@ export class WorkflowEngine {
       stopped = true;
       clearInterval(timer);
     };
-  }
-
-  private async boundedRun(
-    consume: Promise<RunResult>,
-    ms: number | undefined,
-    onTimeout: () => void | CleanupResult | Promise<void | CleanupResult>,
-    onCleanup?: (cleanup: CleanupResult) => void | Promise<void>,
-  ): Promise<RunResult> {
-    const errored = (error: Error): RunResult => ({
-      events: [],
-      usage: emptyUsage(),
-      durationMs: 0,
-      status: "error",
-      error,
-      text: "",
-    });
-    const safe = consume.catch((err) => errored(err instanceof Error ? err : new Error(String(err))));
-    if (!ms) return safe;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const emitCleanup = async (cleanup: CleanupResult): Promise<void> => {
-      await Promise.resolve(onCleanup?.(cleanup)).catch(() => {});
-    };
-    const timeout = new Promise<RunResult>((resolve) => {
-      timer = setTimeout(() => void (async () => {
-        const cleanup = await Promise.resolve(onTimeout()).catch((err) => {
-          const error = err instanceof Error ? err : new Error(String(err));
-          return {
-            status: "unsettled" as const,
-            reason: "timeout",
-            elapsedMs: 0,
-            hardKill: false,
-            error: error.message,
-          };
-        });
-        if (cleanup) await emitCleanup(cleanup);
-        resolve(errored(new Error(`wake timed out after ${ms}ms`)));
-      })(), ms);
-    });
-    const result = await Promise.race([safe, timeout]);
-    if (timer) clearTimeout(timer);
-    return result;
-  }
-
-  private async cleanupRun(run: RunHandle, reason: string): Promise<CleanupResult> {
-    const startedAt = Date.now();
-    const cleanup = run
-      .cleanup({ reason, graceMs: RUN_CLEANUP_GRACE_MS, hardKill: false })
-      .catch((err) => {
-        const error = err instanceof Error ? err : new Error(String(err));
-        return {
-          status: "unsettled" as const,
-          reason,
-          elapsedMs: Date.now() - startedAt,
-          hardKill: false,
-          error: error.message,
-        };
-      });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<CleanupResult>((resolve) => {
-      timer = setTimeout(() => {
-        resolve({
-          status: "unsettled",
-          reason,
-          elapsedMs: Date.now() - startedAt,
-          hardKill: false,
-          error: `cleanup did not settle within ${RUN_CLEANUP_TIMEOUT_MS}ms`,
-        });
-      }, RUN_CLEANUP_TIMEOUT_MS);
-    });
-    const result = await Promise.race([cleanup, timeout]);
-    if (timer) clearTimeout(timer);
-    return result;
   }
 
   private async chron(entry: Omit<ChronicleEntry, "seq" | "ts">): Promise<void> {
