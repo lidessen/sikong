@@ -1,0 +1,91 @@
+{
+  "name": "agent-loop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Unified agent loop over Claude Agent SDK, Codex app-server, Cursor Agent SDK, and Vercel AI SDK — runtime ⊥ provider. One call = one full loop, with skills, MCP, tools, and cross-runtime lifecycle hooks + steering.",
+  "keywords": [
+    "agent",
+    "agent-loop",
+    "ai-sdk",
+    "claude",
+    "codex",
+    "cursor",
+    "executor",
+    "llm",
+    "mcp"
+  ],
+  "license": "MIT",
+  "files": [
+    "src"
+  ],
+  "type": "module",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./adapters/mock": {
+      "types": "./src/adapters/mock.ts",
+      "default": "./src/adapters/mock.ts"
+    },
+    "./adapters/claude": {
+      "types": "./src/adapters/claude.ts",
+      "default": "./src/adapters/claude.ts"
+    },
+    "./adapters/codex": {
+      "types": "./src/adapters/codex.ts",
+      "default": "./src/adapters/codex.ts"
+    },
+    "./adapters/cursor": {
+      "types": "./src/adapters/cursor.ts",
+      "default": "./src/adapters/cursor.ts"
+    },
+    "./adapters/ai-sdk": {
+      "types": "./src/adapters/ai-sdk.ts",
+      "default": "./src/adapters/ai-sdk.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsgo --project tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.177",
+    "@cursor/sdk": "^1.0.18",
+    "ai": "^6.0.204",
+    "bash-tool": "^1.3.17",
+    "execa": "^9.6.1",
+    "just-bash": "^3.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@ai-sdk/anthropic": "^3.0.84",
+    "@ai-sdk/deepseek": "^2.0.38",
+    "@ai-sdk/gateway": "^3.0.130",
+    "@ai-sdk/openai": "^3.0.71",
+    "@ai-sdk/openai-compatible": "^2.0.50",
+    "@types/node": "^25.9.3",
+    "@typescript/native-preview": "^7.0.0-dev.20260613.1",
+    "vitest": "^4.1.8"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    },
+    "@cursor/sdk": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    },
+    "execa": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
