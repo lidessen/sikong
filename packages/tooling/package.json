@@ -1,14 +1,10 @@
 {
   "name": "@sikong/tooling",
-  "type": "module",
   "private": true,
+  "type": "module",
   "module": "src/index.ts",
   "scripts": {
     "dev": "bun run src/index.ts",
     "test": "bun test"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5"
   }
 }

@@ -19,6 +19,9 @@ Keep Go command wiring in `cmd/`, reusable private logic in `internal/`, and Jav
 - `bun run dev:daemon` runs the daemon with `go run ./cmd/sikongd`.
 - `bun run dev:tooling` runs the `@sikong/tooling` workspace entrypoint.
 - `bun run check` runs all Go tests and Bun workspace tests.
+- `bun run typecheck` runs TypeScript Native Preview through `tsgo`.
+- `bun run lint` runs Oxlint; `bun run lint:fix` applies safe fixes.
+- `bun run fmt:check` checks formatting with Oxfmt; `bun run fmt` writes changes.
 - `bun run build` builds `dist/sikong` and `dist/sikongd`.
 
 Prefer package scripts over ad hoc command combinations so contributors use the same checks locally and in automation.
@@ -27,7 +30,7 @@ Prefer package scripts over ad hoc command combinations so contributors use the 
 
 Format Go files with `gofmt`. Use standard Go package names: short, lowercase, and descriptive, such as `daemon` or `buildinfo`. Command directories should match the binary name, for example `cmd/sikongd`.
 
-TypeScript uses Bun with strict `tsconfig.json` settings. Use two-space indentation for JSON and TypeScript. Workspace package names should use the `@sikong/*` scope.
+TypeScript uses Bun with strict `tsconfig.json` settings and TypeScript Native Preview (`tsgo`) for type checking. Use two-space indentation for JSON and TypeScript. Workspace package names should use the `@sikong/*` scope.
 
 ## Testing Guidelines
 

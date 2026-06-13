@@ -31,6 +31,9 @@ bun run dev:tooling
 
 ```bash
 bun run check
+bun run typecheck
+bun run lint
+bun run fmt:check
 ```
 
 ## Build
