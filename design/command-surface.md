@@ -30,9 +30,12 @@ Adapters own transport concerns:
 Command handlers own application actions:
 
 - validate command input;
-- resolve workspace and home context;
+- resolve workspace and data dir context;
 - call stores and engine APIs;
 - return structured success or error results.
+
+Command handlers should be request-scoped. They must not rely on a global Bun
+singleton scheduler or process-local mutable state for correctness.
 
 The engine owns durable coordination semantics:
 
@@ -41,6 +44,10 @@ The engine owns durable coordination semantics:
 - worker scheduling;
 - reviewer decisions;
 - runtime execution through `agent-loop.runTask`.
+
+The Go daemon does not own these semantics. If a command handler needs
+runtime-backed execution, the TypeScript engine should request a generic
+process run from the daemon and interpret the process result itself.
 
 ## Result Shape
 
@@ -65,7 +72,7 @@ Handlers receive an explicit context object:
 
 ```ts
 type CommandContext = {
-  homeDir: string;
+  dataDir: string;
   workspaceId?: string;
   outputMode?: "json" | "text";
   now?: () => Date;
@@ -108,10 +115,26 @@ removeWorkspacePreference({ workspaceId, preferenceId })
 ```ts
 createTask({ workspaceId, request, cwd?, repoPath? })
 getTask({ workspaceId?, taskId })
-waitTask({ workspaceId?, taskId, timeout? })
-steerTask({ workspaceId?, taskId, message })
-cancelTask({ workspaceId?, taskId, reason? })
+submitPlan({ workspaceId?, taskId, summary?, stages })
+acceptPlan({ workspaceId?, taskId, planId, version, report })
+rejectPlan({ workspaceId?, taskId, planId, version, report, requestedChanges? })
+startWorkerRun({ workspaceId?, taskId, stageId?, workerId?, objective? })
+completeWorkerRun({ workspaceId?, taskId, runId, summary, report?, note? })
+failWorkerRun({ workspaceId?, taskId, runId, summary, report?, note? })
+exceedWorkerRunBudget({ workspaceId?, taskId, runId, summary, report?, note? })
+startStageReview({ workspaceId?, taskId, stageId? })
+acceptStageReview({ workspaceId?, taskId, reviewId, report })
+rejectStageReview({ workspaceId?, taskId, reviewId, report, requestedChanges? })
+recommendFinalReview({ workspaceId?, taskId, reviewId, recommendation, report })
+acceptTask({ workspaceId?, taskId, report })
+rejectTask({ workspaceId?, taskId, report })
 ```
+
+These task protocol commands are not generic reducer operations. They are the
+validated command-layer landing points for planner tools, lead decisions,
+worker terminal task tools, stage review, final review, and final lead closure.
+Worker terminal result commands model the `agent-loop.runTask` terminal tool
+contract and must not be replaced by stdout/stderr parsing.
 
 ### Inspect
 
@@ -128,16 +151,13 @@ Use stable, lower-snake-case error codes. Initial examples:
 
 ```text
 invalid_input
+invalid_state
 workspace_not_found
 workspace_exists
 preference_not_found
 task_not_found
-task_not_running
-runtime_context_required
 runtime_cwd_not_found
 runtime_repo_not_found
-task_wait_timeout
-task_already_terminal
 internal_error
 ```
 
@@ -146,16 +166,16 @@ remain stable.
 
 ## Forbidden Shortcuts
 
-The first command surface should not expose low-level reducer operations:
+The command surface should not expose low-level reducer operations:
 
 - no generic `appendEvent`;
 - no manual `advanceStage`;
-- no direct `completeWorkerRun`;
-- no direct `acceptStageReview`;
 - no direct `writeProjection`.
 
-Those actions belong behind engine APIs. The public command surface stays at the
-level of workspace, preferences, tasks, and inspect views.
+Those actions belong behind engine APIs. Protocol actions such as
+`submitPlan`, `completeWorkerRun`, and `acceptStageReview` are allowed because
+they validate current state and append only the event sequence owned by that
+specific protocol step.
 
 ## Implementation Order
 
@@ -165,3 +185,19 @@ level of workspace, preferences, tasks, and inspect views.
 4. Add tool adapter for the same handlers.
 5. Add task event/projection handlers after the coordination reducer exists.
 6. Add runtime-backed task execution once cwd and worktree resolution are ready.
+
+Items 1, 2, 3, and the task protocol handlers from item 5 are implemented in
+`packages/workspace/src/commands` and exposed through the CLI adapter. The
+current task handlers can create a durable task, submit and accept/reject a
+plan, record worker terminal results, run stage/final review state transitions,
+close a task, and inspect summary/events/trace. `packages/workspace/src/runtime`
+can run one injected `agent-loop.runTask` worker and record its terminal result
+through those handlers. Preset wrappers can assemble planning, execution, and
+verification worker runs from prompt, tools, skills, and context. The pure
+orchestration tick can decide the next preset action from a projection, but it
+does not write events or run processes. The command surface does not yet wait on
+live execution, steer running loops, or cancel runtime processes.
+
+File-backed event append is protected by a per-task lock. Runtime-backed command
+handlers should use the locked append/rebuild store API so daemon-managed
+parallel Bun child processes can write safely.

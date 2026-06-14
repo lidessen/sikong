@@ -1,6 +1,5 @@
-import { preferencesFile } from "./layout";
-import { readYamlFile, writeYamlFile } from "./yaml";
-import type { WorkspaceDef } from "./workspace";
+import { preferencesFile, readYamlFile, writeYamlFile } from "../data-dir";
+import type { WorkspaceDef } from "./store";
 
 export interface WorkspacePreference {
   id: string;
@@ -55,10 +54,10 @@ export class FileWorkspacePreferences implements WorkspacePreferences {
 }
 
 export class FileWorkspacePreferencesFactory implements WorkspacePreferencesFactory {
-  constructor(private readonly homeDir: string) {}
+  constructor(private readonly dataDir: string) {}
 
   open(workspace: WorkspaceDef): WorkspacePreferences {
-    return new FileWorkspacePreferences(preferencesFile(this.homeDir, workspace.id));
+    return new FileWorkspacePreferences(preferencesFile(this.dataDir, workspace.id));
   }
 }
 

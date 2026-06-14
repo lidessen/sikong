@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Sikong manages multiple workspaces from one local Sikong home.
+Sikong manages multiple workspaces from one local Sikong data dir.
 
 A workspace is Sikong's project-level namespace for tasks, preferences, state,
 and runtime artifacts. It replaces the earlier `project` term.
 
 ## Terminology
 
-- Sikong home: the local durable data root, usually `~/.sikong`.
-- Workspace: Sikong's project-level namespace under the home.
+- Sikong data dir: the local durable data root, usually `~/.sikong`.
+- Workspace: Sikong's project-level namespace under the data dir.
 - Workspace directory: the Sikong-owned state directory at
   `~/.sikong/workspaces/<workspaceId>/`.
 - Agent cwd: the runtime execution directory for one agent run. It is separate
@@ -18,14 +18,14 @@ and runtime artifacts. It replaces the earlier `project` term.
 - Worktree: a git worktree under the workspace directory, used as an agent cwd
   when a git runtime context needs isolated parallel work.
 - Task: a durable coordination process that belongs to one workspace.
-- Worker: a home-level hireable agent configuration.
+- Worker: a data-dir-level hireable agent configuration.
 - Workspace preferences: lead-maintained project preferences and conventions,
   separate from task progress.
 
-Do not call the Sikong home a workspace. The home contains registered
+Do not call the Sikong data dir a workspace. The data dir contains registered
 workspaces.
 
-## Home Layout
+## Data Dir Layout
 
 Default file-backed layout:
 
@@ -46,7 +46,7 @@ Default file-backed layout:
     <workerId>.yaml
 ```
 
-The home owns global locks, global chronicle state, workspace registry, worker
+The data dir owns global locks, global chronicle state, workspace registry, worker
 registry, and isolation artifacts. It does not own task semantics.
 
 ## Workspace Directory vs Agent Cwd
@@ -223,11 +223,11 @@ Default file-backed implementation:
 
 ```ts
 class FileWorkspacePreferencesFactory implements WorkspacePreferencesFactory {
-  constructor(private readonly homeDir: string) {}
+  constructor(private readonly dataDir: string) {}
 
   open(workspace: WorkspaceDef): WorkspacePreferences {
     return new FileWorkspacePreferences(
-      join(this.homeDir, "workspaces", safe(workspace.id), "preferences.yaml"),
+      join(this.dataDir, "workspaces", safe(workspace.id), "preferences.yaml"),
     );
   }
 }
@@ -330,7 +330,7 @@ Task creation resolves a workspace in this order:
 2. fail with guidance to create or select a workspace.
 
 Do not keep a built-in `default` workspace pointing at `"."`. Workspace
-selection should not depend on cwd or implicit home config in the first
+selection should not depend on cwd or implicit data dir config in the first
 implementation.
 
 ## Commands
@@ -338,15 +338,13 @@ implementation.
 Initial CLI surface:
 
 ```text
-sikong home init
-sikong workspace add <id> [--name <name>]
+sikong workspace create --id <id> --name <name>
 sikong workspace list
 sikong workspace show <id>
-sikong workspace set-default <id>
-sikong workspace preferences list <id>
-sikong workspace preferences edit <id>
-sikong workspace preferences append <id>
-sikong workspace remove <id>
+sikong workspace delete <id>
+sikong preference list --workspace <id>
+sikong preference add --workspace <id> --text <text>
+sikong preference remove --workspace <id> <preferenceId>
 ```
 
 Task creation should use:
@@ -357,11 +355,11 @@ sikong task create --workspace <id> "<request>"
 
 ## First Implementation Slice
 
-1. Add home layout helpers and safe workspace id validation.
+1. Add data dir layout helpers and safe workspace id validation.
 2. Add `WorkspaceDef` and file-backed `WorkspaceStore`.
 3. Add `WorkspacePreferences`, `WorkspacePreferencesFactory`, and file-backed
    `preferences.yaml`.
 4. Add tests for add/list/get/remove and preference read/write/append.
-5. Add workspace resolution from explicit id and default id.
+5. Add workspace resolution from explicit id.
 6. Add workspace-owned worktree allocation from runtime-provided git context.
 7. Thread `workspaceId` into task creation and coordination events.

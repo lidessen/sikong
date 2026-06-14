@@ -103,9 +103,10 @@ type ReviewPolicy = {
 };
 ```
 
-Plan review is intentionally simple: the lead decides whether to accept the
-planner's `PlanDef`. A dedicated plan reviewer can be added later as an advisory
-worker, but it is not part of the default path.
+Plan review is intentionally simple: the lead is the only reviewer of a
+submitted `PlanDef`. There is no dedicated plan reviewer in this protocol.
+After `plan.submitted`, the only valid plan transitions are lead-issued
+`plan.accepted` or lead-issued `plan.rejected`.
 
 Stage review is delegated to a reviewer worker by default because stage
 acceptance can require file inspection, command evidence, external context, or
@@ -211,9 +212,13 @@ reject_plan({
 });
 ```
 
-`request_plan` starts or restarts planning. `accept_plan` is the only path into
-stage execution. `reject_plan` records why the current plan is not acceptable
-and gives the next planner run concrete revision context.
+`request_plan` starts or restarts planning. The planner must end its planning
+run by calling `submit_plan`; a plan inferred from stdout or narrative text is
+not accepted as a submitted plan.
+
+`accept_plan` is the only path into stage execution. `reject_plan` records why
+the current plan is not acceptable and gives the next planner run concrete
+revision context.
 
 ## Stage Execution
 
@@ -229,6 +234,17 @@ Each worker run:
 2. runs through `agent-loop.runTask`;
 3. ends as `completed`, `failed`, or `budget_exceeded`;
 4. records its `TaskResult` into the durable task event log.
+
+The worker result is a protocol result, not a process-output convention. It
+must come from the terminal tool call of `agent-loop.runTask`, or from an
+adapter-provided equivalent with the same terminal schema. Sikong must not infer
+`completed`, `failed`, or `budget_exceeded` from stdout, stderr, exit code, or a
+free-form final message.
+
+If the subprocess exits without a valid terminal task tool call, the run is a
+protocol failure. The process runner may report stdout, stderr, exit code,
+duration, and timeout as process facts, but those facts do not themselves
+constitute a worker `TaskResult`.
 
 A failed or budget-exceeded worker run does not automatically fail the stage.
 The stage reviewer evaluates the accumulated evidence.
@@ -275,6 +291,7 @@ of truth; projections are derived inspection and scheduling views.
 Core events:
 
 ```text
+task.created
 plan.requested
 plan.submitted
 plan.accepted
@@ -300,6 +317,7 @@ The exact event payloads can evolve, but the state machine should stay small:
 - no accepted plan means planning is the only available path;
 - an accepted plan has exactly one current stage until stage review accepts it;
 - workers can only add run results to the current stage;
+- worker results must be submitted through the terminal `runTask` result tool;
 - reviewers decide stage advancement;
 - the lead decides plan acceptance and final task acceptance.
 
@@ -333,6 +351,10 @@ workflow language.
 - its terminal `completed` / `failed` / `budget_exceeded` result;
 - optional gate review for that worker's final claim.
 
+The terminal task tool call is the source of truth for the worker result stored
+by Sikong. The generic subprocess runner is only transport and supervision; it
+does not define the domain result protocol.
+
 Sikong owns the durable multi-worker task:
 
 - accepted plan;
@@ -364,6 +386,14 @@ Build the first slice in this order:
 2. Add reducer tests for plan request, plan submit, plan accept/reject, stage
    start, worker result record, stage review, and final review.
 3. Add a file-backed event store and projection loader.
-4. Add minimal planner, worker, reviewer, and lead command handlers.
+4. Add minimal plan, worker result, review, and lead decision command handlers.
 5. Connect worker execution to `agent-loop.runTask`.
 6. Add inspect views over the event log and projection.
+
+Items 1 through 5 are implemented as the initial coordination core. The current
+runtime core can call an injected `agent-loop.runTask` function and record its
+terminal result through the validated worker result command handlers. Planning,
+execution, and verification are preset wrappers over the same worker-run core,
+not code-level agent roles. The orchestration tick can choose the next preset
+action from projection state, but it does not yet ask the Go daemon to start
+runtime child processes.

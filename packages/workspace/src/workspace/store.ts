@@ -1,7 +1,7 @@
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { ensureHomeLayout, workspaceDir, workspaceFile } from "./layout";
-import { readYamlFile, writeYamlFile } from "./yaml";
+import { ensureDataDirLayout, workspaceDir, workspaceFile } from "../data-dir";
+import { readYamlFile, writeYamlFile } from "../data-dir";
 
 export interface WorkspaceDef {
   id: string;
@@ -29,23 +29,23 @@ export function requireValidWorkspace(workspace: WorkspaceDef): void {
 }
 
 export class FileWorkspaceStore implements WorkspaceStore {
-  constructor(private readonly homeDir: string) {}
+  constructor(private readonly dataDir: string) {}
 
   async get(id: string): Promise<WorkspaceDef | null> {
     if (!isValidWorkspaceId(id)) return null;
-    return await readYamlFile<WorkspaceDef>(workspaceFile(this.homeDir, id));
+    return await readYamlFile<WorkspaceDef>(workspaceFile(this.dataDir, id));
   }
 
   async put(workspace: WorkspaceDef): Promise<void> {
     requireValidWorkspace(workspace);
-    await ensureHomeLayout(this.homeDir);
-    await writeYamlFile(workspaceFile(this.homeDir, workspace.id), workspace);
+    await ensureDataDirLayout(this.dataDir);
+    await writeYamlFile(workspaceFile(this.dataDir, workspace.id), workspace);
   }
 
   async list(): Promise<WorkspaceDef[]> {
     let entries: string[];
     try {
-      entries = await readdir(join(this.homeDir, "workspaces"));
+      entries = await readdir(join(this.dataDir, "workspaces"));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw err;
@@ -54,7 +54,7 @@ export class FileWorkspaceStore implements WorkspaceStore {
     const out: WorkspaceDef[] = [];
     for (const entry of entries) {
       const workspace = await readYamlFile<WorkspaceDef>(
-        join(this.homeDir, "workspaces", entry, "workspace.yaml"),
+        join(this.dataDir, "workspaces", entry, "workspace.yaml"),
       );
       if (workspace && isValidWorkspaceId(workspace.id)) out.push(workspace);
     }
@@ -63,7 +63,7 @@ export class FileWorkspaceStore implements WorkspaceStore {
 
   async delete(id: string): Promise<void> {
     if (!isValidWorkspaceId(id)) throw new Error(`invalid workspace id "${id}"`);
-    await rm(workspaceDir(this.homeDir, id), {
+    await rm(workspaceDir(this.dataDir, id), {
       recursive: true,
       force: true,
     });

@@ -2,7 +2,7 @@
   "name": "@sikong/workspace",
   "version": "0.0.0",
   "private": true,
-  "description": "Sikong workspace home, workspace registry, and preferences primitives.",
+  "description": "Sikong data-dir, workspace, and coordination primitives.",
   "type": "module",
   "module": "./src/index.ts",
   "types": "./src/index.ts",
@@ -13,8 +13,13 @@
     }
   },
   "scripts": {
+    "cli": "bun ./src/cli/index.ts",
+    "process-runner": "bun ./src/process/runner.ts",
     "typecheck": "tsgo --project tsconfig.json",
     "test": "bun test ./src"
+  },
+  "dependencies": {
+    "agent-loop": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

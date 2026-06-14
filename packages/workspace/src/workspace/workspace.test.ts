@@ -5,30 +5,30 @@ import { join } from "node:path";
 import {
   FileWorkspacePreferencesFactory,
   FileWorkspaceStore,
-  ensureHomeLayout,
+  ensureDataDirLayout,
   isValidWorkspaceId,
   preferencesFile,
-  resolveHomeDir,
+  resolveDataDir,
   taskEventsDir,
   taskProjectionsDir,
   workspaceDir,
   worktreeDir,
   worktreesDir,
-} from "./index";
+} from "../index";
 
 const tmp = () => mkdtemp(join(tmpdir(), "sikong-workspace-"));
 
-describe("workspace home layout", () => {
-  test("resolves home from flag, env, then default", () => {
-    expect(resolveHomeDir({ homeDir: "/tmp/home", env: {} }).source).toBe("flag");
-    expect(resolveHomeDir({ env: { SIKONG_HOME: "/tmp/env-home" } }).dir).toBe("/tmp/env-home");
-    expect(resolveHomeDir({ env: {} }).dir).toContain(".sikong");
+describe("workspace data-dir layout", () => {
+  test("resolves data dir from flag, env, then default", () => {
+    expect(resolveDataDir({ dataDir: "/tmp/data", env: {} }).source).toBe("flag");
+    expect(resolveDataDir({ env: { SIKONG_DATA_DIR: "/tmp/env-data" } }).dir).toBe("/tmp/env-data");
+    expect(resolveDataDir({ env: {} }).dir).toContain(".sikong");
   });
 
-  test("creates the home layout and stable workspace paths", async () => {
+  test("creates the data-dir layout and stable workspace paths", async () => {
     const dir = await tmp();
     try {
-      await ensureHomeLayout(dir);
+      await ensureDataDirLayout(dir);
 
       expect(workspaceDir(dir, "main")).toBe(join(dir, "workspaces", "main"));
       expect(taskEventsDir(dir, "main")).toBe(join(dir, "workspaces", "main", "state", "events"));

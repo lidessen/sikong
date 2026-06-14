@@ -1,0 +1,463 @@
+package daemon
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"sync"
+	"syscall"
+	"time"
+)
+
+type ProcessRunSpec struct {
+	RunID       string            `json:"runId"`
+	WorkspaceID string            `json:"workspaceId"`
+	TaskID      string            `json:"taskId,omitempty"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	TimeoutMS   int64             `json:"timeoutMs,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Stdin       string            `json:"stdin,omitempty"`
+}
+
+type ProcessRunStatus string
+
+const (
+	ProcessRunSucceeded ProcessRunStatus = "succeeded"
+	ProcessRunFailed    ProcessRunStatus = "failed"
+	ProcessRunTimedOut  ProcessRunStatus = "timed_out"
+	ProcessRunCancelled ProcessRunStatus = "cancelled"
+)
+
+type ProcessRunState string
+
+const (
+	ProcessRunRunning  ProcessRunState = "running"
+	ProcessRunFinished ProcessRunState = "finished"
+)
+
+type ProcessRunResult struct {
+	RunID       string            `json:"runId"`
+	WorkspaceID string            `json:"workspaceId"`
+	TaskID      string            `json:"taskId,omitempty"`
+	Status      ProcessRunStatus  `json:"status"`
+	Command     string            `json:"command"`
+	Args        []string          `json:"args"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	ExitCode    *int              `json:"exitCode,omitempty"`
+	Signal      string            `json:"signal,omitempty"`
+	Stdout      string            `json:"stdout"`
+	Stderr      string            `json:"stderr"`
+	StartedAt   string            `json:"startedAt"`
+	FinishedAt  string            `json:"finishedAt"`
+	DurationMS  int64             `json:"durationMs"`
+	TimedOut    bool              `json:"timedOut,omitempty"`
+	Cancelled   bool              `json:"cancelled,omitempty"`
+}
+
+type ProcessRunSnapshot struct {
+	RunID       string            `json:"runId"`
+	WorkspaceID string            `json:"workspaceId"`
+	TaskID      string            `json:"taskId,omitempty"`
+	State       ProcessRunState   `json:"state"`
+	Spec        ProcessRunSpec    `json:"spec"`
+	Result      *ProcessRunResult `json:"result,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	StartedAt   string            `json:"startedAt"`
+	FinishedAt  string            `json:"finishedAt,omitempty"`
+}
+
+type ProcessRunner struct {
+	sem chan struct{}
+}
+
+type ProcessRunnerOptions struct {
+	MaxConcurrent int
+}
+
+func NewProcessRunner(opts ProcessRunnerOptions) *ProcessRunner {
+	max := opts.MaxConcurrent
+	if max <= 0 {
+		max = 1
+	}
+	return &ProcessRunner{sem: make(chan struct{}, max)}
+}
+
+func (r *ProcessRunner) Run(ctx context.Context, spec ProcessRunSpec) (ProcessRunResult, error) {
+	if err := ValidateProcessRunSpec(spec); err != nil {
+		return ProcessRunResult{}, err
+	}
+
+	if err := r.acquire(ctx); err != nil {
+		return ProcessRunResult{}, err
+	}
+	defer r.release()
+
+	return runProcess(ctx, spec)
+}
+
+func ValidateProcessRunSpec(spec ProcessRunSpec) error {
+	if spec.RunID == "" {
+		return errors.New("process runId must be non-empty")
+	}
+	if spec.WorkspaceID == "" {
+		return errors.New("process workspaceId must be non-empty")
+	}
+	if spec.Command == "" {
+		return errors.New("process command must be non-empty")
+	}
+	if spec.TimeoutMS < 0 {
+		return errors.New("process timeoutMs must be non-negative")
+	}
+	return nil
+}
+
+func (r *ProcessRunner) acquire(ctx context.Context) error {
+	select {
+	case r.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *ProcessRunner) release() {
+	<-r.sem
+}
+
+func runProcess(ctx context.Context, spec ProcessRunSpec) (ProcessRunResult, error) {
+	started := time.Now()
+	runCtx := ctx
+	cancel := func() {}
+	timedOut := false
+	if spec.TimeoutMS > 0 {
+		runCtx, cancel = context.WithTimeoutCause(
+			ctx,
+			time.Duration(spec.TimeoutMS)*time.Millisecond,
+			context.DeadlineExceeded,
+		)
+		defer cancel()
+	}
+
+	cmd := exec.CommandContext(runCtx, spec.Command, spec.Args...)
+	if spec.Cwd != "" {
+		cmd.Dir = spec.Cwd
+	}
+	cmd.Env = mergeEnv(os.Environ(), spec.Env)
+	if spec.Stdin != "" {
+		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	finished := time.Now()
+	if spec.TimeoutMS > 0 && errors.Is(context.Cause(runCtx), context.DeadlineExceeded) {
+		timedOut = true
+	}
+	cancelled := !timedOut && errors.Is(ctx.Err(), context.Canceled)
+
+	status := ProcessRunSucceeded
+	var exitCode *int
+	var signal string
+	if cmd.ProcessState != nil {
+		code := cmd.ProcessState.ExitCode()
+		exitCode = &code
+		if code != 0 {
+			status = ProcessRunFailed
+		}
+		if cmd.ProcessState.Sys() != nil {
+			signal = processSignal(cmd.ProcessState)
+		}
+	} else if err != nil {
+		status = ProcessRunFailed
+	}
+	if timedOut {
+		status = ProcessRunTimedOut
+	} else if cancelled {
+		status = ProcessRunCancelled
+	}
+
+	result := ProcessRunResult{
+		RunID:       spec.RunID,
+		WorkspaceID: spec.WorkspaceID,
+		TaskID:      spec.TaskID,
+		Status:      status,
+		Command:     spec.Command,
+		Args:        append([]string(nil), spec.Args...),
+		Cwd:         spec.Cwd,
+		Labels:      cloneStringMap(spec.Labels),
+		ExitCode:    exitCode,
+		Signal:      signal,
+		Stdout:      stdout.String(),
+		Stderr:      stderr.String(),
+		StartedAt:   started.UTC().Format(time.RFC3339Nano),
+		FinishedAt:  finished.UTC().Format(time.RFC3339Nano),
+		DurationMS:  maxInt64(0, finished.Sub(started).Milliseconds()),
+		TimedOut:    timedOut,
+		Cancelled:   cancelled,
+	}
+
+	if err != nil && !isExitLikeError(err) && !timedOut && !cancelled {
+		return result, fmt.Errorf("run process %q: %w", spec.RunID, err)
+	}
+	return result, nil
+}
+
+func mergeEnv(base []string, overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+	env := append([]string(nil), base...)
+	for key, value := range overrides {
+		env = append(env, key+"="+value)
+	}
+	return env
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func isExitLikeError(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func processSignal(state *os.ProcessState) string {
+	if status, ok := state.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return status.Signal().String()
+	}
+	return ""
+}
+
+type ProcessSupervisor struct {
+	runner *ProcessRunner
+	mu     sync.Mutex
+	runs   map[string]*processRunRecord
+}
+
+type processRunRecord struct {
+	snapshot ProcessRunSnapshot
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+func NewProcessSupervisor(opts ProcessRunnerOptions) *ProcessSupervisor {
+	return &ProcessSupervisor{
+		runner: NewProcessRunner(opts),
+		runs:   map[string]*processRunRecord{},
+	}
+}
+
+func (s *ProcessSupervisor) Run(ctx context.Context, spec ProcessRunSpec) (ProcessRunResult, error) {
+	result, err := s.runner.Run(ctx, spec)
+	if result.RunID != "" {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		s.mu.Lock()
+		s.runs[result.RunID] = &processRunRecord{
+			snapshot: ProcessRunSnapshot{
+				RunID:       result.RunID,
+				WorkspaceID: result.WorkspaceID,
+				TaskID:      result.TaskID,
+				State:       ProcessRunFinished,
+				Spec:        cloneProcessRunSpec(spec),
+				Result:      &result,
+				Error:       errorString(err),
+				StartedAt:   result.StartedAt,
+				FinishedAt:  now,
+			},
+			done: closedChannel(),
+		}
+		s.mu.Unlock()
+	}
+	return result, err
+}
+
+func (s *ProcessSupervisor) Get(runID string) (ProcessRunResult, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.runs[runID]
+	if !ok || record.snapshot.Result == nil {
+		return ProcessRunResult{}, false
+	}
+	return *record.snapshot.Result, true
+}
+
+func (s *ProcessSupervisor) Start(ctx context.Context, spec ProcessRunSpec) (ProcessRunSnapshot, error) {
+	if err := ValidateProcessRunSpec(spec); err != nil {
+		return ProcessRunSnapshot{}, err
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	record := &processRunRecord{
+		snapshot: ProcessRunSnapshot{
+			RunID:       spec.RunID,
+			WorkspaceID: spec.WorkspaceID,
+			TaskID:      spec.TaskID,
+			State:       ProcessRunRunning,
+			Spec:        cloneProcessRunSpec(spec),
+			StartedAt:   startedAt,
+		},
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+
+	s.mu.Lock()
+	if _, exists := s.runs[spec.RunID]; exists {
+		s.mu.Unlock()
+		cancel()
+		return ProcessRunSnapshot{}, fmt.Errorf("process run %q already exists", spec.RunID)
+	}
+	s.runs[spec.RunID] = record
+	s.mu.Unlock()
+
+	go func() {
+		result, err := s.runner.Run(runCtx, spec)
+		if result.RunID == "" {
+			result = processResultFromStartFailure(spec, record.snapshot.StartedAt, err, runCtx)
+		}
+		finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		s.mu.Lock()
+		record.snapshot.State = ProcessRunFinished
+		record.snapshot.Result = &result
+		record.snapshot.Error = errorString(err)
+		record.snapshot.FinishedAt = finishedAt
+		s.mu.Unlock()
+		cancel()
+		close(record.done)
+	}()
+
+	return s.cloneSnapshot(record.snapshot), nil
+}
+
+func (s *ProcessSupervisor) GetSnapshot(runID string) (ProcessRunSnapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.runs[runID]
+	if !ok {
+		return ProcessRunSnapshot{}, false
+	}
+	return s.cloneSnapshot(record.snapshot), true
+}
+
+func (s *ProcessSupervisor) Wait(ctx context.Context, runID string) (ProcessRunSnapshot, bool, error) {
+	s.mu.Lock()
+	record, ok := s.runs[runID]
+	if !ok {
+		s.mu.Unlock()
+		return ProcessRunSnapshot{}, false, nil
+	}
+	done := record.done
+	s.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ProcessRunSnapshot{}, true, ctx.Err()
+	}
+
+	snapshot, ok := s.GetSnapshot(runID)
+	return snapshot, ok, nil
+}
+
+func (s *ProcessSupervisor) Cancel(runID string) (ProcessRunSnapshot, bool) {
+	s.mu.Lock()
+	record, ok := s.runs[runID]
+	if !ok {
+		s.mu.Unlock()
+		return ProcessRunSnapshot{}, false
+	}
+	if record.snapshot.State == ProcessRunRunning && record.cancel != nil {
+		record.cancel()
+	}
+	snapshot := s.cloneSnapshot(record.snapshot)
+	s.mu.Unlock()
+	return snapshot, true
+}
+
+func (s *ProcessSupervisor) cloneSnapshot(snapshot ProcessRunSnapshot) ProcessRunSnapshot {
+	out := snapshot
+	out.Spec = cloneProcessRunSpec(snapshot.Spec)
+	if snapshot.Result != nil {
+		result := *snapshot.Result
+		result.Args = append([]string(nil), snapshot.Result.Args...)
+		result.Labels = cloneStringMap(snapshot.Result.Labels)
+		out.Result = &result
+	}
+	return out
+}
+
+func cloneProcessRunSpec(spec ProcessRunSpec) ProcessRunSpec {
+	out := spec
+	out.Args = append([]string(nil), spec.Args...)
+	out.Env = cloneStringMap(spec.Env)
+	out.Labels = cloneStringMap(spec.Labels)
+	return out
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func closedChannel() chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
+func processResultFromStartFailure(spec ProcessRunSpec, startedAt string, err error, ctx context.Context) ProcessRunResult {
+	finished := time.Now().UTC().Format(time.RFC3339Nano)
+	status := ProcessRunFailed
+	cancelled := errors.Is(ctx.Err(), context.Canceled)
+	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
+	if cancelled {
+		status = ProcessRunCancelled
+	} else if timedOut {
+		status = ProcessRunTimedOut
+	}
+	return ProcessRunResult{
+		RunID:       spec.RunID,
+		WorkspaceID: spec.WorkspaceID,
+		TaskID:      spec.TaskID,
+		Status:      status,
+		Command:     spec.Command,
+		Args:        append([]string(nil), spec.Args...),
+		Cwd:         spec.Cwd,
+		Labels:      cloneStringMap(spec.Labels),
+		Stdout:      "",
+		Stderr:      errorString(err),
+		StartedAt:   startedAt,
+		FinishedAt:  finished,
+		DurationMS:  0,
+		TimedOut:    timedOut,
+		Cancelled:   cancelled,
+	}
+}

@@ -118,9 +118,6 @@ removeWorkspacePreference({ workspaceId, preferenceId })
 
 createTask({ workspaceId, request, repoPath?, cwd? })
 getTask({ workspaceId?, taskId })
-waitTask({ workspaceId?, taskId, timeout? })
-steerTask({ workspaceId?, taskId, message })
-cancelTask({ workspaceId?, taskId, reason? })
 
 inspectTaskSummary({ workspaceId?, taskId })
 inspectTaskTrace({ workspaceId?, taskId })
@@ -130,6 +127,12 @@ inspectTaskProjection({ workspaceId?, taskId })
 
 The tool schemas should be narrow and typed. Tool results should be structured
 objects that the UI can render into cards, details, or work-log candidates.
+
+Task protocol tools such as plan submission, lead plan acceptance, worker
+terminal result submission, and review decisions are role-specific tools for
+the Task Lead, planner, worker, and reviewer adapters. They should not be mixed
+into the default `Client Agent` surface unless the client agent is explicitly
+running one of those roles.
 
 ## Wait And Monitor
 
@@ -141,6 +144,9 @@ The `Client Agent` waits for a task condition and resumes the current loop with
 a compact terminal or action-required summary.
 
 Use this when the user's current request depends on the task result.
+
+`waitTask`, `steerTask`, and `cancelTask` are deferred client-experience tools,
+not part of the initial implemented command surface.
 
 ### Monitor
 

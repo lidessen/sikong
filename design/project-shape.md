@@ -10,7 +10,7 @@ The current repository combines:
 
 - Go binaries for user/process entrypoints.
 - Bun workspace packages for agent/runtime and coordination logic.
-- Local durable state under a Sikong home directory.
+- Local durable state under a Sikong data dir.
 
 This document defines the intended project shape. Workspace management and the
 coordination engine are defined separately in `workspace-management.md` and
@@ -34,8 +34,9 @@ worker assignment, workspace context, event storage, inspection views, and wake
 scheduling.
 
 The Go layer owns process concerns: CLI entrypoints, daemon lifecycle, local IPC
-or API serving, signal handling, and host integration. It should not duplicate
-workflow reducers or agent runtime adapters.
+or API serving, signal handling, child-process supervision, concurrency limits,
+and host integration. It should not duplicate workflow reducers or agent
+runtime adapters.
 
 ## Repository Layout
 
@@ -71,14 +72,14 @@ binary, npm launcher history, and the coordination library.
 
 ```text
 packages/workspace/src/
-  coordination/           # durable task graph, commands, reducer, scheduler
-  store/                  # event, projection, chronicle, workspace, worker stores
-  home/                   # Sikong home layout, config, and locking
-  workspace/              # Workspace model, registry, resolution, and preferences
-  worker/                 # Worker model, staffing, health, pooling
-  engine/                 # wake runner and command tool orchestration
-  runtime/                # Worker/run context -> AgentLoop, cwd, tools, hooks
-  inspect/                # trace, overview, inspect wait read models
+  data-dir/               # local durable data-dir layout, YAML helpers, locking
+  workspace/              # WorkspaceDef registry and workspace preferences
+  coordination/           # PlanDef, task events, reducer, event/projection stores
+  commands/               # shared command handlers for CLI and typed tools
+  runtime/                # worker-run core and preset wrappers
+  orchestration/          # pure projection -> next preset action planning
+  process/                # generic ProcessRunSpec subprocess runner
+  cli/                    # external-agent-facing CLI adapter
 ```
 
 The coordination model is finalized at the high level in
@@ -89,6 +90,10 @@ through `agent-loop.runTask`.
 The important shape decision is that Sikong owns a fixed multi-worker
 coordination protocol. It is not the old arbitrary workflow/stage/guard DSL and
 not a copy of `agent-loop.runTask`.
+
+Planner, executor, and verifier files may exist only as preset wrappers over
+the same worker-run core. They assemble prompt, skills, tools, and context; they
+do not define agent kinds, task roles, or independent state machines.
 
 ## What Moves From sikong-old
 
@@ -119,18 +124,46 @@ Defer these until the coordination engine is stable:
 
 ## Process Boundary
 
-The first implementation can let the Go CLI/daemon call a Bun workspace command
-or long-running TypeScript service. That is an implementation detail.
+The Go CLI and Go daemon have different process shapes.
 
-The design constraint is stronger:
+The CLI may use one-shot Bun command processes:
+
+```text
+one Go CLI invocation -> one Bun command process -> one command handler result
+```
+
+The daemon must not use a single long-running Bun engine that serializes all
+work. The daemon is a Go supervisor over many generic child processes:
+
+```text
+one Go daemon -> many Bun child processes
+```
+
+This is a design constraint, not just an implementation detail. It exists to
+avoid the previous Bun-singleton bottleneck for concurrent agent work.
+
+The daemon does not understand planner, worker, reviewer, or Task Lead
+orchestration. The TypeScript workspace engine decides which process to request
+next and interprets process results into domain events. Go only supervises
+processes and resources.
+
+The Bun workspace package provides the generic process-runner entrypoint that
+Go can start as a child process. The entrypoint executes one `ProcessRunSpec`
+and returns one structured `ProcessRunResult`.
+
+The broader ownership constraints are:
 
 - Go may host and supervise.
+- Go owns child process lifecycle, cancellation, timeout, and concurrency.
 - TypeScript workspace code owns coordination semantics.
 - `agent-loop` owns runtime adapters and agent execution.
 
 If a later implementation needs a persistent local service, define a small
 structured API between Go and the workspace engine rather than importing
-coordination semantics into Go.
+coordination semantics into Go. That service must still preserve concurrent
+runtime execution instead of forcing all planner/worker/reviewer runs through
+one serialized Bun instance. The service API should expose generic process
+supervision, not agent role orchestration.
 
 ## Caller Surfaces
 
@@ -161,7 +194,7 @@ Sikong task role managed by the engine.
 
 ## State Layout
 
-The default durable home should remain outside source checkouts:
+The default durable data dir should remain outside source checkouts:
 
 ```text
 ~/.sikong/
@@ -182,7 +215,7 @@ can be added later if query pressure justifies it.
 1. Add design docs for the project shape and coordination engine.
 2. Create `packages/workspace` with only pure model/reducer tests.
 3. Add file-backed stores.
-4. Add home, workspace, preferences, and worker registries.
+4. Add data-dir, workspace, preferences, and worker registries.
 5. Add a minimal wake runner over `agent-loop.run`.
 6. Add inspect/trace read models.
 7. Wire the Go CLI to the workspace package.

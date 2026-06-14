@@ -72,7 +72,7 @@ should fail with a structured error.
 ## Global Flags
 
 ```text
---home <path>          Override the Sikong home directory.
+--data-dir <path>      Override the Sikong data dir.
 --workspace <id>       Select a workspace for workspace-scoped commands.
 --json                 Force JSON output.
 --text                 Force human-readable output.
@@ -177,3 +177,23 @@ through task-level commands and inspect views.
 
 CLI commands must call shared command handlers. They must not implement
 workspace storage, task reduction, scheduling, or runtime execution directly.
+
+The first implementation uses the Go `cmd/sikong` binary as a process adapter
+that delegates to the TypeScript CLI entrypoint in `packages/workspace`. The
+TypeScript adapter calls shared command handlers; the Go layer does not own
+coordination semantics.
+
+This CLI adapter is intentionally one-shot:
+
+```text
+one `sikong ...` invocation -> one Bun command process -> one command result
+```
+
+That one-shot shape is acceptable for external-agent CLI use and does not define
+the daemon execution model. The daemon must supervise many generic child
+processes for concurrent runtime-backed execution; it must not funnel
+long-lived work through a single Bun instance.
+
+The daemon must not branch on agent role concepts such as planner, worker, or
+reviewer. Those orchestration decisions belong to the TypeScript workspace
+engine and Agent Lead.
