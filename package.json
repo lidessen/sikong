@@ -10,14 +10,14 @@
     "build:go": "go build -o dist/sikong ./cmd/sikong && go build -o dist/sikongd ./cmd/sikongd",
     "check": "bun run check:go && bun run typecheck && bun run lint && bun run fmt:check && bun run check:js",
     "check:go": "go test ./...",
-    "check:js": "bun --filter agent-loop test",
+    "check:js": "bun --filter agent-loop test && bun --filter @sikong/workspace test",
     "dev:cli": "go run ./cmd/sikong",
     "dev:daemon": "go run ./cmd/sikongd",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "typecheck": "tsgo --project tsconfig.json && bun --filter agent-loop typecheck"
+    "typecheck": "tsgo --project tsconfig.json && bun --filter agent-loop typecheck && bun --filter @sikong/workspace typecheck"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

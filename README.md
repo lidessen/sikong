@@ -12,6 +12,7 @@ Sikong is initialized as a Go CLI and daemon project with a Bun workspace monore
 ├── internal/     # private Go packages shared by commands
 └── packages/     # Bun workspaces
     ├── agent-loop/
+    └── workspace/
 ```
 
 ## Setup
@@ -42,5 +43,11 @@ bun run fmt:check
 ```bash
 bun run build
 ```
+
+## Design
+
+Start with [design/README.md](design/README.md). The current rewrite treats old
+`sikong-old/packages/sikong` code as source material, not as a package to copy
+back wholesale.
 
 This project was initialized with `go mod init sikong` and `bun init -y`, then configured as a Bun workspaces monorepo.

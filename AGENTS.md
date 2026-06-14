@@ -17,7 +17,6 @@ Keep Go command wiring in `cmd/`, reusable private logic in `internal/`, and Jav
 - `bun install` installs Bun workspace dependencies and updates `bun.lock`.
 - `bun run dev:cli` runs the Go CLI with `go run ./cmd/sikong`.
 - `bun run dev:daemon` runs the daemon with `go run ./cmd/sikongd`.
-- `bun run dev:tooling` runs the `@sikong/tooling` workspace entrypoint.
 - `bun run check` runs Go tests, TypeScript checks, Oxlint, Oxfmt, and agent-loop tests.
 - `bun --filter agent-loop test` runs the copied agent-loop package tests directly.
 - `bun run typecheck` runs TypeScript Native Preview through `tsgo`.
@@ -37,7 +36,7 @@ TypeScript uses Bun with strict `tsconfig.json` settings and TypeScript Native P
 
 Go tests use the standard `go test` framework. Place tests beside implementation files with the `_test.go` suffix.
 
-Bun tests use `bun:test`. Name test files `*.test.ts` and keep them close to the code they cover, as in `packages/tooling/src/index.test.ts`.
+Bun tests use `bun:test`. Name test files `*.test.ts` and keep them close to the code they cover.
 
 Run `bun run check` before handing off changes.
 
