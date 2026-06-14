@@ -149,6 +149,12 @@ The first implementation can keep the allocation policy simple:
 workspaces/<workspaceId>/worktrees/<taskId>/
 ```
 
+This task-level policy is implemented for `task create --repo`: Sikong resolves
+the git repository root, creates a detached workspace-owned worktree at the task
+path, and stores that worktree as `runtime.cwd` on the created task. The source
+repository remains a reference for worktree creation and is not used as the
+agent cwd.
+
 If later stages need multiple concurrent writable workers for the same task, the
 runtime can allocate run-scoped worktrees beneath that task:
 
@@ -362,4 +368,5 @@ sikong task create --workspace <id> "<request>"
 4. Add tests for add/list/get/remove and preference read/write/append.
 5. Add workspace resolution from explicit id.
 6. Add workspace-owned worktree allocation from runtime-provided git context.
+   _(implemented for task-level `--repo`)_
 7. Thread `workspaceId` into task creation and coordination events.

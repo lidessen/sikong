@@ -5,3 +5,5 @@ export * from "./commands";
 export * from "./process";
 export * from "./runtime";
 export * from "./orchestration";
+export * from "./tools";
+export * from "./client-agent";

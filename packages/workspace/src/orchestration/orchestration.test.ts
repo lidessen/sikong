@@ -15,16 +15,23 @@ import {
   startWorkerRun,
   submitPlan,
   type CommandContext,
+  type CommandResult,
 } from "../commands";
 import type { TaskProjection } from "../coordination";
 import { runProcess } from "../process";
 import {
   createOrchestrationProcessSpec,
   executeOrchestrationAction,
+  executeOrchestrationActionProcess,
   planNextOrchestrationAction,
+  runOrchestrationUntilWait,
+  runOrchestrationRunner,
   startOrchestrationProcess,
   toSerializableOrchestrationAction,
+  type OrchestrationAction,
   type OrchestrationInput,
+  type OrchestrationExecutionResult,
+  type OrchestrationExecutionRuntime,
 } from "./index";
 
 const tmp = () => mkdtemp(join(tmpdir(), "sikong-orchestration-"));
@@ -154,9 +161,149 @@ describe("orchestration tick", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("starts parallel stage workers up to workerCount before review", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Run parallel workers.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const submitted = await submitPlan(context, {
+        taskId: created.data.taskId,
+        stages: [
+          {
+            title: "Implement",
+            objective: "Use two workers for the same stage.",
+            acceptance: ["Both worker results are present."],
+            workerCount: 2,
+          },
+        ],
+      });
+      if (!submitted.ok) throw new Error("plan submit failed");
+      const accepted = await acceptPlan(context, {
+        taskId: created.data.taskId,
+        planId: submitted.data.plan.id,
+        version: submitted.data.plan.version,
+        report: "Accepted.",
+      });
+      if (!accepted.ok) throw new Error("plan accept failed");
+
+      expect(next(accepted.data.projection)).toMatchObject({
+        type: "start_stage_worker",
+      });
+      const first = await startWorkerRun(context, { taskId: created.data.taskId });
+      if (!first.ok) throw new Error("first worker start failed");
+      const afterFirstStart = await getTask(context, { taskId: created.data.taskId });
+      if (!afterFirstStart.ok) throw new Error("task get failed");
+      expect(next(afterFirstStart.data.projection)).toMatchObject({
+        type: "start_stage_worker",
+      });
+
+      const second = await startWorkerRun(context, { taskId: created.data.taskId });
+      if (!second.ok) throw new Error("second worker start failed");
+      const afterSecondStart = await getTask(context, { taskId: created.data.taskId });
+      if (!afterSecondStart.ok) throw new Error("task get failed");
+      expect(next(afterSecondStart.data.projection)).toMatchObject({
+        type: "await_worker_results",
+        runningRuns: 2,
+        targetRuns: 2,
+      });
+
+      const firstDone = await completeWorkerRun(context, {
+        taskId: created.data.taskId,
+        runId: first.data.runId,
+        summary: "First worker done.",
+      });
+      if (!firstDone.ok) throw new Error("first worker complete failed");
+      expect(next(firstDone.data.projection)).toMatchObject({
+        type: "await_worker_results",
+        runningRuns: 1,
+        targetRuns: 2,
+      });
+
+      const secondDone = await completeWorkerRun(context, {
+        taskId: created.data.taskId,
+        runId: second.data.runId,
+        summary: "Second worker done.",
+      });
+      if (!secondDone.ok) throw new Error("second worker complete failed");
+      expect(next(secondDone.data.projection)).toMatchObject({
+        type: "start_stage_review",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("orchestration subprocess runner", () => {
+  test("uses runtimeAssembly config without an external runtime module", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Plan through runtime assembly.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+
+      const requestPath = join(dir, "orchestration-request.json");
+      await writeFile(
+        requestPath,
+        JSON.stringify({
+          context: { dataDir: dir, workspaceId: "sikong" },
+          action: toSerializableOrchestrationAction(next(created.data.projection)),
+          runtimeAssembly: {
+            backend: {
+              name: "mock",
+              options: {
+                callTool: {
+                  name: "submit_plan",
+                  args: {
+                    stages: [
+                      {
+                        title: "Implement",
+                        objective: "Complete through runtime assembly.",
+                        acceptance: ["Plan is submitted."],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            toolProfiles: {
+              planningProtocol: "sikong-planning-protocol",
+            },
+          },
+        }),
+      );
+      const requestText = await Bun.file(requestPath).text();
+      expect(keysOf(JSON.parse(requestText))).not.toContain("tools");
+      expect(keysOf(JSON.parse(requestText))).not.toContain("role");
+      expect(keysOf(JSON.parse(requestText))).not.toContain("kind");
+
+      const output = await runOrchestrationRunner(["--spec", requestPath]);
+      expect(output).toMatchObject({
+        ok: true,
+        data: {
+          resultType: "loop_completed",
+          actionType: "start_planning_worker",
+        },
+      });
+
+      const fresh = await getTask(context, { taskId: created.data.taskId });
+      if (!fresh.ok) throw new Error("task get failed");
+      expect(fresh.data.projection.status).toBe("plan_submitted");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("executes a stage worker through a daemon process spec boundary", async () => {
     const dir = await tmp();
     try {
@@ -284,6 +431,242 @@ describe("orchestration subprocess runner", () => {
       expect(Object.values(fresh.data.projection.workerRuns)).toContainEqual(
         expect.objectContaining({ status: "completed" }),
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("orchestration process executor", () => {
+  test("executes one action through a daemon process client", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Execute through process client.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const action = next(created.data.projection);
+      if (action.type !== "start_planning_worker") throw new Error("expected planning action");
+
+      let requestJson: unknown;
+      const startedSpecs: unknown[] = [];
+      const result = await executeOrchestrationActionProcess({
+        ctx: context,
+        action,
+        runId: "run_process_action",
+        packageCwd: join(import.meta.dir, "../.."),
+        runtimeAssembly: {
+          backend: "mock",
+          toolProfiles: { planningProtocol: "sikong-planning-protocol" },
+        },
+        client: {
+          async startProcess(spec) {
+            startedSpecs.push(spec);
+            const requestPath = spec.args?.[2];
+            if (!requestPath) throw new Error("request path missing");
+            requestJson = JSON.parse(await Bun.file(requestPath).text());
+            return {
+              runId: spec.runId,
+              workspaceId: spec.workspaceId,
+              taskId: spec.taskId,
+              state: "running",
+              spec,
+              startedAt: "2026-06-14T00:00:00Z",
+            };
+          },
+          async waitProcessRun(runId) {
+            return {
+              runId,
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              state: "finished",
+              spec: startedSpecs[0] as never,
+              startedAt: "2026-06-14T00:00:00Z",
+              finishedAt: "2026-06-14T00:00:01Z",
+              result: {
+                runId,
+                workspaceId: "sikong",
+                taskId: created.data.taskId,
+                status: "succeeded",
+                command: "bun",
+                args: [],
+                stdout:
+                  JSON.stringify({
+                    ok: true,
+                    data: {
+                      resultType: "loop_completed",
+                      actionType: "start_planning_worker",
+                      loopResult: { status: "completed" },
+                    },
+                  }) + "\n",
+                stderr: "",
+                exitCode: 0,
+                startedAt: "2026-06-14T00:00:00Z",
+                finishedAt: "2026-06-14T00:00:01Z",
+                durationMs: 1,
+              },
+            };
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        data: { resultType: "loop_completed", actionType: "start_planning_worker" },
+      });
+      expect(startedSpecs).toHaveLength(1);
+      expect(startedSpecs[0]).toMatchObject({
+        runId: "run_process_action",
+        workspaceId: "sikong",
+        taskId: created.data.taskId,
+        command: "bun",
+        cwd: join(import.meta.dir, "../.."),
+      });
+      expect(requestJson).toMatchObject({
+        context: { dataDir: dir, workspaceId: "sikong" },
+        action: { type: "start_planning_worker" },
+        runtimeAssembly: {
+          backend: "mock",
+          toolProfiles: { planningProtocol: "sikong-planning-protocol" },
+        },
+      });
+      expect(keysOf(requestJson)).not.toContain("tools");
+      expect(keysOf(requestJson)).not.toContain("role");
+      expect(keysOf(requestJson)).not.toContain("kind");
+      const fresh = await getTask(context, { taskId: created.data.taskId });
+      if (!fresh.ok) throw new Error("task get failed");
+      expect(fresh.data.projection.runtimeProcessRuns).toMatchObject({
+        run_process_action: {
+          processRunId: "run_process_action",
+          actionType: "start_planning_worker",
+          status: "finished",
+          processStatus: "succeeded",
+          exitCode: 0,
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("orchestration driver", () => {
+  test("runs non-lead actions until plan decision is required", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Drive planning to lead decision.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+
+      const driven = await runOrchestrationUntilWait({
+        ctx: context,
+        taskId: created.data.taskId,
+        buildInput: input,
+        executeAction: async (runCtx, action, runtime) => {
+          if (action.type === "start_planning_worker") {
+            const submitted = await submitPlan(runCtx, {
+              taskId: action.spec.taskId,
+              stages: [
+                {
+                  title: "Implement",
+                  objective: "Drive to plan submitted.",
+                  acceptance: ["Plan decision is required."],
+                },
+              ],
+            });
+            if (!submitted.ok) return submitted;
+            return loopCompleted(action.type);
+          }
+          return await executeOrchestrationAction(runCtx, action, runtime);
+        },
+      });
+
+      expect(driven).toMatchObject({
+        ok: true,
+        data: {
+          stopReason: "waiting",
+          projection: { status: "plan_submitted" },
+          steps: [
+            { action: { type: "start_planning_worker" } },
+            { action: { type: "await_plan_decision" } },
+          ],
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runs stage execution and reviews until final lead decision is required", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Drive stage to final decision.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const submitted = await submitPlan(context, {
+        taskId: created.data.taskId,
+        stages: [
+          {
+            title: "Implement",
+            objective: "Complete the driven stage.",
+            acceptance: ["Final recommendation exists."],
+          },
+        ],
+      });
+      if (!submitted.ok) throw new Error("plan submit failed");
+      const accepted = await acceptPlan(context, {
+        taskId: created.data.taskId,
+        planId: submitted.data.plan.id,
+        version: submitted.data.plan.version,
+        report: "Accepted.",
+      });
+      if (!accepted.ok) throw new Error("plan accept failed");
+
+      const driven = await runOrchestrationUntilWait({
+        ctx: context,
+        taskId: created.data.taskId,
+        buildInput: input,
+        runtime: {
+          runTask: async (taskInput: TaskInput) => ({
+            status: "completed",
+            rounds: 1,
+            report: `Completed ${taskInput.goal}`,
+            timeline: [],
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          }),
+        },
+        executeAction: async (runCtx, action, runtime) =>
+          await executeDrivenStage(runCtx, action, runtime),
+      });
+
+      expect(driven).toMatchObject({
+        ok: true,
+        data: {
+          stopReason: "waiting",
+          projection: {
+            status: "reviewing",
+            finalReview: { status: "recommended", recommendation: "accept" },
+          },
+          steps: [
+            { action: { type: "start_stage_worker" } },
+            { action: { type: "start_stage_review" } },
+            { action: { type: "start_stage_verification_worker" } },
+            { action: { type: "start_final_verification_worker" } },
+            { action: { type: "await_final_decision" } },
+          ],
+        },
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -421,6 +804,51 @@ function input(projection: TaskProjection): OrchestrationInput {
       executionTools: tool("edit_file"),
     },
     workerTaskInput: { loop: fakeLoop },
+  };
+}
+
+async function executeDrivenStage(
+  runCtx: CommandContext,
+  action: OrchestrationAction,
+  runtime: OrchestrationExecutionRuntime,
+): Promise<CommandResult<OrchestrationExecutionResult>> {
+  if (action.type === "start_stage_verification_worker") {
+    const accepted = await acceptStageReview(runCtx, {
+      taskId: action.spec.taskId,
+      reviewId: action.reviewId,
+      report: "Stage accepted.",
+    });
+    if (!accepted.ok) return accepted;
+    return loopCompleted(action.type);
+  }
+
+  if (action.type === "start_final_verification_worker") {
+    const recommended = await recommendFinalReview(runCtx, {
+      taskId: action.spec.taskId,
+      reviewId: action.reviewId,
+      recommendation: "accept",
+      report: "Final result is acceptable.",
+    });
+    if (!recommended.ok) return recommended;
+    return loopCompleted(action.type);
+  }
+
+  return await executeOrchestrationAction(runCtx, action, runtime);
+}
+
+function loopCompleted(
+  actionType:
+    | "start_planning_worker"
+    | "start_stage_verification_worker"
+    | "start_final_verification_worker",
+): CommandResult<OrchestrationExecutionResult> {
+  return {
+    ok: true,
+    data: {
+      resultType: "loop_completed",
+      actionType,
+      loopResult: { status: "completed" },
+    },
   };
 }
 

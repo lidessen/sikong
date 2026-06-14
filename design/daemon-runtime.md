@@ -79,6 +79,7 @@ POST /process-runs
 GET  /process-runs/:runId
 GET  /process-runs/:runId/wait?timeoutMs=<ms>
 POST /process-runs/:runId/cancel
+POST /shutdown
 ```
 
 All process endpoints return generic process snapshots. A snapshot can be
@@ -131,6 +132,12 @@ If TypeScript needs to start a runtime-backed run, it asks the Go daemon to
 start a generic process using a `ProcessRunSpec`. TypeScript then interprets the
 process result and appends domain events. The daemon returns process facts; it
 does not append planner, worker, or review domain events by itself.
+
+The TypeScript orchestration driver may repeatedly load projection state, plan
+the next action, and request runtime-backed process runs until it reaches a
+lead wait, worker-results wait, terminal state, blocked state, or action
+budget. That driver remains a TypeScript client of the daemon process API; it
+does not move orchestration semantics into Go.
 
 The Bun workspace package also provides a standalone process runner entrypoint:
 
@@ -209,13 +216,15 @@ Item 2 is implemented in the Bun workspace package.
 Items 3 and 4 are implemented in `internal/daemon` as a generic process
 runner/supervisor.
 Item 5 is implemented in `internal/daemon` as a small process-only HTTP API.
+The API includes `/health` for status checks and `/shutdown` for graceful
+daemon process-control shutdown.
 The TypeScript process client is implemented in the Bun workspace package.
 Item 6 is implemented as a process boundary: the TypeScript orchestration
 action executor can run injected loop/task primitives and command handlers, and
 `src/orchestration/runner.ts` can execute a serialized runner request inside a
 daemon-managed Bun child process. The request JSON carries data only. Live
 tools, loop factories, and runtime-specific permissions are assembled inside
-the child process by a runtime module or future named registry.
+the child process by a runtime module or the named runtime assembly registry.
 The serializable runner request explicitly strips executable fields such as
 tools, skills, MCP servers, hooks, loop factories, and `runTask`.
 
@@ -226,7 +235,37 @@ TypeScript orchestration
   -> write runner request JSON
   -> create generic ProcessRunSpec
   -> daemon starts `bun ./src/orchestration/runner.ts --spec <request>`
-  -> runner loads runtime module
+  -> runner loads external runtime module or data-only runtimeAssembly config
   -> runner calls executeOrchestrationAction
   -> command handlers append task events when the action requires it
+  -> process-backed executor parses the runner output envelope
 ```
+
+The default runtime assembly registry provides the structural boundary, with
+agent-loop backend names (`mock`, `ai-sdk`, `claude-code`, `codex`, and
+`cursor`) plus Sikong's protocol profiles for plan submission, stage review,
+and final review.
+
+Runtime assembly also applies task runtime cwd and adapter-native permission
+defaults inside the Bun child process:
+
+- `claude-code`: set `cwd` and `allowedPaths` from task runtime cwd when not
+  supplied by caller options;
+- `codex`: set `cwd`, default `fullAuto: true`, and default
+  `sandbox: "workspace-write"` when caller options do not override them;
+- `cursor`: set `cwd` and default `sandboxEnabled: true` when caller options do
+  not override them;
+- AI SDK: expose explicit `ai-sdk-local-inspection` and
+  `ai-sdk-local-execution` tool profiles because AI SDK needs a tool bundle.
+
+The Go daemon still sees only a generic process spec and process result.
+The TypeScript process-backed action executor treats stdout as the runner's
+structured transport envelope only; task results still come from protocol tools
+and command handlers inside the runner process.
+It records runtime process start and finish facts in the task log so a separate
+`task cancel` command can cancel daemon processes that are still running. These
+facts remain process metadata and do not imply task success or failure.
+
+The CLI `task drive` command is an adapter over this TypeScript driver and
+process-backed action executor. It does not add daemon scheduling semantics; it
+only calls the same engine APIs an embedded tool surface can call.

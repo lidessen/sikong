@@ -21,6 +21,12 @@ durable task state.
 Workspace directories are Sikong state namespaces, not agent execution
 directories. Runtime must provide an agent cwd for each run. For git work, that
 cwd should be a workspace-owned worktree, not the resolved source repository.
+The initial task-level allocation is `workspaces/<workspaceId>/worktrees/<taskId>/`
+when a task is created with a git `repoPath`.
+Runtime assembly resolves default adapter cwd and permissions from that task
+runtime cwd. AI SDK uses explicit local inspection/execution tool profiles;
+Claude Code, Codex, and Cursor should use their adapter-native sandbox and
+permission surfaces.
 
 ## Non-Goals
 
@@ -116,6 +122,23 @@ Final review is separated from stage review because a sequence of accepted
 stages can still fail the user's overall request. The final reviewer provides an
 independent recommendation, while the lead remains the final authority.
 
+## Engine Loop
+
+The TypeScript orchestration driver is the repeatable execution loop:
+
+```text
+load durable projection
+  -> plan next action from projection
+  -> execute that action
+  -> reload durable projection
+  -> continue until wait / terminal / blocked / maxActions
+```
+
+This loop is intentionally stateless after it returns. Progress lives in the
+task event log and projection, not in a long-lived in-memory scheduler. The Go
+daemon may supervise subprocesses, but it does not decide which orchestration
+action comes next.
+
 ## Plan Lifecycle
 
 Planning is lead-initiated and planner-produced:
@@ -156,21 +179,23 @@ type PlanStageDef = {
   title: string;
   objective: string;
   acceptance: string[];
+  workerCount?: number;
 };
 ```
 
 Field rationale:
 
-| Field                     | Required | Owner   | Why it exists                                                  |
-| ------------------------- | -------- | ------- | -------------------------------------------------------------- |
-| `PlanDef.id`              | yes      | engine  | Stable reference for events, review decisions, and inspection. |
-| `PlanDef.version`         | yes      | engine  | Distinguishes rejected and revised plans under the same task.  |
-| `PlanDef.summary`         | no       | planner | Human-readable orientation for lead/reviewer/inspect views.    |
-| `PlanDef.stages`          | yes      | planner | Ordered coarse work phases. Must be non-empty.                 |
-| `PlanStageDef.id`         | yes      | engine  | Stable reference for stage events and worker assignments.      |
-| `PlanStageDef.title`      | yes      | planner | Short display label for traces and inspection.                 |
-| `PlanStageDef.objective`  | yes      | planner | The stage's execution target for assigned workers.             |
-| `PlanStageDef.acceptance` | yes      | planner | The review rubric for advancing out of the stage.              |
+| Field                      | Required | Owner   | Why it exists                                                                  |
+| -------------------------- | -------- | ------- | ------------------------------------------------------------------------------ |
+| `PlanDef.id`               | yes      | engine  | Stable reference for events, review decisions, and inspection.                 |
+| `PlanDef.version`          | yes      | engine  | Distinguishes rejected and revised plans under the same task.                  |
+| `PlanDef.summary`          | no       | planner | Human-readable orientation for lead/reviewer/inspect views.                    |
+| `PlanDef.stages`           | yes      | planner | Ordered coarse work phases. Must be non-empty.                                 |
+| `PlanStageDef.id`          | yes      | engine  | Stable reference for stage events and worker assignments.                      |
+| `PlanStageDef.title`       | yes      | planner | Short display label for traces and inspection.                                 |
+| `PlanStageDef.objective`   | yes      | planner | The stage's execution target for assigned workers.                             |
+| `PlanStageDef.acceptance`  | yes      | planner | The review rubric for advancing out of the stage.                              |
+| `PlanStageDef.workerCount` | no       | planner | Number of worker runs the engine should start for this stage. Defaults to `1`. |
 
 The planner-facing tool input does not include engine-owned fields:
 
@@ -181,11 +206,14 @@ submit_plan({
     title: string;
     objective: string;
     acceptance: string[];
+    workerCount?: number;
   }>;
 });
 ```
 
 The engine assigns `id`, `version`, and stage ids when recording the plan.
+`workerCount` is optional and must be a positive integer. Omitted or `1` means
+serial execution for that stage.
 
 ## Lead Tools
 
@@ -227,6 +255,11 @@ Accepted plans execute stages in order.
 Within one stage, the engine may run one or more worker runs concurrently. This
 is the key difference from `agent-loop.runTask`: Sikong can coordinate multiple
 workers against the same stage and persist their outputs.
+
+The initial policy is intentionally small: the current stage declares
+`workerCount`, the engine starts worker runs until that count has been reached,
+waits for those runs to end, and then starts stage review over the accumulated
+terminal results. Workers still do not transition stages themselves.
 
 Each worker run:
 
@@ -354,6 +387,9 @@ workflow language.
 The terminal task tool call is the source of truth for the worker result stored
 by Sikong. The generic subprocess runner is only transport and supervision; it
 does not define the domain result protocol.
+Runtime process start/finish events are process facts used for inspection and
+cancellation. They do not change worker terminal state and do not replace the
+terminal task tool result.
 
 Sikong owns the durable multi-worker task:
 
@@ -394,6 +430,9 @@ Items 1 through 5 are implemented as the initial coordination core. The current
 runtime core can call an injected `agent-loop.runTask` function and record its
 terminal result through the validated worker result command handlers. Planning,
 execution, and verification are preset wrappers over the same worker-run core,
-not code-level agent roles. The orchestration tick can choose the next preset
-action from projection state, but it does not yet ask the Go daemon to start
-runtime child processes.
+not code-level agent roles. The orchestration tick chooses the next preset
+action from projection state. The orchestration driver can repeatedly execute
+non-lead actions until a wait, terminal, blocked, or action-budget boundary.
+Runtime-backed actions can be executed through daemon-supervised generic Bun
+child processes, while task semantics remain in the TypeScript engine and
+command handlers.

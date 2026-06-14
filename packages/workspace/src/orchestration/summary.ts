@@ -4,6 +4,12 @@ export type OrchestrationActionSummary =
   | { type: "start_planning_worker" }
   | { type: "await_plan_decision"; planId?: string; version?: number }
   | { type: "start_stage_worker"; stageId: string }
+  | {
+      type: "await_worker_results";
+      stageId: string;
+      runningRuns: number;
+      targetRuns: number;
+    }
   | { type: "start_stage_review"; stageId: string }
   | { type: "start_stage_verification_worker"; reviewId: string; stageId: string }
   | { type: "start_final_verification_worker"; reviewId: string }
@@ -41,8 +47,20 @@ function summarizeRunningAction(projection: TaskProjection): OrchestrationAction
   const latestReview = latestStageReview(projection, stageId);
   if (latestReview?.status === "rejected") return { type: "start_stage_worker", stageId };
 
+  const stage = projection.plan?.stages.find((candidate) => candidate.id === stageId);
+  const targetRuns = stageWorkerCount(stage);
+  const allRuns = runsForStage(projection, stageId);
+  if (allRuns.length < targetRuns) return { type: "start_stage_worker", stageId };
+
   const terminalRuns = terminalRunsForStage(projection, stageId);
-  if (terminalRuns.length === 0) return { type: "start_stage_worker", stageId };
+  if (terminalRuns.length < targetRuns) {
+    return {
+      type: "await_worker_results",
+      stageId,
+      runningRuns: allRuns.length - terminalRuns.length,
+      targetRuns,
+    };
+  }
 
   return { type: "start_stage_review", stageId };
 }
@@ -79,9 +97,15 @@ function summarizeReviewingAction(projection: TaskProjection): OrchestrationActi
 }
 
 function terminalRunsForStage(projection: TaskProjection, stageId: string): WorkerRunProjection[] {
-  return Object.values(projection.workerRuns).filter(
-    (run) => run.stageId === stageId && run.status !== "running",
-  );
+  return runsForStage(projection, stageId).filter((run) => run.status !== "running");
+}
+
+function runsForStage(projection: TaskProjection, stageId: string): WorkerRunProjection[] {
+  return Object.values(projection.workerRuns).filter((run) => run.stageId === stageId);
+}
+
+function stageWorkerCount(stage: { workerCount?: number } | undefined): number {
+  return stage?.workerCount && stage.workerCount > 1 ? stage.workerCount : 1;
 }
 
 function latestStageReview(

@@ -3,7 +3,12 @@ import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { TaskInput } from "agent-loop";
 import type { CommandContext, CommandError } from "../commands";
-import type { RunWorkerTaskInput, WorkerRunSpec } from "../runtime";
+import {
+  createRuntimeAssemblyModule,
+  type RunWorkerTaskInput,
+  type RuntimeAssemblyConfig,
+  type WorkerRunSpec,
+} from "../runtime";
 import type { OrchestrationExecutionResult, OrchestrationExecutionRuntime } from "./execute";
 import { executeOrchestrationAction } from "./execute";
 import type { OrchestrationAction } from "./tick";
@@ -50,6 +55,13 @@ export type SerializableOrchestrationAction =
       input: SerializableStageWorkerInput;
     }
   | {
+      type: "await_worker_results";
+      taskId: string;
+      stageId: string;
+      runningRuns: number;
+      targetRuns: number;
+    }
+  | {
       type: "start_stage_review";
       taskId: string;
       workspaceId: string;
@@ -91,6 +103,7 @@ export interface OrchestrationRunnerRequest {
   context: OrchestrationRunnerContext;
   action: SerializableOrchestrationAction;
   runtimeModule?: string;
+  runtimeAssembly?: RuntimeAssemblyConfig;
 }
 
 export type OrchestrationRunnerOutput =
@@ -184,7 +197,9 @@ async function readRequest(argv: readonly string[]): Promise<OrchestrationRunner
 async function loadRuntimeModule(
   request: OrchestrationRunnerRequest,
 ): Promise<OrchestrationRuntimeModule> {
-  if (!request.runtimeModule) return {};
+  if (!request.runtimeModule) {
+    return request.runtimeAssembly ? createRuntimeAssemblyModule(request.runtimeAssembly) : {};
+  }
   const moduleUrl = moduleSpecifierToImport(request.runtimeModule);
   const mod = (await import(moduleUrl)) as OrchestrationRuntimeModule;
   if (!mod.createOrchestrationExecutionRuntime && !mod.hydrateOrchestrationAction) {

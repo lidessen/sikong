@@ -126,9 +126,10 @@ task progress, not UI transcript, and not the client work log.
 ```text
 sikong task create --workspace <workspaceId> --request <text> [--cwd <path>] [--repo <path>]
 sikong task show <taskId> [--workspace <workspaceId>]
-sikong task wait <taskId> [--workspace <workspaceId>] [--timeout <duration>]
+sikong task drive <taskId> [--workspace <workspaceId>] [--backend <name>] [--daemon <url>]
+sikong task wait <taskId> [--workspace <workspaceId>] [--timeout-ms <n>]
 sikong task steer <taskId> --message <text> [--workspace <workspaceId>]
-sikong task cancel <taskId> [--workspace <workspaceId>] [--reason <text>]
+sikong task cancel <taskId> [--workspace <workspaceId>] [--daemon <url>]
 ```
 
 `task create` starts a durable Sikong task. If `--repo` is supplied, runtime may
@@ -138,10 +139,29 @@ is supplied, runtime may use that directory directly for non-git work.
 If no valid runtime cwd can be resolved, task creation should fail rather than
 silently using the workspace directory.
 
+`task drive` asks the TypeScript orchestration driver to keep executing
+non-lead actions until the task reaches a lead wait, worker-results wait,
+terminal state, blocked state, or action budget. Runtime-backed actions run
+through daemon-managed generic process runs. Pure wait/terminal actions are
+handled locally by the TypeScript engine.
+
+`task wait` is read-only polling over the compact task view. It returns when
+the task is waiting for lead input, waiting for worker results, terminal, or
+blocked. It does not start workers, steer running loops, or own scheduling.
+
+`task cancel` cancels daemon runtime processes currently recorded as running
+for the task. It records process cancellation facts back into the task event
+log. It does not mark the durable task as rejected or completed; lead decisions
+still use `task reject` or `task accept` where appropriate.
+
+External agents can use `inspect compact` or `inspect summary` to see runtime
+process counts before deciding whether cancellation is useful.
+
 ## Inspect Commands
 
 ```text
 sikong inspect summary <taskId> [--workspace <workspaceId>]
+sikong inspect compact <taskId> [--workspace <workspaceId>]
 sikong inspect trace <taskId> [--workspace <workspaceId>] [--follow]
 sikong inspect events <taskId> [--workspace <workspaceId>]
 sikong inspect projection <taskId> [--workspace <workspaceId>]
@@ -159,7 +179,11 @@ sikong daemon stop
 ```
 
 The daemon command group is a process control adapter. It should not contain
-coordination semantics.
+coordination semantics. `daemon status` calls the daemon health endpoint and
+returns the daemon address plus health payload. `daemon start` first checks
+health, starts `sikongd` in the background when needed, and waits for health.
+`daemon stop` calls the daemon shutdown endpoint. These commands must not read
+task projections or decide orchestration actions.
 
 ## Internal State Commands
 

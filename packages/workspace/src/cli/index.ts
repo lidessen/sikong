@@ -1,3 +1,6 @@
+import type { AgentLoop, ToolSet } from "agent-loop";
+import { access, mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   addWorkspacePreference,
   acceptPlan,
@@ -22,22 +25,55 @@ import {
   rejectPlan,
   rejectStageReview,
   rejectTask,
+  recordRuntimeProcessFinished,
   removeWorkspacePreference,
   startStageReview,
   startWorkerRun,
   submitPlan,
+  waitTask,
   type CommandContext,
   type CommandResult,
   type FinishWorkerRunInput,
   type SubmitPlanInput,
 } from "../commands";
 import { resolveDataDir } from "../data-dir";
+import type { TaskProjection } from "../coordination";
+import { DaemonProcessClient, DaemonProcessClientError, type DaemonProcessFetch } from "../process";
+import {
+  executeOrchestrationAction,
+  executeOrchestrationActionProcess,
+  runOrchestrationUntilWait,
+  type OrchestrationAction,
+  type OrchestrationInput,
+  type OrchestrationProcessExecutionClient,
+} from "../orchestration";
+import type { RuntimeAssemblyConfig } from "../runtime";
 
 export interface CliRunResult {
   exitCode: number;
   stdout: string;
   stderr: string;
 }
+
+export interface CliRunOptions {
+  processClient?: OrchestrationProcessExecutionClient;
+  daemonFetch?: DaemonProcessFetch;
+  daemonSpawner?: DaemonSpawner;
+  packageCwd?: string;
+}
+
+export interface DaemonSpawnSpec {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+}
+
+export interface DaemonSpawnResult {
+  pid?: number;
+}
+
+export type DaemonSpawner = (spec: DaemonSpawnSpec) => Promise<DaemonSpawnResult>;
 
 interface ParsedArgs {
   positionals: string[];
@@ -49,6 +85,7 @@ type CliCommandData = Record<string, unknown>;
 export async function runCli(
   argv: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
+  options: CliRunOptions = {},
 ): Promise<CliRunResult> {
   try {
     const parsed = parseArgs(argv);
@@ -66,7 +103,7 @@ export async function runCli(
       outputMode,
     };
 
-    const result = await dispatch(ctx, parsed);
+    const result = await dispatch(ctx, parsed, env, options);
     return render(result, outputMode);
   } catch (err) {
     return render(
@@ -85,6 +122,8 @@ export async function runCli(
 async function dispatch(
   ctx: CommandContext,
   parsed: ParsedArgs,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
 ): Promise<CommandResult<CliCommandData>> {
   const [resource, action, arg] = parsed.positionals;
 
@@ -142,6 +181,22 @@ async function dispatch(
         workspaceId: value(parsed, "workspace"),
         taskId: required(arg, "task id is required."),
       });
+    if (action === "drive") {
+      return driveTask(ctx, parsed, arg, env, options);
+    }
+    if (action === "wait") {
+      return waitTask(ctx, {
+        ...taskInput(parsed, arg),
+        timeoutMs: optionalNonNegativeNumber(
+          value(parsed, "timeout-ms"),
+          "--timeout-ms must be a non-negative integer.",
+        ),
+        intervalMs: optionalNumber(
+          value(parsed, "interval-ms"),
+          "--interval-ms must be a positive integer.",
+        ),
+      });
+    }
     if (action === "submit-plan") {
       return submitPlan(ctx, {
         ...taskInput(parsed, arg),
@@ -220,6 +275,9 @@ async function dispatch(
         report: required(value(parsed, "report"), "--report is required."),
       });
     }
+    if (action === "cancel") {
+      return cancelTaskRuntimeProcesses(ctx, parsed, arg, env, options);
+    }
   }
 
   if (resource === "inspect") {
@@ -242,6 +300,12 @@ async function dispatch(
     }
   }
 
+  if (resource === "daemon") {
+    if (action === "start") return daemonStart(parsed, env, options);
+    if (action === "status") return daemonStatus(parsed, env, options);
+    if (action === "stop") return daemonStop(parsed, env, options);
+  }
+
   return {
     ok: false,
     error: {
@@ -249,6 +313,228 @@ async function dispatch(
       message: `Unknown command: ${parsed.positionals.join(" ")}`,
     },
   };
+}
+
+async function daemonStart(
+  parsed: ParsedArgs,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
+): Promise<CommandResult<CliCommandData>> {
+  const rawAddr = value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR;
+  const baseUrl = daemonBaseUrl(rawAddr);
+  const client = new DaemonProcessClient({
+    baseUrl,
+    ...(options.daemonFetch ? { fetch: options.daemonFetch } : {}),
+  });
+  const existingHealth = await tryDaemonHealth(client);
+  if (existingHealth.ok) {
+    return {
+      ok: true,
+      data: { baseUrl, started: false, alreadyRunning: true, health: existingHealth.health },
+    };
+  }
+
+  const packageCwd =
+    value(parsed, "package-cwd") ?? options.packageCwd ?? join(import.meta.dir, "../../../..");
+  let spawned: DaemonSpawnResult;
+  try {
+    const spawnSpec = await daemonSpawnSpec(packageCwd, daemonAddr(rawAddr));
+    const spawn = options.daemonSpawner ?? spawnDaemon;
+    spawned = await spawn(spawnSpec);
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: "daemon_error",
+        message: err instanceof Error ? err.message : String(err),
+        details: { baseUrl },
+      },
+    };
+  }
+  const waited = await waitForDaemonHealth(client, {
+    timeoutMs:
+      optionalNonNegativeNumber(
+        value(parsed, "timeout-ms"),
+        "--timeout-ms must be a non-negative integer.",
+      ) ?? 2000,
+    intervalMs:
+      optionalNumber(value(parsed, "interval-ms"), "--interval-ms must be a positive integer.") ??
+      50,
+  });
+  if (!waited.ok) {
+    return {
+      ok: false,
+      error: {
+        code: "daemon_error",
+        message: "Daemon did not become healthy before timeout.",
+        details: { baseUrl, ...(spawned.pid !== undefined ? { pid: spawned.pid } : {}) },
+      },
+    };
+  }
+  return {
+    ok: true,
+    data: {
+      baseUrl,
+      started: true,
+      alreadyRunning: false,
+      ...(spawned.pid !== undefined ? { pid: spawned.pid } : {}),
+      health: waited.health,
+    },
+  };
+}
+
+async function daemonStatus(
+  parsed: ParsedArgs,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
+): Promise<CommandResult<CliCommandData>> {
+  const baseUrl = daemonBaseUrl(value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR);
+  const client = new DaemonProcessClient({
+    baseUrl,
+    ...(options.daemonFetch ? { fetch: options.daemonFetch } : {}),
+  });
+  try {
+    const health = await client.health();
+    return { ok: true, data: { baseUrl, health } };
+  } catch (err) {
+    return daemonClientErrorResult(err, baseUrl);
+  }
+}
+
+async function daemonStop(
+  parsed: ParsedArgs,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
+): Promise<CommandResult<CliCommandData>> {
+  const baseUrl = daemonBaseUrl(value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR);
+  const client = new DaemonProcessClient({
+    baseUrl,
+    ...(options.daemonFetch ? { fetch: options.daemonFetch } : {}),
+  });
+  try {
+    const shutdown = await client.shutdown();
+    return { ok: true, data: { baseUrl, stopped: true, shutdown } };
+  } catch (err) {
+    return daemonClientErrorResult(err, baseUrl);
+  }
+}
+
+async function cancelTaskRuntimeProcesses(
+  ctx: CommandContext,
+  parsed: ParsedArgs,
+  taskIdArg: string | undefined,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
+): Promise<CommandResult<CliCommandData>> {
+  const task = await getTask(ctx, taskInput(parsed, taskIdArg));
+  if (!task.ok) return task;
+  const projection = task.data.projection;
+  const running = Object.values(projection.runtimeProcessRuns ?? {}).filter(
+    (processRun) => processRun.status === "running",
+  );
+  const baseUrl = daemonBaseUrl(value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR);
+  const client = new DaemonProcessClient({
+    baseUrl,
+    ...(options.daemonFetch ? { fetch: options.daemonFetch } : {}),
+  });
+  const cancelled = [];
+  for (const processRun of running) {
+    try {
+      const snapshot = await client.cancelProcessRun(processRun.processRunId);
+      cancelled.push(snapshot);
+      if (snapshot.result) {
+        const recorded = await recordRuntimeProcessFinished(ctx, {
+          workspaceId: projection.workspaceId,
+          taskId: projection.taskId,
+          processRunId: processRun.processRunId,
+          processStatus: snapshot.result.status,
+          ...(snapshot.result.exitCode !== undefined ? { exitCode: snapshot.result.exitCode } : {}),
+        });
+        if (!recorded.ok) return recorded;
+      }
+    } catch (err) {
+      return daemonClientErrorResult(err, baseUrl);
+    }
+  }
+  return {
+    ok: true,
+    data: {
+      taskId: projection.taskId,
+      cancelled,
+      cancelledCount: cancelled.length,
+    },
+  };
+}
+
+function daemonClientErrorResult(err: unknown, baseUrl: string): CommandResult<CliCommandData> {
+  if (err instanceof DaemonProcessClientError) {
+    return {
+      ok: false,
+      error: {
+        code: "daemon_error",
+        message: err.message,
+        details: { baseUrl, status: err.status, daemonCode: err.code },
+      },
+    };
+  }
+  return {
+    ok: false,
+    error: {
+      code: "daemon_error",
+      message: err instanceof Error ? err.message : String(err),
+      details: { baseUrl },
+    },
+  };
+}
+
+async function driveTask(
+  ctx: CommandContext,
+  parsed: ParsedArgs,
+  taskIdArg: string | undefined,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
+): Promise<CommandResult<CliCommandData>> {
+  const taskId = required(taskIdArg, "task id is required.");
+  const runtimeAssembly = parseRuntimeAssembly(parsed);
+  const client =
+    options.processClient ??
+    new DaemonProcessClient({
+      baseUrl: daemonBaseUrl(value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR),
+    });
+  const packageCwd =
+    value(parsed, "package-cwd") ?? options.packageCwd ?? join(import.meta.dir, "../..");
+  const driven = await runOrchestrationUntilWait({
+    ctx,
+    taskId,
+    workspaceId: value(parsed, "workspace"),
+    buildInput: (projection) => orchestrationInput(projection),
+    maxActions: optionalNumber(
+      value(parsed, "max-actions"),
+      "--max-actions must be a positive integer.",
+    ),
+    executeAction: async (runCtx, action) => {
+      if (!requiresRuntimeProcess(action)) {
+        return await executeOrchestrationAction(runCtx, action, {});
+      }
+      return await executeOrchestrationActionProcess({
+        client,
+        ctx: runCtx,
+        action,
+        runtimeAssembly,
+        packageCwd,
+        command: value(parsed, "command"),
+        timeoutMs: optionalNumber(
+          value(parsed, "process-timeout-ms"),
+          "--process-timeout-ms must be a positive integer.",
+        ),
+        waitTimeoutMs: optionalNumber(
+          value(parsed, "wait-timeout-ms"),
+          "--wait-timeout-ms must be a positive integer.",
+        ),
+      });
+    },
+  });
+  return driven as CommandResult<CliCommandData>;
 }
 
 function render(result: CommandResult<unknown>, outputMode: "json" | "text"): CliRunResult {
@@ -309,6 +595,182 @@ function requiredNumber(value: string | undefined, message: string): number {
   return parsed;
 }
 
+function optionalNumber(value: string | undefined, message: string): number | undefined {
+  if (value === undefined) return undefined;
+  return requiredNumber(value, message);
+}
+
+function optionalNonNegativeNumber(value: string | undefined, message: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(message);
+  return parsed;
+}
+
+function parseRuntimeAssembly(parsed: ParsedArgs): RuntimeAssemblyConfig {
+  const raw = value(parsed, "runtime-assembly-json");
+  if (raw)
+    return parseJson(
+      raw,
+      "--runtime-assembly-json must be a JSON object.",
+    ) as RuntimeAssemblyConfig;
+
+  const backend = value(parsed, "backend") ?? "mock";
+  const backendOptions = value(parsed, "backend-options-json");
+  return {
+    backend: backendOptions
+      ? {
+          name: backend,
+          options: parseJson(backendOptions, "--backend-options-json must be a JSON object."),
+        }
+      : backend,
+    toolProfiles: {
+      ...(backend === "ai-sdk"
+        ? {
+            inspection: "ai-sdk-local-inspection",
+            execution: "ai-sdk-local-execution",
+          }
+        : {}),
+      planningProtocol: "sikong-planning-protocol",
+      stageReviewProtocol: "sikong-stage-review-protocol",
+      finalReviewProtocol: "sikong-final-review-protocol",
+    },
+  };
+}
+
+function daemonBaseUrl(value: string | undefined): string {
+  const raw = value ?? "http://127.0.0.1:8765";
+  return raw.startsWith("http://") || raw.startsWith("https://") ? raw : `http://${raw}`;
+}
+
+function daemonAddr(value: string | undefined): string {
+  const raw = value ?? "127.0.0.1:8765";
+  return raw.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+}
+
+async function daemonSpawnSpec(packageCwd: string, addr: string): Promise<DaemonSpawnSpec> {
+  const distDaemon = join(packageCwd, "dist", "sikongd");
+  if (await pathExists(join(packageCwd, "cmd", "sikongd"))) {
+    await buildDaemonBinary(packageCwd, distDaemon);
+    return {
+      command: distDaemon,
+      args: [],
+      cwd: packageCwd,
+      env: { SIKONG_DAEMON_ADDR: addr },
+    };
+  }
+  if (await pathExists(distDaemon)) {
+    return {
+      command: distDaemon,
+      args: [],
+      cwd: packageCwd,
+      env: { SIKONG_DAEMON_ADDR: addr },
+    };
+  }
+  return {
+    command: "go",
+    args: ["run", "./cmd/sikongd"],
+    cwd: packageCwd,
+    env: { SIKONG_DAEMON_ADDR: addr },
+  };
+}
+
+async function buildDaemonBinary(packageCwd: string, outputPath: string): Promise<void> {
+  await mkdir(join(packageCwd, "dist"), { recursive: true });
+  const proc = Bun.spawn(["go", "build", "-o", outputPath, "./cmd/sikongd"], {
+    cwd: packageCwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`failed to build sikongd: ${stderr || stdout || `exit ${exitCode}`}`);
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function spawnDaemon(spec: DaemonSpawnSpec): Promise<DaemonSpawnResult> {
+  const subprocess = Bun.spawn([spec.command, ...spec.args], {
+    cwd: spec.cwd,
+    env: { ...process.env, ...spec.env },
+    detached: true,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  (subprocess as { unref?: () => void }).unref?.();
+  return { pid: subprocess.pid };
+}
+
+async function tryDaemonHealth(
+  client: DaemonProcessClient,
+): Promise<{ ok: true; health: { ok: boolean } } | { ok: false }> {
+  try {
+    return { ok: true, health: await client.health() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+async function waitForDaemonHealth(
+  client: DaemonProcessClient,
+  options: { timeoutMs: number; intervalMs: number },
+): Promise<{ ok: true; health: { ok: boolean } } | { ok: false }> {
+  const deadline = Date.now() + options.timeoutMs;
+  do {
+    const health = await tryDaemonHealth(client);
+    if (health.ok) return health;
+    if (options.timeoutMs === 0) break;
+    await sleep(Math.min(options.intervalMs, Math.max(1, deadline - Date.now())));
+  } while (Date.now() <= deadline);
+  return { ok: false };
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function orchestrationInput(projection: TaskProjection): OrchestrationInput {
+  return {
+    projection,
+    tools: {
+      planningProtocolTools: emptyTools(),
+      stageReviewProtocolTools: emptyTools(),
+      finalReviewProtocolTools: emptyTools(),
+    },
+    workerTaskInput: { loop: fakeLoop },
+  };
+}
+
+function requiresRuntimeProcess(action: OrchestrationAction): boolean {
+  return (
+    action.type === "start_planning_worker" ||
+    action.type === "start_stage_worker" ||
+    action.type === "start_stage_verification_worker" ||
+    action.type === "start_final_verification_worker"
+  );
+}
+
+function emptyTools(): ToolSet {
+  return {};
+}
+
+function fakeLoop(): AgentLoop {
+  throw new Error("CLI drive uses runtimeAssembly inside the runner process.");
+}
+
 function taskInput(
   parsed: ParsedArgs,
   taskId: string | undefined,
@@ -342,6 +804,15 @@ function parsePlanJson(text: string): Pick<SubmitPlanInput, "summary" | "stages"
           }
           return item;
         }),
+        ...(stage.workerCount !== undefined
+          ? {
+              workerCount: numberField(
+                stage,
+                "workerCount",
+                `--plan-json.stages[${index}].workerCount must be a positive integer.`,
+              ),
+            }
+          : {}),
       };
     }),
   };
@@ -381,6 +852,14 @@ function stringField(record: Record<string, unknown>, key: string, message: stri
   return value;
 }
 
+function numberField(record: Record<string, unknown>, key: string, message: string): number {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(message);
+  }
+  return value;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -407,6 +886,8 @@ Usage:
   sikong preference remove --workspace <workspaceId> <preferenceId>
   sikong task create --workspace <workspaceId> --request <text> [--cwd <path>] [--repo <path>]
   sikong task show <taskId> --workspace <workspaceId>
+  sikong task drive <taskId> --workspace <workspaceId> [--backend <name>] [--daemon <url>]
+  sikong task wait <taskId> --workspace <workspaceId> [--timeout-ms <n>]
   sikong task submit-plan <taskId> --workspace <workspaceId> --plan-json <json>
   sikong task accept-plan <taskId> --workspace <workspaceId> --plan <planId> --version <n> --report <text>
   sikong task reject-plan <taskId> --workspace <workspaceId> --plan <planId> --version <n> --report <text>
@@ -420,7 +901,12 @@ Usage:
   sikong task recommend-final-review <taskId> --workspace <workspaceId> --review <reviewId> --recommendation <accept|reject> --report <text>
   sikong task accept <taskId> --workspace <workspaceId> --report <text>
   sikong task reject <taskId> --workspace <workspaceId> --report <text>
+  sikong task cancel <taskId> --workspace <workspaceId> [--daemon <url>]
+  sikong daemon start [--daemon <url>]
+  sikong daemon status [--daemon <url>]
+  sikong daemon stop [--daemon <url>]
   sikong inspect summary <taskId> --workspace <workspaceId>
+  sikong inspect compact <taskId> --workspace <workspaceId>
   sikong inspect events <taskId> --workspace <workspaceId>
   sikong inspect projection <taskId> --workspace <workspaceId>
   sikong inspect trace <taskId> --workspace <workspaceId>

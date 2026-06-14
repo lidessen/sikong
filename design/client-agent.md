@@ -37,8 +37,12 @@ Use these names consistently:
 
 ## Client Interaction Model
 
-The UI should be conversation-shaped, but the conversation transcript is not the
-agent memory.
+The UI should be conversation-shaped as a product surface, but the `Client
+Agent` is not a traditional chat-session agent.
+
+Each `Client Agent` turn is a fresh loop over an explicit context packet. The
+packet is built from the client work log plus the current workspace/task focus.
+The full UI transcript is deliberately not loaded as model context.
 
 There are three separate records:
 
@@ -48,7 +52,72 @@ The transcript is presentation state: user messages, client-agent responses,
 visible tool calls, task cards, and local UI continuity.
 
 It is not loaded wholesale as model context and is not the source of truth for
-task state.
+task state. The client may persist it for scrollback, but it has no semantic
+role in the agent loop.
+
+Transcript rendering should be based on typed message parts, not on free-form
+assistant text plus ad-hoc markdown parsing.
+
+```ts
+type ClientMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  createdAt: string;
+  parts: MessagePart[];
+};
+
+type MessagePart =
+  | { type: "text"; text: string }
+  | { type: "task-card"; taskId: string }
+  | { type: "work-log-summary"; entries: ClientWorkLogEntry[] }
+  | { type: "ui"; spec: SikongUISpec };
+```
+
+The `ui` part is optional dynamic content. It is inspired by catalog-based
+renderers such as `json-render`, but Sikong should not become a general-purpose
+UI generation platform. The client owns a small renderer and maps allowed element
+types to native React/shadcn components.
+
+```ts
+type SikongUISpec = {
+  root: string;
+  elements: Record<string, SikongUIElement>;
+};
+
+type SikongUIElement = {
+  type: string;
+  props?: unknown;
+  children?: string[];
+};
+```
+
+The initial catalog should stay deliberately small:
+
+- content: `Text`, `Heading`, `Badge`, `Alert`, `CodeBlock`, `KeyValueList`,
+  `Timeline`;
+- containers: `Stack`, `Inline`, `Section`, `Card`, `Collapsible`;
+- Sikong domain views: `WorkspaceSummary`, `TaskSummary`, `TaskList`,
+  `PlanStageList`, `ReviewResult`, `RuntimeProcessList`, `WorkLogList`.
+
+Avoid exposing CSS as protocol. Layout props should be semantic and finite, for
+example `direction: "vertical" | "horizontal"`, `gap: "xs" | "sm" | "md"`, and
+`density: "compact" | "normal"`. The renderer, not the agent, decides exact
+responsive layout and mobile behavior.
+
+Dynamic UI actions must be client intents only:
+
+```ts
+type SikongUIAction =
+  | { type: "focusWorkspace"; workspaceId: string }
+  | { type: "focusTask"; taskId: string }
+  | { type: "sendMessage"; text: string }
+  | { type: "copyText"; text: string };
+```
+
+Do not expose command actions such as `createWorkspace`, `createTask`, event
+append, or stage advancement through the dynamic UI spec. Those operations must
+continue to go through the `Client Agent` tool surface and Sikong command
+handlers.
 
 ### Client Work Log
 
@@ -81,6 +150,34 @@ type ClientWorkLogEntry = {
 
 The client work log is outside `WorkspaceDef`. It belongs to the client layer or
 local service layer that runs the `Client Agent`.
+
+The default context packet is:
+
+```ts
+type ClientAgentContextPacket = {
+  policy: {
+    transcript: "presentation_only";
+    memory: "client_work_log";
+    taskEvents: "detail_only";
+  };
+  focus: { workspaceId?: string; taskId?: string };
+  workLog: ClientWorkLogEntry[];
+  workspaces: WorkspaceDef[];
+  focusedWorkspace?: {
+    workspace: WorkspaceDef;
+    preferences: WorkspacePreference[];
+    taskCards: TaskCompactView[];
+  };
+  focusedTask?: {
+    summary: TaskSummary;
+    compact: TaskCompactView;
+  };
+};
+```
+
+The default context scope is global client work log plus the focused workspace
+and task summaries. This preserves multi-project continuity without turning the
+transcript into memory.
 
 ### Task Event Log
 
@@ -118,15 +215,25 @@ removeWorkspacePreference({ workspaceId, preferenceId })
 
 createTask({ workspaceId, request, repoPath?, cwd? })
 getTask({ workspaceId?, taskId })
+listTasks({ workspaceId? })
 
 inspectTaskSummary({ workspaceId?, taskId })
+inspectTaskCompact({ workspaceId?, taskId })
 inspectTaskTrace({ workspaceId?, taskId })
 inspectTaskEvents({ workspaceId?, taskId })
 inspectTaskProjection({ workspaceId?, taskId })
+waitTask({ workspaceId?, taskId, timeoutMs?, intervalMs? })
 ```
 
 The tool schemas should be narrow and typed. Tool results should be structured
 objects that the UI can render into cards, details, or work-log candidates.
+The initial tool adapter is `createClientAgentTools` in
+`packages/workspace/src/tools`. It is intentionally a thin wrapper over command
+handlers, not a second command implementation.
+
+The local client turn facade is in `packages/workspace/src/client-agent`. It
+builds the context packet and runs one `agent-loop.run` turn with the client
+tool surface. It does not accept transcript history as input.
 
 Task protocol tools such as plan submission, lead plan acceptance, worker
 terminal result submission, and review decisions are role-specific tools for
@@ -145,8 +252,13 @@ a compact terminal or action-required summary.
 
 Use this when the user's current request depends on the task result.
 
-`waitTask`, `steerTask`, and `cancelTask` are deferred client-experience tools,
-not part of the initial implemented command surface.
+`waitTask` is part of the initial client-agent tool surface. It returns at a
+caller-visible boundary: terminal, waiting for lead, awaiting worker results, or
+blocked.
+
+`steerTask` remains deferred until the runtime process steer command surface is
+implemented. Process-level cancel exists in the CLI/daemon path, but task-level
+cancel semantics should stay separate from final task acceptance/rejection.
 
 ### Monitor
 

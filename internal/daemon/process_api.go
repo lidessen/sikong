@@ -14,6 +14,7 @@ import (
 type ProcessAPI struct {
 	ctx        context.Context
 	supervisor *ProcessSupervisor
+	shutdown   func()
 }
 
 func NewProcessAPI(ctx context.Context, supervisor *ProcessSupervisor) *ProcessAPI {
@@ -26,10 +27,16 @@ func NewProcessAPI(ctx context.Context, supervisor *ProcessSupervisor) *ProcessA
 	return &ProcessAPI{ctx: ctx, supervisor: supervisor}
 }
 
+func (api *ProcessAPI) SetShutdownFunc(shutdown func()) {
+	api.shutdown = shutdown
+}
+
 func (api *ProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/health":
 		api.handleHealth(w, r)
+	case r.URL.Path == "/shutdown":
+		api.handleShutdown(w, r)
 	case r.URL.Path == "/process-runs":
 		api.handleProcessRuns(w, r)
 	case strings.HasPrefix(r.URL.Path, "/process-runs/"):
@@ -45,6 +52,19 @@ func (api *ProcessAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeProcessAPIJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (api *ProcessAPI) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeProcessAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if api.shutdown == nil {
+		writeProcessAPIError(w, http.StatusServiceUnavailable, "shutdown_unavailable", "shutdown is unavailable")
+		return
+	}
+	writeProcessAPIJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	go api.shutdown()
 }
 
 func (api *ProcessAPI) handleProcessRuns(w http.ResponseWriter, r *http.Request) {

@@ -64,6 +64,35 @@ export function applyTaskEvent(
         requestedChanges: event.requestedChanges,
       });
       break;
+    case "runtime_process.started":
+      next.runtimeProcessRuns = {
+        ...next.runtimeProcessRuns,
+        [event.processRunId]: {
+          processRunId: event.processRunId,
+          actionType: event.actionType,
+          status: "running",
+          startedAt: event.createdAt,
+        },
+      };
+      break;
+    case "runtime_process.finished": {
+      const existing = next.runtimeProcessRuns?.[event.processRunId];
+      next.runtimeProcessRuns = {
+        ...next.runtimeProcessRuns,
+        [event.processRunId]: {
+          ...(existing ?? {
+            processRunId: event.processRunId,
+            actionType: "unknown",
+            startedAt: event.createdAt,
+          }),
+          status: "finished",
+          processStatus: event.processStatus,
+          ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+          finishedAt: event.createdAt,
+        },
+      };
+      break;
+    }
     case "stage.started":
       next.status = "running";
       next.currentStageId = event.stageId;
@@ -190,6 +219,9 @@ function cloneProjection(projection: TaskProjection): TaskProjection {
   return {
     ...projection,
     acceptedStageIds: [...projection.acceptedStageIds],
+    ...(projection.runtimeProcessRuns
+      ? { runtimeProcessRuns: { ...projection.runtimeProcessRuns } }
+      : {}),
     workerRuns: { ...projection.workerRuns },
     stageReviews: { ...projection.stageReviews },
   };

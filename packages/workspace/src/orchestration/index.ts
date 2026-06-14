@@ -4,9 +4,19 @@ export {
   type OrchestrationExecutionRuntime,
 } from "./execute";
 export {
+  runOrchestrationUntilWait,
+  type OrchestrationDriverResult,
+  type OrchestrationDriverStep,
+  type OrchestrationStopReason,
+  type RunOrchestrationUntilWaitInput,
+} from "./drive";
+export {
   createOrchestrationProcessSpec,
+  executeOrchestrationActionProcess,
   startOrchestrationProcess,
+  type ExecuteOrchestrationActionProcessInput,
   type OrchestrationProcessClient,
+  type OrchestrationProcessExecutionClient,
   type OrchestrationProcessSpecInput,
 } from "./process";
 export {
@@ -19,6 +29,7 @@ export {
   type OrchestrationRuntimeModule,
   type SerializableOrchestrationAction,
   type SerializableTaskInput,
+  type SerializableWorkerRunSpec,
 } from "./runner";
 export { summarizeProjectionNextAction, type OrchestrationActionSummary } from "./summary";
 export {

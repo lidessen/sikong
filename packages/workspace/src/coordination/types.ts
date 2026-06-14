@@ -15,6 +15,7 @@ export interface PlanStageDef {
   title: string;
   objective: string;
   acceptance: string[];
+  workerCount?: number;
 }
 
 export interface TaskEventBase {
@@ -30,6 +31,8 @@ export type TaskEvent =
   | PlanSubmittedEvent
   | PlanAcceptedEvent
   | PlanRejectedEvent
+  | RuntimeProcessStartedEvent
+  | RuntimeProcessFinishedEvent
   | StageStartedEvent
   | WorkerRunStartedEvent
   | WorkerRunCompletedEvent
@@ -76,6 +79,19 @@ export interface PlanRejectedEvent extends TaskEventBase {
   version: number;
   report: string;
   requestedChanges?: string;
+}
+
+export interface RuntimeProcessStartedEvent extends TaskEventBase {
+  type: "runtime_process.started";
+  processRunId: string;
+  actionType: string;
+}
+
+export interface RuntimeProcessFinishedEvent extends TaskEventBase {
+  type: "runtime_process.finished";
+  processRunId: string;
+  processStatus: RuntimeProcessStatus;
+  exitCode?: number;
 }
 
 export interface StageStartedEvent extends TaskEventBase {
@@ -185,6 +201,18 @@ export type TaskStatus =
 
 export type WorkerRunStatus = "running" | "completed" | "failed" | "budget_exceeded";
 
+export type RuntimeProcessStatus = "succeeded" | "failed" | "timed_out" | "cancelled";
+
+export interface RuntimeProcessRunProjection {
+  processRunId: string;
+  actionType: string;
+  status: "running" | "finished";
+  processStatus?: RuntimeProcessStatus;
+  exitCode?: number;
+  startedAt: string;
+  finishedAt?: string;
+}
+
 export interface WorkerRunProjection {
   runId: string;
   stageId: string;
@@ -238,6 +266,7 @@ export interface TaskProjection {
   planDecision?: PlanDecisionProjection;
   currentStageId?: string;
   acceptedStageIds: string[];
+  runtimeProcessRuns?: Record<string, RuntimeProcessRunProjection>;
   workerRuns: Record<string, WorkerRunProjection>;
   stageReviews: Record<string, StageReviewProjection>;
   finalReview?: FinalReviewProjection;

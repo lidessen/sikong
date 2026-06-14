@@ -30,9 +30,13 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts RunOptions) error {
 		addr = DefaultDaemonAddr
 	}
 
-	api := NewProcessAPI(ctx, NewProcessSupervisor(ProcessRunnerOptions{
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	api := NewProcessAPI(runCtx, NewProcessSupervisor(ProcessRunnerOptions{
 		MaxConcurrent: opts.MaxConcurrent,
 	}))
+	api.SetShutdownFunc(stop)
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           api,
@@ -52,7 +56,7 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts RunOptions) error {
 	fmt.Fprintf(out, "sikong daemon listening on http://%s\n", addr)
 
 	select {
-	case <-ctx.Done():
+	case <-runCtx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {

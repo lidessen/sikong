@@ -21,8 +21,12 @@ export type CommandErrorCode =
   | "preference_not_found"
   | "task_not_found"
   | "invalid_state"
+  | "timeout"
   | "runtime_cwd_not_found"
   | "runtime_repo_not_found"
+  | "runtime_repo_not_git"
+  | "runtime_worktree_failed"
+  | "daemon_error"
   | "internal_error";
 
 export interface CommandContext {

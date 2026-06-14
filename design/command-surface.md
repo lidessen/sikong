@@ -90,6 +90,8 @@ type RuntimeInput = {
 
 If a task requires an agent cwd and no valid runtime cwd can be resolved, the
 handler should return a structured error.
+For git runtime context, `task create --repo` creates a workspace-owned worktree
+and stores that path as the task runtime cwd.
 
 ## Initial Commands
 
@@ -115,6 +117,9 @@ removeWorkspacePreference({ workspaceId, preferenceId })
 ```ts
 createTask({ workspaceId, request, cwd?, repoPath? })
 getTask({ workspaceId?, taskId })
+listTasks({ workspaceId? })
+driveTask({ workspaceId?, taskId, runtimeAssembly?, maxActions? })
+waitTask({ workspaceId?, taskId, timeoutMs?, intervalMs? })
 submitPlan({ workspaceId?, taskId, summary?, stages })
 acceptPlan({ workspaceId?, taskId, planId, version, report })
 rejectPlan({ workspaceId?, taskId, planId, version, report, requestedChanges? })
@@ -128,6 +133,8 @@ rejectStageReview({ workspaceId?, taskId, reviewId, report, requestedChanges? })
 recommendFinalReview({ workspaceId?, taskId, reviewId, recommendation, report })
 acceptTask({ workspaceId?, taskId, report })
 rejectTask({ workspaceId?, taskId, report })
+recordRuntimeProcessStarted({ workspaceId?, taskId, processRunId, actionType })
+recordRuntimeProcessFinished({ workspaceId?, taskId, processRunId, processStatus, exitCode? })
 ```
 
 These task protocol commands are not generic reducer operations. They are the
@@ -140,10 +147,15 @@ contract and must not be replaced by stdout/stderr parsing.
 
 ```ts
 inspectTaskSummary({ workspaceId?, taskId })
+inspectTaskCompact({ workspaceId?, taskId })
 inspectTaskTrace({ workspaceId?, taskId, follow? })
 inspectTaskEvents({ workspaceId?, taskId })
 inspectTaskProjection({ workspaceId?, taskId })
 ```
+
+Summary and compact inspect views should expose runtime process counts and the
+latest runtime process fact. This lets external agents discover whether
+`task cancel` has anything to cancel without reading the full projection.
 
 ## Error Codes
 
@@ -156,8 +168,12 @@ workspace_not_found
 workspace_exists
 preference_not_found
 task_not_found
+timeout
 runtime_cwd_not_found
 runtime_repo_not_found
+runtime_repo_not_git
+runtime_worktree_failed
+daemon_error
 internal_error
 ```
 
@@ -186,18 +202,37 @@ specific protocol step.
 5. Add task event/projection handlers after the coordination reducer exists.
 6. Add runtime-backed task execution once cwd and worktree resolution are ready.
 
-Items 1, 2, 3, and the task protocol handlers from item 5 are implemented in
-`packages/workspace/src/commands` and exposed through the CLI adapter. The
-current task handlers can create a durable task, submit and accept/reject a
-plan, record worker terminal results, run stage/final review state transitions,
-close a task, and inspect summary/events/trace. `packages/workspace/src/runtime`
-can run one injected `agent-loop.runTask` worker and record its terminal result
-through those handlers. Preset wrappers can assemble planning, execution, and
-verification worker runs from prompt, tools, skills, and context. The pure
-orchestration tick can decide the next preset action from a projection, but it
-does not write events or run processes. The command surface does not yet wait on
-live execution, steer running loops, or cancel runtime processes.
+Items 1, 2, 3, 4, and the task protocol handlers from item 5 are implemented.
+`packages/workspace/src/commands` owns the command handlers, the CLI adapter
+exposes them to external agents, and `packages/workspace/src/tools` exposes a
+thin `createClientAgentTools` adapter for UI/client-agent usage. The current
+task handlers can create a durable task, submit and accept/reject a plan, record
+worker terminal results, run stage/final review state transitions, close a task,
+inspect summary/compact/events/trace/projection, and wait on compact task
+boundaries.
+`packages/workspace/src/runtime` can run one injected `agent-loop.runTask`
+worker and record its terminal result through those handlers. Preset wrappers
+can assemble planning, execution, and verification worker runs from prompt,
+tools, skills, and context. The pure orchestration tick can decide the next
+preset action from a projection, and the orchestration driver can keep executing
+non-lead actions until a wait, terminal, blocked, or action-budget boundary. The
+CLI exposes this through `task drive` using daemon-managed generic process runs
+for runtime-backed actions. The read-only `task wait` command polls the compact
+view until the same externally visible wait boundaries. The command surface does
+not yet steer running loops.
+
+Daemon status is adapter-owned process control. `sikong daemon status` may call
+the process client's health endpoint and return a structured command result, but
+it must not inspect task projections or decide orchestration actions.
+`sikong task cancel` is also process-control oriented: it cancels running
+runtime process ids already recorded on the task and records finished process
+facts. It does not replace task terminal decisions.
 
 File-backed event append is protected by a per-task lock. Runtime-backed command
 handlers should use the locked append/rebuild store API so daemon-managed
 parallel Bun child processes can write safely.
+
+The client-facing tool adapter also exposes `listTasks` and `waitTask` for task
+cards and caller-visible wait boundaries. It does not expose low-level reducer
+operations or internal planner/worker/reviewer protocol tools to the default
+Client Agent surface.

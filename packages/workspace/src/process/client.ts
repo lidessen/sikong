@@ -32,6 +32,14 @@ export class DaemonProcessClient {
     return this.readJson(this.request("/health"));
   }
 
+  async shutdown(): Promise<{ ok: boolean }> {
+    return this.readJson(
+      this.request("/shutdown", {
+        method: "POST",
+      }),
+    );
+  }
+
   async startProcess(spec: ProcessRunSpec): Promise<ProcessRunSnapshot> {
     return this.readJson(
       this.request("/process-runs", {

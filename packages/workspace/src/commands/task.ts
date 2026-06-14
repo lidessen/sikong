@@ -1,4 +1,5 @@
-import { access } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   FileTaskEventStore,
   FileTaskProjectionStore,
@@ -8,12 +9,14 @@ import {
   type TaskEvent,
   type TaskProjection,
   type TaskRunResult,
+  type RuntimeProcessStatus,
 } from "../coordination";
 import {
   summarizeProjectionNextAction,
   type OrchestrationActionSummary,
 } from "../orchestration/summary";
-import { FileWorkspaceStore } from "../workspace";
+import { taskProjectionsDir } from "../data-dir";
+import { FileWorkspaceStore, WorkspaceWorktreeError, allocateTaskWorktree } from "../workspace";
 import { nextId } from "./ids";
 import type { CommandContext, CommandResult } from "./types";
 import { commandNow, fail, ok } from "./types";
@@ -30,12 +33,17 @@ export interface TaskIdInput {
   taskId: string;
 }
 
+export interface ListTasksInput {
+  workspaceId?: string;
+}
+
 export interface SubmitPlanInput extends TaskIdInput {
   summary?: string;
   stages: Array<{
     title: string;
     objective: string;
     acceptance: string[];
+    workerCount?: number;
   }>;
 }
 
@@ -86,6 +94,22 @@ export interface InspectTaskTraceInput extends TaskIdInput {
   follow?: boolean;
 }
 
+export interface WaitTaskInput extends TaskIdInput {
+  timeoutMs?: number;
+  intervalMs?: number;
+}
+
+export interface RecordRuntimeProcessStartedInput extends TaskIdInput {
+  processRunId: string;
+  actionType: string;
+}
+
+export interface RecordRuntimeProcessFinishedInput extends TaskIdInput {
+  processRunId: string;
+  processStatus: RuntimeProcessStatus;
+  exitCode?: number;
+}
+
 export async function createTask(
   ctx: CommandContext,
   input: CreateTaskInput,
@@ -102,10 +126,10 @@ export async function createTask(
   const workspace = await new FileWorkspaceStore(ctx.dataDir).get(workspaceId);
   if (!workspace) return fail("workspace_not_found", "Workspace not found.", { workspaceId });
 
-  const runtime = await validateRuntimeInput(input);
+  const taskId = nextId("task", ctx.id);
+  const runtime = await resolveRuntimeInput(ctx, { ...input, workspaceId, taskId });
   if (!runtime.ok) return runtime;
 
-  const taskId = nextId("task", ctx.id);
   const now = commandNow(ctx);
   const eventId = () => nextId("event", ctx.id);
   const events: TaskEvent[] = [
@@ -141,6 +165,34 @@ export async function getTask(
   const loaded = await loadTaskProjection(ctx, input);
   if (!loaded.ok) return loaded;
   return ok({ projection: loaded.data.projection });
+}
+
+export async function listTasks(
+  ctx: CommandContext,
+  input: ListTasksInput = {},
+): Promise<CommandResult<{ tasks: TaskCompactView[] }>> {
+  const workspaceId = input.workspaceId ?? ctx.workspaceId;
+  if (!workspaceId) return fail("invalid_input", "Workspace id is required.");
+  const workspace = await new FileWorkspaceStore(ctx.dataDir).get(workspaceId);
+  if (!workspace) return fail("workspace_not_found", "Workspace not found.", { workspaceId });
+
+  const dir = taskProjectionsDir(ctx.dataDir, workspaceId);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return ok({ tasks: [] });
+    throw err;
+  }
+
+  const tasks: TaskCompactView[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    const projection = JSON.parse(await readFile(join(dir, entry), "utf8")) as TaskProjection;
+    tasks.push(compactTaskView(projection));
+  }
+  tasks.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  return ok({ tasks });
 }
 
 export async function submitPlan(
@@ -437,6 +489,10 @@ export async function inspectTaskSummary(
       currentStageId: projection.currentStageId,
       planStatus: projection.planDecision?.status,
       workerRuns: Object.keys(projection.workerRuns).length,
+      runtimeProcesses: Object.keys(projection.runtimeProcessRuns ?? {}).length,
+      runningRuntimeProcesses: Object.values(projection.runtimeProcessRuns ?? {}).filter(
+        (processRun) => processRun.status === "running",
+      ).length,
       acceptedStages: projection.acceptedStageIds.length,
       terminal: projection.terminal,
       updatedAt: projection.updatedAt,
@@ -455,6 +511,91 @@ export async function inspectTaskCompact(
   const loaded = await loadTaskProjection(ctx, input);
   if (!loaded.ok) return loaded;
   return ok({ compact: compactTaskView(loaded.data.projection) });
+}
+
+export async function waitTask(
+  ctx: CommandContext,
+  input: WaitTaskInput,
+): Promise<
+  CommandResult<{
+    compact: TaskCompactView;
+  }>
+> {
+  const timeoutMs = input.timeoutMs ?? 30_000;
+  const intervalMs = input.intervalMs ?? 250;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
+    return fail("invalid_input", "timeoutMs must be a non-negative integer.");
+  }
+  if (!Number.isSafeInteger(intervalMs) || intervalMs < 1) {
+    return fail("invalid_input", "intervalMs must be a positive integer.");
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  let latest: TaskCompactView | undefined;
+  while (true) {
+    const inspected = await inspectTaskCompact(ctx, input);
+    if (!inspected.ok) return inspected;
+    latest = inspected.data.compact;
+    if (isTaskWaitBoundary(latest)) return ok({ compact: latest });
+    if (Date.now() >= deadline) {
+      return fail("timeout", "Task did not reach a wait boundary before timeout.", {
+        taskId: input.taskId,
+        workspaceId: input.workspaceId ?? ctx.workspaceId,
+        nextAction: latest.nextAction,
+      });
+    }
+    await sleep(Math.min(intervalMs, Math.max(1, deadline - Date.now())));
+  }
+}
+
+export async function recordRuntimeProcessStarted(
+  ctx: CommandContext,
+  input: RecordRuntimeProcessStartedInput,
+): Promise<CommandResult<{ projection: TaskProjection }>> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  if (!input.processRunId.trim()) {
+    return fail("invalid_input", "Runtime process run id must be non-empty.");
+  }
+  if (!input.actionType.trim()) {
+    return fail("invalid_input", "Runtime process action type must be non-empty.");
+  }
+  return await appendAndProject(ctx, {
+    id: nextId("event", ctx.id),
+    type: "runtime_process.started",
+    taskId: input.taskId,
+    workspaceId: projection.workspaceId,
+    createdAt: commandNow(ctx),
+    processRunId: input.processRunId,
+    actionType: input.actionType,
+  });
+}
+
+export async function recordRuntimeProcessFinished(
+  ctx: CommandContext,
+  input: RecordRuntimeProcessFinishedInput,
+): Promise<CommandResult<{ projection: TaskProjection }>> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  const processRun = projection.runtimeProcessRuns?.[input.processRunId];
+  if (!processRun || processRun.status !== "running") {
+    return fail("invalid_state", "Runtime process run is not running.", {
+      taskId: input.taskId,
+      processRunId: input.processRunId,
+    });
+  }
+  return await appendAndProject(ctx, {
+    id: nextId("event", ctx.id),
+    type: "runtime_process.finished",
+    taskId: input.taskId,
+    workspaceId: projection.workspaceId,
+    createdAt: commandNow(ctx),
+    processRunId: input.processRunId,
+    processStatus: input.processStatus,
+    ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+  });
 }
 
 export async function inspectTaskEvents(
@@ -507,6 +648,8 @@ export interface TaskSummary {
   currentStageId?: string;
   planStatus?: PlanDecisionProjection["status"];
   workerRuns: number;
+  runtimeProcesses: number;
+  runningRuntimeProcesses: number;
   acceptedStages: number;
   terminal?: TaskProjection["terminal"];
   updatedAt?: string;
@@ -536,6 +679,18 @@ export interface TaskCompactView {
     summary?: string;
     finishedAt?: string;
   };
+  runtimeProcesses: {
+    total: number;
+    running: number;
+  };
+  latestRuntimeProcess?: {
+    processRunId: string;
+    actionType: string;
+    status: NonNullable<TaskProjection["runtimeProcessRuns"]>[string]["status"];
+    processStatus?: NonNullable<TaskProjection["runtimeProcessRuns"]>[string]["processStatus"];
+    startedAt: string;
+    finishedAt?: string;
+  };
   latestReview?: {
     reviewId: string;
     stageId?: string;
@@ -563,6 +718,8 @@ function compactTaskView(projection: TaskProjection): TaskCompactView {
   );
   const nextAction = summarizeProjectionNextAction(projection);
   const latestWorker = latestWorkerRun(projection);
+  const runtimeProcesses = Object.values(projection.runtimeProcessRuns ?? {});
+  const latestRuntimeProcess = latestRuntimeProcessRun(projection);
   const latestReview = latestReviewProjection(projection);
   return {
     taskId: projection.taskId,
@@ -583,6 +740,10 @@ function compactTaskView(projection: TaskProjection): TaskCompactView {
     nextAction,
     waitingForLead:
       nextAction.type === "await_plan_decision" || nextAction.type === "await_final_decision",
+    runtimeProcesses: {
+      total: runtimeProcesses.length,
+      running: runtimeProcesses.filter((processRun) => processRun.status === "running").length,
+    },
     ...(latestWorker
       ? {
           latestWorkerResult: {
@@ -594,16 +755,52 @@ function compactTaskView(projection: TaskProjection): TaskCompactView {
           },
         }
       : {}),
+    ...(latestRuntimeProcess
+      ? {
+          latestRuntimeProcess: {
+            processRunId: latestRuntimeProcess.processRunId,
+            actionType: latestRuntimeProcess.actionType,
+            status: latestRuntimeProcess.status,
+            ...(latestRuntimeProcess.processStatus
+              ? { processStatus: latestRuntimeProcess.processStatus }
+              : {}),
+            startedAt: latestRuntimeProcess.startedAt,
+            ...(latestRuntimeProcess.finishedAt
+              ? { finishedAt: latestRuntimeProcess.finishedAt }
+              : {}),
+          },
+        }
+      : {}),
     ...(latestReview ? { latestReview } : {}),
     ...(projection.terminal ? { terminal: projection.terminal } : {}),
     ...(projection.updatedAt ? { updatedAt: projection.updatedAt } : {}),
   };
 }
 
+function isTaskWaitBoundary(compact: TaskCompactView): boolean {
+  if (compact.terminal) return true;
+  if (compact.waitingForLead) return true;
+  return (
+    compact.nextAction.type === "await_worker_results" || compact.nextAction.type === "blocked"
+  );
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function latestWorkerRun(
   projection: TaskProjection,
 ): TaskProjection["workerRuns"][string] | undefined {
   return Object.values(projection.workerRuns).sort((a, b) =>
+    String(b.finishedAt ?? b.startedAt).localeCompare(String(a.finishedAt ?? a.startedAt)),
+  )[0];
+}
+
+function latestRuntimeProcessRun(
+  projection: TaskProjection,
+): NonNullable<TaskProjection["runtimeProcessRuns"]>[string] | undefined {
+  return Object.values(projection.runtimeProcessRuns ?? {}).sort((a, b) =>
     String(b.finishedAt ?? b.startedAt).localeCompare(String(a.finishedAt ?? a.startedAt)),
   )[0];
 }
@@ -651,9 +848,14 @@ function latestReviewProjection(
   };
 }
 
-async function validateRuntimeInput(
-  input: CreateTaskInput,
+async function resolveRuntimeInput(
+  ctx: CommandContext,
+  input: CreateTaskInput & { workspaceId: string; taskId: string },
 ): Promise<CommandResult<{ cwd?: string; repoPath?: string } | undefined>> {
+  if (input.cwd && input.repoPath) {
+    return fail("invalid_input", "Use either runtime cwd or repo path, not both.");
+  }
+
   if (input.cwd) {
     try {
       await access(input.cwd);
@@ -670,13 +872,29 @@ async function validateRuntimeInput(
         repoPath: input.repoPath,
       });
     }
+    try {
+      return ok(
+        await allocateTaskWorktree({
+          dataDir: ctx.dataDir,
+          workspaceId: input.workspaceId,
+          taskId: input.taskId,
+          repoPath: input.repoPath,
+        }),
+      );
+    } catch (err) {
+      if (err instanceof WorkspaceWorktreeError) {
+        return fail(
+          err.code === "repo_not_git" ? "runtime_repo_not_git" : "runtime_worktree_failed",
+          err.message,
+          { repoPath: input.repoPath, stderr: err.stderr },
+        );
+      }
+      throw err;
+    }
   }
 
-  if (!input.cwd && !input.repoPath) return ok(undefined);
-  return ok({
-    ...(input.cwd ? { cwd: input.cwd } : {}),
-    ...(input.repoPath ? { repoPath: input.repoPath } : {}),
-  });
+  if (!input.cwd) return ok(undefined);
+  return ok({ cwd: input.cwd });
 }
 
 async function loadTaskProjection(
@@ -732,9 +950,26 @@ function validatePlanStages(
         index,
       });
     }
-    normalized.push({ title, objective, acceptance });
+    const workerCount = normalizeWorkerCount(stage.workerCount);
+    if (!workerCount.ok) {
+      return fail("invalid_input", "Plan stage workerCount must be a positive integer.", {
+        index,
+      });
+    }
+    normalized.push({
+      title,
+      objective,
+      acceptance,
+      ...(workerCount.data > 1 ? { workerCount: workerCount.data } : {}),
+    });
   }
   return ok({ stages: normalized });
+}
+
+function normalizeWorkerCount(value: number | undefined): CommandResult<number> {
+  if (value === undefined) return ok(1);
+  if (!Number.isSafeInteger(value) || value < 1) return fail("invalid_input", "invalid");
+  return ok(value);
 }
 
 async function loadSubmittedPlan(
@@ -908,6 +1143,10 @@ function summarizeEvent(event: TaskEvent): string {
     case "plan.accepted":
     case "plan.rejected":
       return event.report;
+    case "runtime_process.started":
+      return `Runtime process ${event.processRunId} started for ${event.actionType}.`;
+    case "runtime_process.finished":
+      return `Runtime process ${event.processRunId} finished as ${event.processStatus}.`;
     case "stage.started":
       return `Stage ${event.stageId} started.`;
     case "worker_run.started":

@@ -31,10 +31,13 @@ export type OrchestrationExecutionResult =
     }
   | {
       resultType: "waiting";
-      waitFor: "plan_decision" | "final_decision";
+      waitFor: "plan_decision" | "worker_results" | "final_decision";
       taskId: string;
       planId?: string;
       version?: number;
+      stageId?: string;
+      runningRuns?: number;
+      targetRuns?: number;
       recommendation?: "accept" | "reject";
     }
   | {
@@ -109,6 +112,16 @@ export async function executeOrchestrationAction(
         taskId: action.taskId,
         ...(action.planId ? { planId: action.planId } : {}),
         ...(action.version !== undefined ? { version: action.version } : {}),
+      });
+
+    case "await_worker_results":
+      return ok({
+        resultType: "waiting",
+        waitFor: "worker_results",
+        taskId: action.taskId,
+        stageId: action.stageId,
+        runningRuns: action.runningRuns,
+        targetRuns: action.targetRuns,
       });
 
     case "await_final_decision":

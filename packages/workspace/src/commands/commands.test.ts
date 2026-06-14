@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { worktreeDir } from "../data-dir";
 import {
   addWorkspacePreference,
   acceptPlan,
@@ -19,14 +20,18 @@ import {
   inspectTaskEvents,
   inspectTaskSummary,
   inspectTaskTrace,
+  listTasks,
   listWorkspacePreferences,
   listWorkspaces,
   recommendFinalReview,
+  recordRuntimeProcessFinished,
+  recordRuntimeProcessStarted,
   rejectPlan,
   removeWorkspacePreference,
   startStageReview,
   startWorkerRun,
   submitPlan,
+  waitTask,
   type CommandContext,
 } from "./index";
 
@@ -145,6 +150,10 @@ describe("task command handlers", () => {
         ok: true,
         data: { projection: { taskId, status: "planning" } },
       });
+      expect(await listTasks(context)).toMatchObject({
+        ok: true,
+        data: { tasks: [{ taskId, workspaceId: "sikong", status: "planning" }] },
+      });
       expect(await inspectTaskSummary(context, { taskId })).toMatchObject({
         ok: true,
         data: {
@@ -181,6 +190,103 @@ describe("task command handlers", () => {
           ],
         },
       });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("exposes runtime process facts through summary, compact, and trace", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Inspect runtime process facts.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const taskId = created.data.taskId;
+
+      expect(
+        await recordRuntimeProcessStarted(context, {
+          taskId,
+          processRunId: "process_1",
+          actionType: "start_planning_worker",
+        }),
+      ).toMatchObject({ ok: true });
+
+      expect(await inspectTaskSummary(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          summary: {
+            runtimeProcesses: 1,
+            runningRuntimeProcesses: 1,
+          },
+        },
+      });
+      expect(await inspectTaskCompact(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          compact: {
+            runtimeProcesses: { total: 1, running: 1 },
+            latestRuntimeProcess: {
+              processRunId: "process_1",
+              actionType: "start_planning_worker",
+              status: "running",
+            },
+          },
+        },
+      });
+
+      expect(
+        await recordRuntimeProcessFinished(context, {
+          taskId,
+          processRunId: "process_1",
+          processStatus: "cancelled",
+        }),
+      ).toMatchObject({ ok: true });
+
+      expect(await inspectTaskTrace(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          trace: expect.arrayContaining([
+            expect.objectContaining({ type: "runtime_process.started" }),
+            expect.objectContaining({ type: "runtime_process.finished" }),
+          ]),
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("creates a workspace-owned worktree for git runtime context", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const repo = await createGitRepo(join(dir, "source"));
+
+      const created = await createTask(context, {
+        request: "Work in an isolated git worktree.",
+        repoPath: repo,
+      });
+
+      const expectedCwd = worktreeDir(dir, "sikong", "task_id_1");
+      expect(created).toMatchObject({
+        ok: true,
+        data: {
+          taskId: "task_id_1",
+          projection: {
+            runtime: {
+              cwd: expectedCwd,
+              repoPath: repo,
+            },
+          },
+        },
+      });
+      expect(await Bun.file(join(expectedCwd, "README.md")).text()).toBe("hello\n");
+      expect(expectedCwd).not.toBe(repo);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -224,6 +330,16 @@ describe("task command handlers", () => {
       if (!submitted.ok) throw new Error("plan submit failed");
       const { id: planId, version } = submitted.data.plan;
       expect(await inspectTaskCompact(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          compact: {
+            status: "plan_submitted",
+            nextAction: { type: "await_plan_decision", planId, version },
+            waitingForLead: true,
+          },
+        },
+      });
+      expect(await waitTask(context, { taskId, timeoutMs: 0 })).toMatchObject({
         ok: true,
         data: {
           compact: {
@@ -416,3 +532,30 @@ describe("task command handlers", () => {
     }
   });
 });
+
+async function createGitRepo(path: string): Promise<string> {
+  await mkdir(path, { recursive: true });
+  await runGit(path, ["init"]);
+  await writeFile(join(path, "README.md"), "hello\n");
+  await runGit(path, ["add", "README.md"]);
+  await runGit(path, [
+    "-c",
+    "user.email=sikong@example.local",
+    "-c",
+    "user.name=Sikong Test",
+    "commit",
+    "-m",
+    "initial",
+  ]);
+  return await realpath(path);
+}
+
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+  if (exitCode !== 0) throw new Error(stderr);
+}

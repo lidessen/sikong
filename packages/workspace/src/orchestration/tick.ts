@@ -44,6 +44,13 @@ export type OrchestrationAction =
       input: Omit<RunWorkerTaskInput, "runTask">;
     }
   | {
+      type: "await_worker_results";
+      taskId: string;
+      stageId: string;
+      runningRuns: number;
+      targetRuns: number;
+    }
+  | {
       type: "start_stage_review";
       taskId: string;
       workspaceId: string;
@@ -140,9 +147,22 @@ function planRunningAction(input: OrchestrationInput): OrchestrationAction {
     return startStageWorker(input);
   }
 
-  const terminalRuns = terminalRunsForStage(projection, stageId);
-  if (terminalRuns.length === 0) {
+  const stage = projection.plan?.stages.find((candidate) => candidate.id === stageId);
+  const targetRuns = stageWorkerCount(stage);
+  const allRuns = runsForStage(projection, stageId);
+  if (allRuns.length < targetRuns) {
     return startStageWorker(input);
+  }
+
+  const terminalRuns = terminalRunsForStage(projection, stageId);
+  if (terminalRuns.length < targetRuns) {
+    return {
+      type: "await_worker_results",
+      taskId: projection.taskId,
+      stageId,
+      runningRuns: allRuns.length - terminalRuns.length,
+      targetRuns,
+    };
   }
 
   return {
@@ -215,9 +235,15 @@ function startStageWorker(input: OrchestrationInput): OrchestrationAction {
 }
 
 function terminalRunsForStage(projection: TaskProjection, stageId: string): WorkerRunProjection[] {
-  return Object.values(projection.workerRuns).filter(
-    (run) => run.stageId === stageId && run.status !== "running",
-  );
+  return runsForStage(projection, stageId).filter((run) => run.status !== "running");
+}
+
+function runsForStage(projection: TaskProjection, stageId: string): WorkerRunProjection[] {
+  return Object.values(projection.workerRuns).filter((run) => run.stageId === stageId);
+}
+
+function stageWorkerCount(stage: { workerCount?: number } | undefined): number {
+  return stage?.workerCount && stage.workerCount > 1 ? stage.workerCount : 1;
 }
 
 function latestStageReview(

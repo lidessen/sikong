@@ -14,3 +14,10 @@ export {
   type WorkspacePreferences,
   type WorkspacePreferencesFactory,
 } from "./preferences";
+
+export {
+  allocateTaskWorktree,
+  WorkspaceWorktreeError,
+  type TaskWorktreeAllocation,
+  type TaskWorktreeInput,
+} from "./worktree";

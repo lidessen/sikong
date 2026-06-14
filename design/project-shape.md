@@ -48,10 +48,11 @@ cmd/
   sikongd/                # Go daemon entrypoint
 internal/
   buildinfo/              # Go build/version metadata
-  daemon/                 # daemon lifecycle and future IPC/API server
+  daemon/                 # daemon lifecycle, local API, and process supervisor
 packages/
   agent-loop/             # backend-neutral agent runtime facade
-  workspace/              # durable Sikong coordination engine, planned
+  workspace/              # durable Sikong coordination engine
+  client/                 # React/Vite client UI plus local client API adapter
 design/
   README.md
   project-shape.md
@@ -66,7 +67,7 @@ The old package name `sikong` should remain associated with the CLI/binary
 identity, not a TypeScript workspace package. This avoids confusing the Go
 binary, npm launcher history, and the coordination library.
 
-## Planned Workspace Package
+## Workspace Package
 
 `packages/workspace` should be split by ownership:
 
@@ -191,6 +192,15 @@ coordination engine.
 
 The `Client Agent` is not the internal `Task Lead`. The `Task Lead` remains a
 Sikong task role managed by the engine.
+
+The client UI is a single long activity stream, not a multi-session chat
+product. Its transcript is presentation state. The client agent turn receives a
+bounded context packet built from the client work log and the currently focused
+workspace/task summaries.
+
+Rendered client messages should use typed message parts. If a message needs
+dynamic UI, it should use a restricted Sikong UI catalog rendered by the client,
+not generated JSX/HTML, arbitrary CSS, or direct command actions.
 
 ## State Layout
 

@@ -184,6 +184,9 @@ describe("daemon process client", () => {
       if (url.endsWith("/health")) {
         return Response.json({ ok: true });
       }
+      if (url.endsWith("/shutdown")) {
+        return Response.json({ ok: true });
+      }
       if (url.endsWith("/process-runs")) {
         return Response.json(
           {
@@ -234,6 +237,7 @@ describe("daemon process client", () => {
     const client = new DaemonProcessClient({ baseUrl: "http://127.0.0.1:1234/", fetch: mockFetch });
 
     await expect(client.health()).resolves.toEqual({ ok: true });
+    await expect(client.shutdown()).resolves.toEqual({ ok: true });
     await expect(
       client.startProcess({
         runId: "run_daemon",
@@ -253,12 +257,14 @@ describe("daemon process client", () => {
 
     expect(calls.map((call) => call.url)).toEqual([
       "http://127.0.0.1:1234/health",
+      "http://127.0.0.1:1234/shutdown",
       "http://127.0.0.1:1234/process-runs",
       "http://127.0.0.1:1234/process-runs/run_daemon/wait?timeoutMs=1000",
       "http://127.0.0.1:1234/process-runs/run_daemon/cancel",
     ]);
     expect(calls[1]?.init?.method).toBe("POST");
-    expect(calls[3]?.init?.method).toBe("POST");
+    expect(calls[2]?.init?.method).toBe("POST");
+    expect(calls[4]?.init?.method).toBe("POST");
   });
 
   test("surfaces daemon error responses", async () => {
