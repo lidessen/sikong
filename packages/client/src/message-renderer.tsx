@@ -1,10 +1,13 @@
-import { AlertTriangle, Bot, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, CircleDot, Loader2, Sparkles } from "lucide-react";
 import type React from "react";
 import { Badge } from "./components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
+import { MarkdownMessage } from "./markdown-message";
 import type {
   ClientMessage,
   ClientState,
+  ClientTurnProgress,
+  ClientTurnProgressStatus,
   ClientWorkLogEntry,
   MessagePart,
   SikongUIAction,
@@ -34,9 +37,7 @@ export interface MessageRenderContext {
 export function MessageView(props: { message: ClientMessage; context: MessageRenderContext }) {
   const isUser = props.message.role === "user";
   return (
-    <article
-      className={`grid grid-cols-[28px_minmax(0,1fr)] gap-3 ${props.message.pending ? "animate-pulse" : ""}`}
-    >
+    <article className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
       <div
         className={`mt-0.5 flex size-7 items-center justify-center rounded-[var(--radius-lg)] border ${
           isUser
@@ -79,7 +80,13 @@ export function MessageView(props: { message: ClientMessage; context: MessageRen
 function MessagePartView(props: { part: MessagePart; context: MessageRenderContext }) {
   switch (props.part.type) {
     case "text":
-      return <p className="break-words whitespace-pre-wrap">{props.part.text}</p>;
+      return (
+        <div className="flex min-w-0 flex-col gap-2">
+          <MarkdownMessage text={props.part.text} />
+        </div>
+      );
+    case "progress-card":
+      return <TurnProgressCard progress={props.part.progress} />;
     case "task-card":
       return <TaskCardPart task={findTask(props.context.state.taskCards, props.part.taskId)} />;
     case "work-log-summary":
@@ -87,6 +94,88 @@ function MessagePartView(props: { part: MessagePart; context: MessageRenderConte
     case "ui":
       return <SikongUIRenderer spec={props.part.spec} context={props.context} />;
   }
+}
+
+function TurnProgressCard(props: { progress: ClientTurnProgress }) {
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-border bg-background p-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-[13px] font-medium">
+            <Loader2 className="animate-spin text-info" data-icon="inline-start" />
+            {props.progress.title}
+          </p>
+          <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+            {props.progress.detail}
+          </p>
+        </div>
+        <Badge variant="info">{formatElapsed(props.progress.elapsedMs)}</Badge>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {props.progress.phases.map((phase) => (
+          <div
+            key={phase.id}
+            className={`rounded-[var(--radius-md)] border p-2.5 ${
+              phase.status === "running"
+                ? "border-[var(--info)] bg-[var(--info-soft)]"
+                : "border-border bg-card/80"
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 gap-2">
+                <ProgressStatusIcon status={phase.status} />
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium">{phase.title}</p>
+                  <p className="text-[12px] leading-5 text-muted-foreground">{phase.detail}</p>
+                </div>
+              </div>
+              <Badge variant={progressBadgeVariant(phase.status)}>{phase.status}</Badge>
+            </div>
+
+            <div className="mt-2 grid gap-1 pl-6">
+              {phase.substeps.map((substep) => (
+                <div
+                  key={substep.label}
+                  className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground"
+                >
+                  <ProgressStatusIcon status={substep.status} compact />
+                  <span className="truncate">{substep.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProgressStatusIcon(props: { status: ClientTurnProgressStatus; compact?: boolean }) {
+  const className = `${props.compact ? "opacity-80" : "mt-0.5"} ${
+    props.status === "done"
+      ? "text-ok"
+      : props.status === "running"
+        ? "text-info"
+        : "text-muted-foreground"
+  }`;
+  if (props.status === "done") return <CheckCircle2 className={className} />;
+  if (props.status === "running") return <Loader2 className={`${className} animate-spin`} />;
+  return <CircleDot className={className} />;
+}
+
+function progressBadgeVariant(status: ClientTurnProgressStatus): ConsoleBadgeVariant {
+  if (status === "done") return "ok";
+  if (status === "running") return "info";
+  return "neutral";
+}
+
+function formatElapsed(elapsedMs: number): string {
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
 }
 
 function SikongUIRenderer(props: { spec: SikongUISpec; context: MessageRenderContext }) {

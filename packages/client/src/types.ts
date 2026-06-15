@@ -101,8 +101,66 @@ export interface ClientMessage {
   parts: MessagePart[];
 }
 
+export type ClientTurnProgressStatus = "pending" | "running" | "done";
+
+export interface ClientTurnProgressSubstep {
+  label: string;
+  status: ClientTurnProgressStatus;
+}
+
+export interface ClientTurnProgressPhase {
+  id: string;
+  title: string;
+  detail: string;
+  status: ClientTurnProgressStatus;
+  substeps: ClientTurnProgressSubstep[];
+}
+
+export interface ClientTurnProgress {
+  title: string;
+  detail: string;
+  startedAt: string;
+  elapsedMs: number;
+  phases: ClientTurnProgressPhase[];
+}
+
+export type ClientTurnProgressPhaseId = "prepare" | "context" | "agent" | "workspace" | "refresh";
+
+export type TurnStreamEvent =
+  | {
+      type: "turn.started";
+      turnId: string;
+      segmentId: string;
+      startedAt: string;
+      phaseId: ClientTurnProgressPhaseId;
+      detail?: string;
+    }
+  | {
+      type: "turn.progress";
+      turnId: string;
+      segmentId: string;
+      phaseId: ClientTurnProgressPhaseId;
+      detail?: string;
+      at: string;
+    }
+  | {
+      type: "turn.completed";
+      turnId: string;
+      segmentId: string;
+      response: TurnResponse;
+      at: string;
+    }
+  | {
+      type: "turn.error";
+      turnId: string;
+      segmentId: string;
+      message: string;
+      at: string;
+    };
+
 export type MessagePart =
   | { type: "text"; text: string }
+  | { type: "progress-card"; progress: ClientTurnProgress }
   | { type: "task-card"; taskId: string }
   | { type: "work-log-summary"; entries: ClientWorkLogEntry[] }
   | { type: "ui"; spec: SikongUISpec };

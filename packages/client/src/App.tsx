@@ -16,7 +16,13 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import type React from "react";
 import type { FormEvent } from "react";
-import { driveTask, getClientState, runTurn, submitPlanDecision, updateSettings } from "./api";
+import {
+  driveTask,
+  getClientState,
+  runTurnStream,
+  submitPlanDecision,
+  updateSettings,
+} from "./api";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
@@ -24,9 +30,11 @@ import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { MessageView } from "./message-renderer";
 import { createPendingMessage, createTextMessage, messageFromTurnResponse } from "./messages";
+import { buildClientTurnProgress } from "./turn-progress";
 import type {
   ClientMessage,
   ClientState,
+  ClientTurnProgressPhaseId,
   DefaultAgentRuntime,
   DefaultAgentRuntimeKey,
   SikongSettings,
@@ -47,6 +55,12 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [taskActionBusy, setTaskActionBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingTurn, setPendingTurn] = useState<{
+    messageId: string;
+    startedAt: string;
+    phaseId?: ClientTurnProgressPhaseId;
+    detail?: string;
+  } | null>(null);
 
   useEffect(() => {
     void refresh(selectedWorkspaceId);
@@ -65,6 +79,40 @@ export function App() {
     [state?.taskCards],
   );
   const activeTaskCount = (state?.taskCards.length ?? 0) - terminalCount;
+
+  useEffect(() => {
+    if (!pendingTurn) return;
+    const currentPendingTurn = pendingTurn;
+
+    function updateProgress() {
+      setMessages((items) =>
+        items.map((item) =>
+          item.id === currentPendingTurn.messageId
+            ? {
+                ...item,
+                pending: true,
+                parts: [
+                  {
+                    type: "progress-card",
+                    progress: buildClientTurnProgress({
+                      startedAt: currentPendingTurn.startedAt,
+                      workspaceName: selectedWorkspace?.name,
+                      taskId: selectedTaskId,
+                      activePhaseId: currentPendingTurn.phaseId,
+                      detail: currentPendingTurn.detail,
+                    }),
+                  },
+                ],
+              }
+            : item,
+        ),
+      );
+    }
+
+    updateProgress();
+    const interval = window.setInterval(updateProgress, 1000);
+    return () => window.clearInterval(interval);
+  }, [pendingTurn, selectedTaskId, selectedWorkspace?.name]);
 
   async function refresh(workspaceId?: string) {
     try {
@@ -85,14 +133,50 @@ export function App() {
     setBusy(true);
     setError(null);
     const userMessage = createTextMessage("user", text);
-    const pendingMessage = createPendingMessage();
+    const pendingStartedAt = new Date().toISOString();
+    const pendingMessage = createPendingMessage(
+      buildClientTurnProgress({
+        startedAt: pendingStartedAt,
+        workspaceName: selectedWorkspace?.name,
+        taskId: selectedTaskId,
+        activePhaseId: "prepare",
+      }),
+    );
+    setPendingTurn({
+      messageId: pendingMessage.id,
+      startedAt: pendingStartedAt,
+      phaseId: "prepare",
+    });
     setMessages((items) => [...items, userMessage, pendingMessage]);
     try {
-      const response = await runTurn({
-        message: text,
-        workspaceId: selectedWorkspaceId,
-        taskId: selectedTaskId,
-      });
+      const response = await runTurnStream(
+        {
+          message: text,
+          workspaceId: selectedWorkspaceId,
+          taskId: selectedTaskId,
+        },
+        (event) => {
+          if (event.type === "turn.started") {
+            setPendingTurn({
+              messageId: pendingMessage.id,
+              startedAt: event.startedAt,
+              phaseId: event.phaseId,
+              detail: event.detail,
+            });
+          }
+          if (event.type === "turn.progress") {
+            setPendingTurn((current) =>
+              current?.messageId === pendingMessage.id
+                ? {
+                    ...current,
+                    phaseId: event.phaseId,
+                    detail: event.detail,
+                  }
+                : current,
+            );
+          }
+        },
+      );
       const assistantMessage = messageFromTurnResponse(response);
       setMessages((items) =>
         items.map((item) => (item.id === pendingMessage.id ? assistantMessage : item)),
@@ -108,6 +192,7 @@ export function App() {
         ),
       );
     } finally {
+      setPendingTurn(null);
       setBusy(false);
     }
   }

@@ -95,10 +95,67 @@ type ClientMessage = {
 
 type MessagePart =
   | { type: "text"; text: string }
+  | { type: "progress-card"; progress: ClientTurnProgress }
   | { type: "task-card"; taskId: string } // rendered as a Work Item card
   | { type: "work-log-summary"; entries: ClientWorkLogEntry[] }
   | { type: "ui"; spec: SikongUISpec };
 ```
+
+### Turn Stream
+
+Long-running client-agent turns should expose progress through an SSE stream,
+not by appending execution logs to the transcript. The stream is a live UI
+projection for one turn segment. It is not durable memory by itself.
+
+Initial stream events:
+
+```ts
+type TurnStreamEvent =
+  | {
+      type: "turn.started";
+      turnId: string;
+      segmentId: string;
+      startedAt: string;
+      phaseId: "prepare" | "context" | "agent" | "workspace" | "refresh";
+      detail?: string;
+    }
+  | {
+      type: "turn.progress";
+      turnId: string;
+      segmentId: string;
+      phaseId: "prepare" | "context" | "agent" | "workspace" | "refresh";
+      detail?: string;
+      at: string;
+    }
+  | {
+      type: "turn.completed";
+      turnId: string;
+      segmentId: string;
+      response: TurnResponse;
+      at: string;
+    }
+  | {
+      type: "turn.error";
+      turnId: string;
+      segmentId: string;
+      message: string;
+      at: string;
+    };
+```
+
+The client renders `turn.started` and `turn.progress` into a temporary
+`progress-card`. `turn.completed` replaces that card with the final assistant
+message. `turn.error` replaces it with a system error message.
+
+Steer should split a turn into multiple segments instead of mutating one long
+progress card forever. The durable control boundary is:
+
+1. `steer.submitted`: a user steer message is queued under the running segment.
+2. `turn.checkpoint_reached`: the current segment reaches a safe boundary.
+3. `steer.applied`: the steer is folded into the next segment's prompt/context.
+
+Those control events belong to the transcript/control ledger and turn stream.
+They do not automatically become client work-log entries.
 
 The `ui` part is optional dynamic content. It is inspired by catalog-based
 renderers such as `json-render`, but Sikong should not become a general-purpose
@@ -157,10 +214,36 @@ It may contain:
 - cross-project decisions;
 - user working preferences;
 - active project status;
-- follow-up reminders and unresolved threads.
 
 It should be bounded and curated. Raw task event logs should not be copied into
 the client work log.
+
+The work log should record semantic facts that should influence later turns:
+
+- `task_summary`: terminal or action-required task outcomes, compact enough to
+  read without replaying task events;
+- `decision`: user or lead decisions that change direction, scope, acceptance,
+  priority, or constraints;
+- `user_preference`: durable operator preferences, including steer messages
+  that should apply beyond the current turn;
+- `project_status`: current workspace status, next recommended action, or an
+  unresolved thread that the user expects Sikong to remember.
+
+The work log should not record:
+
+- SSE progress ticks such as `turn.progress`;
+- model token deltas, raw tool stdout/stderr, or full task traces;
+- every UI transcript message;
+- transient steer lifecycle events unless they resulted in a durable decision
+  or preference;
+- implementation detail that can be recomputed from task inspection.
+
+For steer, the default rule is: keep the steer message and
+`steer.submitted/checkpoint_reached/steer.applied` in the transcript/control
+projection; write a work-log entry only when the steer creates a durable
+preference or decision. Example: "do not use React for this workspace" is a
+`user_preference`; "actually make the button smaller in this run" usually stays
+inside the current turn unless the user asks Sikong to remember it.
 
 Candidate entry shape:
 

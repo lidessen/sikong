@@ -1,4 +1,10 @@
-import type { ClientMessage, ClientMessageRole, MessagePart, TurnResponse } from "./types";
+import type {
+  ClientMessage,
+  ClientMessageRole,
+  ClientTurnProgress,
+  MessagePart,
+  TurnResponse,
+} from "./types";
 
 export function createClientMessage(input: {
   role: ClientMessageRole;
@@ -21,9 +27,14 @@ export function createTextMessage(role: ClientMessageRole, text: string): Client
   });
 }
 
-export function createPendingMessage(): ClientMessage {
+export function createPendingMessage(progress?: ClientTurnProgress): ClientMessage {
   return {
-    ...createTextMessage("assistant", "Sikong is working..."),
+    ...createClientMessage({
+      role: "assistant",
+      parts: progress
+        ? [{ type: "progress-card", progress }]
+        : [{ type: "text", text: "Sikong is working..." }],
+    }),
     pending: true,
   };
 }

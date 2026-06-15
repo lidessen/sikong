@@ -16,7 +16,12 @@ import {
 } from "@sikong/workspace";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { ClientMessage } from "../src/types";
+import type {
+  ClientMessage,
+  ClientTurnProgressPhaseId,
+  TurnResponse,
+  TurnStreamEvent,
+} from "../src/types";
 
 const port = Number(process.env.SIKONG_CLIENT_API_PORT ?? 8776);
 const dataDir = resolveDataDir().dir;
@@ -108,43 +113,14 @@ Bun.serve({
         });
         return json(entry, 201);
       }
+      if (request.method === "POST" && url.pathname === "/api/turn/stream") {
+        const body = await request.json();
+        const input = parseTurnRequest(body);
+        return turnStreamResponse(input);
+      }
       if (request.method === "POST" && url.pathname === "/api/turn") {
         const body = await request.json();
-        const workspaceId = optionalStringField(body, "workspaceId");
-        const taskId = optionalStringField(body, "taskId");
-        const beforeTasks = await taskSnapshot();
-        const userMessage = textMessage("user", stringField(body, "message"));
-        await appendTranscript(userMessage);
-        const settings = await settingsStore.read();
-        const runtime = await createDefaultRuntimeAssemblyRegistry().createExecutionRuntime({
-          backend: {
-            name: settings.defaults.clientAgent.backend,
-            options: runtimeOptions(settings.defaults.clientAgent),
-          },
-        });
-        if (!runtime.loop) throw new Error("client agent backend did not create an agent loop");
-        const result = await runClientAgentTurn({
-          ctx: commandContext(workspaceId),
-          loop: runtime.loop,
-          message: messageText(userMessage),
-          focus: {
-            ...(workspaceId ? { workspaceId } : {}),
-            ...(taskId ? { taskId } : {}),
-          },
-        });
-        const assistantMessage = textMessage(
-          "assistant",
-          result.run.text || `Turn finished with status ${result.run.status}.`,
-        );
-        await appendTranscript(assistantMessage);
-        const autoDriven = await autoDriveNewTasks(beforeTasks);
-        return json({
-          text: result.run.text,
-          status: result.run.status,
-          context: result.context,
-          message: assistantMessage,
-          autoDriven,
-        });
+        return json(await runTurnWorkflow(parseTurnRequest(body)));
       }
       if (request.method === "GET" || request.method === "HEAD") {
         const response = await staticResponse(url.pathname, request.method === "HEAD");
@@ -158,6 +134,156 @@ Bun.serve({
 });
 
 console.log(`sikong client api listening on http://127.0.0.1:${port}`);
+
+interface TurnRequestInput {
+  message: string;
+  workspaceId?: string;
+  taskId?: string;
+}
+
+interface TurnProgressUpdate {
+  phaseId: ClientTurnProgressPhaseId;
+  detail?: string;
+}
+
+interface TurnWorkflowResponse extends TurnResponse {
+  autoDriven: unknown[];
+}
+
+function parseTurnRequest(body: unknown): TurnRequestInput {
+  return {
+    message: stringField(body, "message"),
+    workspaceId: optionalStringField(body, "workspaceId"),
+    taskId: optionalStringField(body, "taskId"),
+  };
+}
+
+async function runTurnWorkflow(
+  input: TurnRequestInput,
+  onProgress?: (update: TurnProgressUpdate) => void | Promise<void>,
+): Promise<TurnWorkflowResponse> {
+  const progress = async (update: TurnProgressUpdate) => {
+    await onProgress?.(update);
+  };
+  const beforeTasks = await taskSnapshot();
+  const userMessage = textMessage("user", input.message);
+  await appendTranscript(userMessage);
+  await progress({
+    phaseId: "context",
+    detail: "User message saved. Loading workspace context and runtime settings.",
+  });
+
+  const settings = await settingsStore.read();
+  const runtime = await createDefaultRuntimeAssemblyRegistry().createExecutionRuntime({
+    backend: {
+      name: settings.defaults.clientAgent.backend,
+      options: runtimeOptions(settings.defaults.clientAgent),
+    },
+  });
+  if (!runtime.loop) throw new Error("client agent backend did not create an agent loop");
+
+  await progress({
+    phaseId: "agent",
+    detail: "Context is ready. Running the client agent model/tool loop.",
+  });
+  const result = await runClientAgentTurn({
+    ctx: commandContext(input.workspaceId),
+    loop: runtime.loop,
+    message: messageText(userMessage),
+    focus: {
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+    },
+  });
+
+  await progress({
+    phaseId: "workspace",
+    detail: "Agent result received. Persisting transcript and updating workspace work items.",
+  });
+  const assistantMessage = textMessage(
+    "assistant",
+    result.run.text || `Turn finished with status ${result.run.status}.`,
+  );
+  await appendTranscript(assistantMessage);
+  const autoDriven = await autoDriveNewTasks(beforeTasks);
+
+  await progress({
+    phaseId: "refresh",
+    detail: "Workspace changes are persisted. Refreshing the UI projection.",
+  });
+  return {
+    text: result.run.text,
+    status: result.run.status,
+    context: result.context,
+    message: assistantMessage,
+    autoDriven,
+  };
+}
+
+function turnStreamResponse(input: TurnRequestInput): Response {
+  const turnId = crypto.randomUUID();
+  const segmentId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (event: TurnStreamEvent) => {
+        controller.enqueue(
+          encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`),
+        );
+      };
+
+      void (async () => {
+        send({
+          type: "turn.started",
+          turnId,
+          segmentId,
+          startedAt,
+          phaseId: "prepare",
+          detail: "Turn accepted. Preparing transcript and focus context.",
+        });
+        try {
+          const response = await runTurnWorkflow(input, (update) => {
+            send({
+              type: "turn.progress",
+              turnId,
+              segmentId,
+              phaseId: update.phaseId,
+              detail: update.detail,
+              at: new Date().toISOString(),
+            });
+          });
+          send({
+            type: "turn.completed",
+            turnId,
+            segmentId,
+            response,
+            at: new Date().toISOString(),
+          });
+        } catch (err) {
+          send({
+            type: "turn.error",
+            turnId,
+            segmentId,
+            message: err instanceof Error ? err.message : String(err),
+            at: new Date().toISOString(),
+          });
+        } finally {
+          controller.close();
+        }
+      })();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      ...corsHeaders(),
+    },
+  });
+}
 
 async function clientState(workspaceId?: string) {
   const [settings, workspacesResult] = await Promise.all([

@@ -444,7 +444,8 @@ Deliverables:
   workspace/task summaries; _(implemented)_
 - per-turn `runClientAgentTurn` facade over `agent-loop.run` and
   `createClientAgentTools`; _(implemented)_
-- local Bun client API adapter for browser JSON calls; _(implemented)_
+- local Bun client API adapter for browser JSON and SSE turn calls;
+  _(implemented)_
 - React+Vite client with one continuous activity stream, task cards, workspace
   switching, and secondary work-log/task detail views. _(implemented)_
 - typed client message parts and a restricted dynamic UI part based on a small
