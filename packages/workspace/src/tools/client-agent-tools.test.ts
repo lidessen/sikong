@@ -43,15 +43,99 @@ describe("client agent tools", () => {
     ]);
     expect(schemaRequired(requireTool(tools, "createTask").inputSchema)).toEqual(["request"]);
     expect(tools.driveTask).toBeUndefined();
+    expect(schemaRequired(requireTool(tools, "searchTranscript").inputSchema)).toEqual(["query"]);
+    expect(schemaRequired(requireTool(tools, "getWorkspaceSource").inputSchema)).toEqual([
+      "workspaceId",
+    ]);
     expect(schemaRequired(requireTool(tools, "inspectTaskCompact").inputSchema)).toEqual([
       "taskId",
     ]);
   });
 
-  test("expose workspace, preference, task, and inspect command handlers", async () => {
+  test("settlement tools are read-only and can finish the turn", async () => {
+    const sink = {};
+    let finished = false;
+    const tools = createClientAgentTools({
+      ctx: ctx("/tmp/sikong-client-tools-test"),
+      mode: "settlement",
+      outcome: sink,
+      onFinish: () => {
+        finished = true;
+      },
+    });
+
+    expect(tools.listWorkspaces).toBeDefined();
+    expect(tools.getWorkspaceSource).toBeDefined();
+    expect(tools.inspectTaskCompact).toBeDefined();
+    expect(tools.createWorkspace).toBeUndefined();
+    expect(tools.createTask).toBeUndefined();
+    expect(tools.addWorkspacePreference).toBeUndefined();
+    expect(tools.removeWorkspacePreference).toBeUndefined();
+    expect(tools.waitTask).toBeUndefined();
+
+    expect(
+      await callTool(tools, "finishClientTurn", {
+        kind: "report",
+        title: "Done",
+        summary: "Created the requested workspace.",
+        facts: [{ label: "workspace", value: "sikong" }],
+      }),
+    ).toMatchObject({
+      ok: true,
+      data: {
+        outcome: {
+          kind: "report",
+          title: "Done",
+          summary: "Created the requested workspace.",
+        },
+      },
+    });
+    expect(finished).toBe(true);
+    expect(sink).toMatchObject({
+      outcome: {
+        kind: "report",
+        title: "Done",
+      },
+    });
+  });
+
+  test("expose transcript, workspace, preference, task, and inspect command handlers", async () => {
     const dir = await tmp();
     try {
-      const tools = createClientAgentTools({ ctx: ctx(dir) });
+      const tools = createClientAgentTools({
+        ctx: ctx(dir),
+        transcript: {
+          listRecent: async () => [
+            {
+              id: "m1",
+              role: "user",
+              createdAt: "2026-06-14T00:00:00.000Z",
+              parts: [{ type: "text", text: "Create a Sikong workspace." }],
+            },
+          ],
+          search: async ({ query }) =>
+            query === "workspace"
+              ? [
+                  {
+                    id: "m1",
+                    role: "user",
+                    createdAt: "2026-06-14T00:00:00.000Z",
+                    parts: [{ type: "text", text: "Create a Sikong workspace." }],
+                  },
+                ]
+              : [],
+          getRange: async () => [],
+        },
+      });
+
+      expect(await callTool(tools, "listTranscriptRecent")).toMatchObject({
+        ok: true,
+        data: [{ id: "m1", role: "user" }],
+      });
+      expect(await callTool(tools, "searchTranscript", { query: "workspace" })).toMatchObject({
+        ok: true,
+        data: [{ id: "m1", role: "user" }],
+      });
 
       expect(await callTool(tools, "createWorkspace", { id: "sikong", name: "Sikong" })).toEqual({
         ok: true,
@@ -97,7 +181,7 @@ describe("client agent tools", () => {
           taskId: "task_id_1",
           projection: {
             taskId: "task_id_1",
-            status: "planning",
+            status: "created",
           },
         },
       });
@@ -109,13 +193,22 @@ describe("client agent tools", () => {
       }
       const taskId = createdTaskResult.data.taskId;
 
+      expect(await callTool(tools, "getWorkspaceSource", { workspaceId: "sikong" })).toMatchObject({
+        ok: true,
+        data: {
+          workspace: { id: "sikong" },
+          preferences: [{ id: "run-bun-run-check" }],
+          taskCards: [{ taskId, status: "created" }],
+        },
+      });
+
       expect(await callTool(tools, "getTask", { workspaceId: "sikong", taskId })).toMatchObject({
         ok: true,
-        data: { projection: { taskId, status: "planning" } },
+        data: { projection: { taskId, status: "created" } },
       });
       expect(await callTool(tools, "listTasks", { workspaceId: "sikong" })).toMatchObject({
         ok: true,
-        data: { tasks: [{ taskId, status: "planning" }] },
+        data: { tasks: [{ taskId, status: "created" }] },
       });
       expect(
         await callTool(tools, "inspectTaskSummary", { workspaceId: "sikong", taskId }),
@@ -124,8 +217,7 @@ describe("client agent tools", () => {
         data: {
           summary: {
             taskId,
-            status: "planning",
-            planStatus: "requested",
+            status: "created",
           },
         },
       });
@@ -136,7 +228,7 @@ describe("client agent tools", () => {
         data: {
           compact: {
             taskId,
-            nextAction: { type: "start_planning_worker" },
+            nextAction: { type: "start_lead_requirement_spec" },
             runtimeProcesses: { total: 0, running: 0 },
           },
         },
@@ -146,23 +238,20 @@ describe("client agent tools", () => {
       ).toMatchObject({
         ok: true,
         data: {
-          trace: [
-            { type: "task.created", summary: "Implement client agent tools." },
-            { type: "plan.requested", summary: "Implement client agent tools." },
-          ],
+          trace: [{ type: "task.created", summary: "Implement client agent tools." }],
         },
       });
       expect(
         await callTool(tools, "inspectTaskEvents", { workspaceId: "sikong", taskId }),
       ).toMatchObject({
         ok: true,
-        data: { events: [{ type: "task.created" }, { type: "plan.requested" }] },
+        data: { events: [{ type: "task.created" }] },
       });
       expect(
         await callTool(tools, "inspectTaskProjection", { workspaceId: "sikong", taskId }),
       ).toMatchObject({
         ok: true,
-        data: { projection: { taskId, status: "planning" } },
+        data: { projection: { taskId, status: "created" } },
       });
       expect(
         await callTool(tools, "waitTask", {
@@ -171,10 +260,14 @@ describe("client agent tools", () => {
           timeoutMs: 0,
         }),
       ).toMatchObject({
-        ok: false,
-        error: {
-          code: "timeout",
-          details: { taskId, workspaceId: "sikong" },
+        ok: true,
+        data: {
+          compact: {
+            taskId,
+            workspaceId: "sikong",
+            status: "created",
+            nextAction: { type: "start_lead_requirement_spec" },
+          },
         },
       });
 

@@ -41,14 +41,24 @@ export interface SerializableStageWorkerInput extends Omit<
 
 export type SerializableOrchestrationAction =
   | {
+      type: "start_lead_requirement_spec";
+      spec: SerializableWorkerRunSpec;
+    }
+  | {
       type: "start_planning_worker";
       spec: SerializableWorkerRunSpec;
     }
   | {
-      type: "await_plan_decision";
-      taskId: string;
-      planId?: string;
-      version?: number;
+      type: "start_lead_plan_decision";
+      spec: SerializableWorkerRunSpec;
+    }
+  | {
+      type: "start_lead_round_planning";
+      spec: SerializableWorkerRunSpec;
+    }
+  | {
+      type: "start_lead_final_decision";
+      spec: SerializableWorkerRunSpec;
     }
   | {
       type: "start_stage_worker";
@@ -60,6 +70,12 @@ export type SerializableOrchestrationAction =
       stageId: string;
       runningRuns: number;
       targetRuns: number;
+    }
+  | {
+      type: "complete_stage_round";
+      taskId: string;
+      workspaceId: string;
+      roundId: string;
     }
   | {
       type: "start_stage_review";
@@ -76,11 +92,6 @@ export type SerializableOrchestrationAction =
       type: "start_final_verification_worker";
       spec: SerializableWorkerRunSpec;
       reviewId: string;
-    }
-  | {
-      type: "await_final_decision";
-      taskId: string;
-      recommendation?: "accept" | "reject";
     }
   | {
       type: "terminal";
@@ -160,7 +171,11 @@ export function toSerializableOrchestrationAction(
   action: OrchestrationAction,
 ): SerializableOrchestrationAction {
   switch (action.type) {
+    case "start_lead_requirement_spec":
     case "start_planning_worker":
+    case "start_lead_plan_decision":
+    case "start_lead_round_planning":
+    case "start_lead_final_decision":
       return { type: action.type, spec: serializableWorkerRunSpec(action.spec) };
     case "start_stage_verification_worker":
       return {

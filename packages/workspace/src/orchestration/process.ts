@@ -178,6 +178,7 @@ async function recordProcessActionFailure(
   },
 ): Promise<CommandResult<unknown>> {
   if (input.action.type !== "start_stage_worker") return ok({});
+  const actionInput = input.action.input;
 
   const task = await getTask(input.ctx, {
     workspaceId: result.workspaceId,
@@ -185,9 +186,10 @@ async function recordProcessActionFailure(
   });
   if (!task.ok) return task;
 
-  const stageId = input.action.input.stageId ?? task.data.projection.currentStageId;
   const run = Object.values(task.data.projection.workerRuns)
-    .filter((candidate) => candidate.status === "running" && candidate.stageId === stageId)
+    .filter(
+      (candidate) => candidate.status === "running" && candidate.roundId === actionInput.roundId,
+    )
     .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0];
   if (!run) return ok({});
 
@@ -223,7 +225,11 @@ function parseRunnerOutput(
 
 function taskIdForAction(action: OrchestrationAction): string | undefined {
   switch (action.type) {
+    case "start_lead_requirement_spec":
     case "start_planning_worker":
+    case "start_lead_plan_decision":
+    case "start_lead_round_planning":
+    case "start_lead_final_decision":
     case "start_stage_verification_worker":
     case "start_final_verification_worker":
       return action.spec.taskId;
@@ -236,7 +242,11 @@ function taskIdForAction(action: OrchestrationAction): string | undefined {
 
 function workspaceIdForAction(action: OrchestrationAction): string | undefined {
   switch (action.type) {
+    case "start_lead_requirement_spec":
     case "start_planning_worker":
+    case "start_lead_plan_decision":
+    case "start_lead_round_planning":
+    case "start_lead_final_decision":
     case "start_stage_verification_worker":
     case "start_final_verification_worker":
       return action.spec.workspaceId;

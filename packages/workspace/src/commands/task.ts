@@ -6,6 +6,9 @@ import {
   type PlanDecisionProjection,
   type PlanDef,
   type PlanStageDef,
+  type RequirementSpec,
+  type StageRoundDef,
+  type StageWorkUnitDef,
   type TaskEvent,
   type TaskProjection,
   type TaskRunResult,
@@ -48,8 +51,13 @@ export interface SubmitPlanInput extends TaskIdInput {
     title: string;
     objective: string;
     acceptance: string[];
-    workerCount?: number;
   }>;
+}
+
+export interface SubmitRequirementSpecInput extends TaskIdInput {
+  summary: string;
+  constraints?: string[];
+  acceptance?: string[];
 }
 
 export interface PlanDecisionInput extends TaskIdInput {
@@ -63,9 +71,24 @@ export interface RejectPlanInput extends PlanDecisionInput {
 }
 
 export interface StartWorkerRunInput extends TaskIdInput {
-  stageId?: string;
+  roundId: string;
+  workUnitId: string;
   workerId?: string;
-  objective?: string;
+}
+
+export interface PlanStageRoundInput extends TaskIdInput {
+  stageId: string;
+  title?: string;
+  intent: string;
+  workUnits: Array<{
+    title: string;
+    objective: string;
+    acceptance?: string[];
+  }>;
+}
+
+export interface CompleteStageRoundInput extends TaskIdInput {
+  roundId: string;
 }
 
 export interface FinishWorkerRunInput extends TaskIdInput {
@@ -73,6 +96,7 @@ export interface FinishWorkerRunInput extends TaskIdInput {
   summary: string;
   report?: string;
   note?: string;
+  observations?: TaskRunResult["observations"];
 }
 
 export interface StageReviewInput extends TaskIdInput {
@@ -149,20 +173,55 @@ export async function createTask(
       request: input.request,
       ...(runtime.data ? { runtime: runtime.data } : {}),
     },
-    {
-      id: eventId(),
-      type: "plan.requested",
-      taskId,
-      workspaceId,
-      createdAt: now,
-      brief: input.request,
-    },
   ];
 
   const eventStore = new FileTaskEventStore(ctx.dataDir);
   const projection = await eventStore.appendManyAndRebuildProjection(events);
   if (!projection) return fail("internal_error", "Task projection was not created.");
   return ok({ taskId, projection });
+}
+
+export async function submitRequirementSpec(
+  ctx: CommandContext,
+  input: SubmitRequirementSpecInput,
+): Promise<CommandResult<{ projection: TaskProjection; spec: RequirementSpec }>> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  if (projection.status !== "created" || projection.requirementSpec) {
+    return fail(
+      "invalid_state",
+      "Requirement spec can only be submitted once for a created task.",
+      {
+        taskId: input.taskId,
+        status: projection.status,
+      },
+    );
+  }
+
+  const spec = normalizeRequirementSpec(input);
+  if (!spec.ok) return spec;
+  const now = commandNow(ctx);
+  const updated = await appendAndProject(ctx, [
+    {
+      id: nextId("event", ctx.id),
+      type: "requirement_spec.submitted",
+      taskId: input.taskId,
+      workspaceId: projection.workspaceId,
+      createdAt: now,
+      spec: spec.data.spec,
+    },
+    {
+      id: nextId("event", ctx.id),
+      type: "plan.requested",
+      taskId: input.taskId,
+      workspaceId: projection.workspaceId,
+      createdAt: now,
+      brief: spec.data.spec.summary,
+    },
+  ]);
+  if (!updated.ok) return updated;
+  return ok({ projection: updated.data.projection, spec: spec.data.spec });
 }
 
 export async function getTask(
@@ -195,7 +254,9 @@ export async function listTasks(
   const tasks: TaskCompactView[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
-    const projection = JSON.parse(await readFile(join(dir, entry), "utf8")) as TaskProjection;
+    const projection = normalizeTaskProjection(
+      JSON.parse(await readFile(join(dir, entry), "utf8")) as TaskProjection,
+    );
     tasks.push(compactTaskView(projection));
   }
   tasks.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
@@ -299,9 +360,9 @@ export async function startWorkerRun(
   ctx: CommandContext,
   input: StartWorkerRunInput,
 ): Promise<CommandResult<{ runId: string; projection: TaskProjection }>> {
-  const loaded = await loadCurrentStage(ctx, input);
+  const loaded = await loadCurrentWorkUnit(ctx, input);
   if (!loaded.ok) return loaded;
-  const { projection, stage } = loaded.data;
+  const { projection, round, workUnit } = loaded.data;
   const runId = nextId("run", ctx.id);
   const updated = await appendAndProject(ctx, {
     id: nextId("event", ctx.id),
@@ -310,12 +371,102 @@ export async function startWorkerRun(
     workspaceId: projection.workspaceId,
     createdAt: commandNow(ctx),
     runId,
-    stageId: stage.id,
+    stageId: round.stageId,
+    roundId: round.id,
+    workUnitId: workUnit.id,
     ...(input.workerId ? { workerId: input.workerId } : {}),
-    objective: input.objective?.trim() || stage.objective,
+    objective: workUnit.objective,
   });
   if (!updated.ok) return updated;
   return ok({ runId, projection: updated.data.projection });
+}
+
+export async function planStageRound(
+  ctx: CommandContext,
+  input: PlanStageRoundInput,
+): Promise<CommandResult<{ round: StageRoundDef; projection: TaskProjection }>> {
+  const loaded = await loadCurrentStage(ctx, input);
+  if (!loaded.ok) return loaded;
+  const { projection, stage } = loaded.data;
+  if (projection.activeRoundId) {
+    return fail("invalid_state", "Current stage already has an active round.", {
+      taskId: input.taskId,
+      activeRoundId: projection.activeRoundId,
+    });
+  }
+  if (input.stageId !== stage.id) {
+    return fail("invalid_state", "Stage round must target the current stage.", {
+      taskId: input.taskId,
+      currentStageId: stage.id,
+      requestedStageId: input.stageId,
+    });
+  }
+  const workUnits = validateWorkUnits(input.workUnits);
+  if (!workUnits.ok) return workUnits;
+  const intent = input.intent.trim();
+  if (!intent) return fail("invalid_input", "Stage round intent must be non-empty.");
+  const round: StageRoundDef = {
+    id: nextId("round", ctx.id),
+    stageId: stage.id,
+    ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+    intent,
+    workUnits: workUnits.data.workUnits.map((workUnit) => ({
+      ...workUnit,
+      id: nextId("work_unit", ctx.id),
+    })),
+  };
+  const updated = await appendAndProject(ctx, {
+    id: nextId("event", ctx.id),
+    type: "stage_round.planned",
+    taskId: input.taskId,
+    workspaceId: projection.workspaceId,
+    createdAt: commandNow(ctx),
+    round,
+  });
+  if (!updated.ok) return updated;
+  return ok({ round, projection: updated.data.projection });
+}
+
+export async function completeStageRound(
+  ctx: CommandContext,
+  input: CompleteStageRoundInput,
+): Promise<CommandResult<{ projection: TaskProjection }>> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  const round = projection.stageRounds[input.roundId];
+  if (
+    projection.status !== "running" ||
+    !round ||
+    round.status !== "planned" ||
+    projection.activeRoundId !== round.id
+  ) {
+    return fail("invalid_state", "Stage round is not active.", {
+      taskId: input.taskId,
+      roundId: input.roundId,
+      activeRoundId: projection.activeRoundId,
+    });
+  }
+  const runs = Object.values(projection.workerRuns).filter((run) => run.roundId === round.id);
+  const terminalRuns = runs.filter((run) => run.status !== "running");
+  if (runs.length !== round.workUnits.length || terminalRuns.length !== round.workUnits.length) {
+    return fail("invalid_state", "Stage round cannot complete until all work units are terminal.", {
+      taskId: input.taskId,
+      roundId: input.roundId,
+      startedRuns: runs.length,
+      terminalRuns: terminalRuns.length,
+      workUnits: round.workUnits.length,
+    });
+  }
+  return await appendAndProject(ctx, {
+    id: nextId("event", ctx.id),
+    type: "stage_round.completed",
+    taskId: input.taskId,
+    workspaceId: projection.workspaceId,
+    createdAt: commandNow(ctx),
+    roundId: round.id,
+    stageId: round.stageId,
+  });
 }
 
 export async function completeWorkerRun(
@@ -520,6 +671,32 @@ export async function inspectTaskCompact(
   return ok({ compact: compactTaskView(loaded.data.projection) });
 }
 
+export async function inspectTaskDetail(
+  ctx: CommandContext,
+  input: TaskIdInput,
+): Promise<
+  CommandResult<{
+    detail: TaskDetailView;
+  }>
+> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const events = await inspectTaskEvents(ctx, input);
+  if (!events.ok) return events;
+  const trace = await inspectTaskTrace(ctx, input);
+  if (!trace.ok) return trace;
+  const projection = loaded.data.projection;
+  return ok({
+    detail: {
+      compact: compactTaskView(projection),
+      projection,
+      trace: trace.data.trace,
+      events: events.data.events,
+      observations: collectWorkerObservations(projection),
+    },
+  });
+}
+
 export async function waitTask(
   ctx: CommandContext,
   input: WaitTaskInput,
@@ -720,6 +897,15 @@ export interface TaskCompactView {
     id: string;
     title: string;
   };
+  activeRound?: {
+    id: string;
+    title?: string;
+    intent: string;
+    workUnits: number;
+    startedWorkUnits: number;
+    runningWorkUnits: number;
+    completedWorkUnits: number;
+  };
   plan?: {
     status?: PlanDecisionProjection["status"];
     id?: string;
@@ -768,6 +954,20 @@ export interface TaskTraceEntry {
   summary: string;
 }
 
+export interface TaskDetailView {
+  compact: TaskCompactView;
+  projection: TaskProjection;
+  trace: TaskTraceEntry[];
+  events: TaskEvent[];
+  observations: Array<{
+    runId: string;
+    stageId: string;
+    roundId: string;
+    workUnitId: string;
+    observations: NonNullable<TaskRunResult["observations"]>;
+  }>;
+}
+
 function compactTaskView(projection: TaskProjection): TaskCompactView {
   const currentStage = projection.plan?.stages.find(
     (stage) => stage.id === projection.currentStageId,
@@ -777,12 +977,31 @@ function compactTaskView(projection: TaskProjection): TaskCompactView {
   const runtimeProcesses = Object.values(projection.runtimeProcessRuns ?? {});
   const latestRuntimeProcess = latestRuntimeProcessRun(projection);
   const latestReview = latestReviewProjection(projection);
+  const activeRound = projection.activeRoundId
+    ? projection.stageRounds[projection.activeRoundId]
+    : undefined;
+  const activeRoundRuns = activeRound
+    ? Object.values(projection.workerRuns).filter((run) => run.roundId === activeRound.id)
+    : [];
   return {
     taskId: projection.taskId,
     workspaceId: projection.workspaceId,
     status: projection.status,
     ...(projection.request ? { request: projection.request } : {}),
     ...(currentStage ? { currentStage: { id: currentStage.id, title: currentStage.title } } : {}),
+    ...(activeRound
+      ? {
+          activeRound: {
+            id: activeRound.id,
+            ...(activeRound.title ? { title: activeRound.title } : {}),
+            intent: activeRound.intent,
+            workUnits: activeRound.workUnits.length,
+            startedWorkUnits: activeRoundRuns.length,
+            runningWorkUnits: activeRoundRuns.filter((run) => run.status === "running").length,
+            completedWorkUnits: activeRoundRuns.filter((run) => run.status === "completed").length,
+          },
+        }
+      : {}),
     ...(projection.plan || projection.planDecision
       ? {
           plan: {
@@ -795,7 +1014,10 @@ function compactTaskView(projection: TaskProjection): TaskCompactView {
       : {}),
     nextAction,
     waitingForLead:
-      nextAction.type === "await_plan_decision" || nextAction.type === "await_final_decision",
+      nextAction.type === "start_lead_requirement_spec" ||
+      nextAction.type === "start_lead_plan_decision" ||
+      nextAction.type === "start_lead_round_planning" ||
+      nextAction.type === "start_lead_final_decision",
     runtimeProcesses: {
       total: runtimeProcesses.length,
       running: runtimeProcesses.filter((processRun) => processRun.status === "running").length,
@@ -916,6 +1138,19 @@ function latestReviewProjection(
   };
 }
 
+function collectWorkerObservations(projection: TaskProjection): TaskDetailView["observations"] {
+  return Object.values(projection.workerRuns)
+    .filter((run) => run.result?.observations?.length)
+    .sort((a, b) => String(a.startedAt ?? a.runId).localeCompare(String(b.startedAt ?? b.runId)))
+    .map((run) => ({
+      runId: run.runId,
+      stageId: run.stageId,
+      roundId: run.roundId,
+      workUnitId: run.workUnitId,
+      observations: run.result?.observations ?? [],
+    }));
+}
+
 async function resolveRuntimeInput(
   ctx: CommandContext,
   input: CreateTaskInput & { workspaceId: string; taskId: string },
@@ -993,7 +1228,18 @@ async function loadTaskProjection(
       taskId: input.taskId,
     });
   }
-  return ok({ projection });
+  return ok({ projection: normalizeTaskProjection(projection) });
+}
+
+function normalizeTaskProjection(projection: TaskProjection): TaskProjection {
+  return {
+    ...projection,
+    acceptedStageIds: projection.acceptedStageIds ?? [],
+    stageRounds: projection.stageRounds ?? {},
+    runtimeProcessRuns: projection.runtimeProcessRuns ?? {},
+    workerRuns: projection.workerRuns ?? {},
+    stageReviews: projection.stageReviews ?? {},
+  };
 }
 
 async function resolveTaskWorkspaceId(
@@ -1024,26 +1270,69 @@ function validatePlanStages(
         index,
       });
     }
-    const workerCount = normalizeWorkerCount(stage.workerCount);
-    if (!workerCount.ok) {
-      return fail("invalid_input", "Plan stage workerCount must be a positive integer.", {
-        index,
-      });
-    }
     normalized.push({
       title,
       objective,
       acceptance,
-      ...(workerCount.data > 1 ? { workerCount: workerCount.data } : {}),
     });
   }
   return ok({ stages: normalized });
 }
 
-function normalizeWorkerCount(value: number | undefined): CommandResult<number> {
-  if (value === undefined) return ok(1);
-  if (!Number.isSafeInteger(value) || value < 1) return fail("invalid_input", "invalid");
-  return ok(value);
+function normalizeRequirementSpec(
+  input: SubmitRequirementSpecInput,
+): CommandResult<{ spec: RequirementSpec }> {
+  const summary = input.summary.trim();
+  if (!summary) return fail("invalid_input", "Requirement spec summary must be non-empty.");
+  const constraints = normalizeOptionalStringList(input.constraints, "constraints");
+  if (!constraints.ok) return constraints;
+  const acceptance = normalizeOptionalStringList(input.acceptance, "acceptance");
+  if (!acceptance.ok) return acceptance;
+  return ok({
+    spec: {
+      summary,
+      ...(constraints.data.values.length > 0 ? { constraints: constraints.data.values } : {}),
+      ...(acceptance.data.values.length > 0 ? { acceptance: acceptance.data.values } : {}),
+    },
+  });
+}
+
+function normalizeOptionalStringList(
+  values: string[] | undefined,
+  field: string,
+): CommandResult<{ values: string[] }> {
+  if (values === undefined) return ok({ values: [] });
+  if (!Array.isArray(values)) return fail("invalid_input", `${field} must be an array.`);
+  const normalized = values.map((value) => value.trim()).filter(Boolean);
+  if (normalized.length !== values.length) {
+    return fail("invalid_input", `${field} must not contain empty values.`);
+  }
+  return ok({ values: normalized });
+}
+
+function validateWorkUnits(
+  workUnits: PlanStageRoundInput["workUnits"],
+): CommandResult<{ workUnits: Omit<StageWorkUnitDef, "id">[] }> {
+  if (!Array.isArray(workUnits) || workUnits.length === 0) {
+    return fail("invalid_input", "Stage round must include at least one work unit.");
+  }
+
+  const normalized: Omit<StageWorkUnitDef, "id">[] = [];
+  for (const [index, workUnit] of workUnits.entries()) {
+    const title = workUnit.title.trim();
+    const objective = workUnit.objective.trim();
+    const acceptance = normalizeOptionalStringList(workUnit.acceptance, "acceptance");
+    if (!acceptance.ok) return acceptance;
+    if (!title || !objective) {
+      return fail("invalid_input", "Work units require title and objective.", { index });
+    }
+    normalized.push({
+      title,
+      objective,
+      ...(acceptance.data.values.length > 0 ? { acceptance: acceptance.data.values } : {}),
+    });
+  }
+  return ok({ workUnits: normalized });
 }
 
 async function loadSubmittedPlan(
@@ -1087,6 +1376,50 @@ async function loadCurrentStage(
     });
   }
   return ok({ projection, stage });
+}
+
+async function loadCurrentWorkUnit(
+  ctx: CommandContext,
+  input: StartWorkerRunInput,
+): Promise<
+  CommandResult<{
+    projection: TaskProjection;
+    round: NonNullable<TaskProjection["stageRounds"][string]>;
+    workUnit: StageWorkUnitDef;
+  }>
+> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  const round = projection.stageRounds[input.roundId];
+  const workUnit = round?.workUnits.find((candidate) => candidate.id === input.workUnitId);
+  if (
+    projection.status !== "running" ||
+    !round ||
+    round.status !== "planned" ||
+    projection.activeRoundId !== round.id ||
+    projection.currentStageId !== round.stageId ||
+    !workUnit
+  ) {
+    return fail("invalid_state", "Worker run must target an active stage round work unit.", {
+      taskId: input.taskId,
+      roundId: input.roundId,
+      workUnitId: input.workUnitId,
+      activeRoundId: projection.activeRoundId,
+    });
+  }
+  const existing = Object.values(projection.workerRuns).find(
+    (run) => run.roundId === round.id && run.workUnitId === workUnit.id,
+  );
+  if (existing) {
+    return fail("invalid_state", "Work unit already has a worker run.", {
+      taskId: input.taskId,
+      roundId: input.roundId,
+      workUnitId: input.workUnitId,
+      runId: existing.runId,
+    });
+  }
+  return ok({ projection, round, workUnit });
 }
 
 async function loadStartedStageReview(
@@ -1160,6 +1493,7 @@ function normalizeTaskRunResult(
       summary,
       ...(input.report?.trim() ? { report: input.report.trim() } : {}),
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+      ...(input.observations?.length ? { observations: input.observations } : {}),
     },
   });
 }
@@ -1210,6 +1544,8 @@ function summarizeEvent(event: TaskEvent): string {
   switch (event.type) {
     case "task.created":
       return event.request;
+    case "requirement_spec.submitted":
+      return event.spec.summary;
     case "plan.requested":
       return event.brief ?? "Plan requested.";
     case "plan.submitted":
@@ -1223,6 +1559,10 @@ function summarizeEvent(event: TaskEvent): string {
       return `Runtime process ${event.processRunId} finished as ${event.processStatus}.`;
     case "stage.started":
       return `Stage ${event.stageId} started.`;
+    case "stage_round.planned":
+      return event.round.title ?? event.round.intent;
+    case "stage_round.completed":
+      return `Stage round ${event.roundId} completed.`;
     case "worker_run.started":
       return event.objective ?? `Worker run ${event.runId} started.`;
     case "worker_run.completed":

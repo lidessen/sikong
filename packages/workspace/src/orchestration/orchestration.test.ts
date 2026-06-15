@@ -6,13 +6,16 @@ import { join } from "node:path";
 import {
   acceptPlan,
   acceptStageReview,
+  completeStageRound,
   completeWorkerRun,
   createTask,
   createWorkspace,
   getTask,
+  planStageRound,
   recommendFinalReview,
   startStageReview,
   startWorkerRun,
+  submitRequirementSpec,
   submitPlan,
   type CommandContext,
   type CommandResult,
@@ -46,6 +49,30 @@ function ctx(dataDir: string): CommandContext {
   };
 }
 
+async function planRound(context: CommandContext, taskId: string, workUnits = 1) {
+  const task = await getTask(context, { taskId });
+  if (!task.ok || !task.data.projection.currentStageId) throw new Error("current stage missing");
+  const round = await planStageRound(context, {
+    taskId,
+    stageId: task.data.projection.currentStageId,
+    intent: "Execute current stage work.",
+    workUnits: Array.from({ length: workUnits }, (_, index) => ({
+      title: `Work unit ${index + 1}`,
+      objective: `Complete work unit ${index + 1}.`,
+    })),
+  });
+  if (!round.ok) throw new Error("round plan failed");
+  return round.data.round;
+}
+
+async function submitSpec(context: CommandContext, taskId: string) {
+  const spec = await submitRequirementSpec(context, {
+    taskId,
+    summary: "Implement the requested work.",
+  });
+  if (!spec.ok) throw new Error("requirement spec submit failed");
+}
+
 const tool = (name: string) =>
   ({
     [name]: defineTool({
@@ -68,6 +95,12 @@ describe("orchestration tick", () => {
       const taskId = created.data.taskId;
 
       expect(next(created.data.projection)).toMatchObject({
+        type: "start_lead_requirement_spec",
+      });
+      await submitSpec(context, taskId);
+      const planningTask = await getTask(context, { taskId });
+      if (!planningTask.ok) throw new Error("task get failed");
+      expect(next(planningTask.data.projection)).toMatchObject({
         type: "start_planning_worker",
         spec: {
           taskId,
@@ -75,13 +108,13 @@ describe("orchestration tick", () => {
         },
       });
       expect(
-        keysOf(toSerializableOrchestrationAction(next(created.data.projection))),
+        keysOf(toSerializableOrchestrationAction(next(planningTask.data.projection))),
       ).not.toContain("tools");
       expect(
-        keysOf(toSerializableOrchestrationAction(next(created.data.projection))),
+        keysOf(toSerializableOrchestrationAction(next(planningTask.data.projection))),
       ).not.toContain("skills");
       expect(
-        keysOf(toSerializableOrchestrationAction(next(created.data.projection))),
+        keysOf(toSerializableOrchestrationAction(next(planningTask.data.projection))),
       ).not.toContain("mcp");
 
       const submitted = await submitPlan(context, {
@@ -96,8 +129,7 @@ describe("orchestration tick", () => {
       });
       if (!submitted.ok) throw new Error("plan submit failed");
       expect(next(submitted.data.projection)).toMatchObject({
-        type: "await_plan_decision",
-        planId: submitted.data.plan.id,
+        type: "start_lead_plan_decision",
       });
 
       const accepted = await acceptPlan(context, {
@@ -108,11 +140,20 @@ describe("orchestration tick", () => {
       });
       if (!accepted.ok) throw new Error("plan accept failed");
       expect(next(accepted.data.projection)).toMatchObject({
-        type: "start_stage_worker",
-        input: { stageId: expect.stringMatching(/^stage_/) },
+        type: "start_lead_round_planning",
       });
 
-      const started = await startWorkerRun(context, { taskId });
+      const round = await planRound(context, taskId);
+      const roundTask = await getTask(context, { taskId });
+      if (!roundTask.ok) throw new Error("task get failed");
+      expect(next(roundTask.data.projection)).toMatchObject({
+        type: "start_stage_worker",
+      });
+      const started = await startWorkerRun(context, {
+        taskId,
+        roundId: round.id,
+        workUnitId: round.workUnits[0]!.id,
+      });
       if (!started.ok) throw new Error("worker start failed");
       const completed = await completeWorkerRun(context, {
         taskId,
@@ -121,8 +162,11 @@ describe("orchestration tick", () => {
       });
       if (!completed.ok) throw new Error("worker complete failed");
       expect(next(completed.data.projection)).toMatchObject({
-        type: "start_stage_review",
+        type: "complete_stage_round",
       });
+
+      const roundCompleted = await completeStageRound(context, { taskId, roundId: round.id });
+      if (!roundCompleted.ok) throw new Error("round complete failed");
 
       const review = await startStageReview(context, { taskId });
       if (!review.ok) throw new Error("stage review start failed");
@@ -154,15 +198,14 @@ describe("orchestration tick", () => {
       });
       if (!recommended.ok) throw new Error("final recommend failed");
       expect(next(recommended.data.projection)).toMatchObject({
-        type: "await_final_decision",
-        recommendation: "accept",
+        type: "start_lead_final_decision",
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("starts parallel stage workers up to workerCount before review", async () => {
+  test("starts parallel stage workers for stage round work units before review", async () => {
     const dir = await tmp();
     try {
       const context = ctx(dir);
@@ -172,14 +215,14 @@ describe("orchestration tick", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
       const submitted = await submitPlan(context, {
         taskId: created.data.taskId,
         stages: [
           {
             title: "Implement",
-            objective: "Use two workers for the same stage.",
+            objective: "Use two workers for the same stage round.",
             acceptance: ["Both worker results are present."],
-            workerCount: 2,
           },
         ],
       });
@@ -193,9 +236,19 @@ describe("orchestration tick", () => {
       if (!accepted.ok) throw new Error("plan accept failed");
 
       expect(next(accepted.data.projection)).toMatchObject({
+        type: "start_lead_round_planning",
+      });
+      const round = await planRound(context, created.data.taskId, 2);
+      const afterRound = await getTask(context, { taskId: created.data.taskId });
+      if (!afterRound.ok) throw new Error("task get failed");
+      expect(next(afterRound.data.projection)).toMatchObject({
         type: "start_stage_worker",
       });
-      const first = await startWorkerRun(context, { taskId: created.data.taskId });
+      const first = await startWorkerRun(context, {
+        taskId: created.data.taskId,
+        roundId: round.id,
+        workUnitId: round.workUnits[0]!.id,
+      });
       if (!first.ok) throw new Error("first worker start failed");
       const afterFirstStart = await getTask(context, { taskId: created.data.taskId });
       if (!afterFirstStart.ok) throw new Error("task get failed");
@@ -203,7 +256,11 @@ describe("orchestration tick", () => {
         type: "start_stage_worker",
       });
 
-      const second = await startWorkerRun(context, { taskId: created.data.taskId });
+      const second = await startWorkerRun(context, {
+        taskId: created.data.taskId,
+        roundId: round.id,
+        workUnitId: round.workUnits[1]!.id,
+      });
       if (!second.ok) throw new Error("second worker start failed");
       const afterSecondStart = await getTask(context, { taskId: created.data.taskId });
       if (!afterSecondStart.ok) throw new Error("task get failed");
@@ -232,7 +289,7 @@ describe("orchestration tick", () => {
       });
       if (!secondDone.ok) throw new Error("second worker complete failed");
       expect(next(secondDone.data.projection)).toMatchObject({
-        type: "start_stage_review",
+        type: "complete_stage_round",
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -251,13 +308,16 @@ describe("orchestration subprocess runner", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
+      const planningTask = await getTask(context, { taskId: created.data.taskId });
+      if (!planningTask.ok) throw new Error("task get failed");
 
       const requestPath = join(dir, "orchestration-request.json");
       await writeFile(
         requestPath,
         JSON.stringify({
           context: { dataDir: dir, workspaceId: "sikong" },
-          action: toSerializableOrchestrationAction(next(created.data.projection)),
+          action: toSerializableOrchestrationAction(next(planningTask.data.projection)),
           runtimeAssembly: {
             backend: {
               name: "mock",
@@ -314,6 +374,7 @@ describe("orchestration subprocess runner", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
       const submitted = await submitPlan(context, {
         taskId: created.data.taskId,
         stages: [
@@ -332,8 +393,11 @@ describe("orchestration subprocess runner", () => {
         report: "Accepted.",
       });
       if (!accepted.ok) throw new Error("plan accept failed");
+      await planRound(context, created.data.taskId);
 
-      const action = next(accepted.data.projection);
+      const ready = await getTask(context, { taskId: created.data.taskId });
+      if (!ready.ok) throw new Error("task get failed");
+      const action = next(ready.data.projection);
       if (action.type !== "start_stage_worker") throw new Error("expected stage worker action");
 
       const runtimeModule = join(dir, "runtime.mjs");
@@ -448,7 +512,10 @@ describe("orchestration process executor", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
-      const action = next(created.data.projection);
+      await submitSpec(context, created.data.taskId);
+      const ready = await getTask(context, { taskId: created.data.taskId });
+      if (!ready.ok) throw new Error("task get failed");
+      const action = next(ready.data.projection);
       if (action.type !== "start_planning_worker") throw new Error("expected planning action");
 
       let requestJson: unknown;
@@ -562,6 +629,7 @@ describe("orchestration process executor", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
       const submitted = await submitPlan(context, {
         taskId: created.data.taskId,
         stages: [
@@ -580,8 +648,11 @@ describe("orchestration process executor", () => {
         report: "Accepted.",
       });
       if (!accepted.ok) throw new Error("plan accept failed");
+      await planRound(context, created.data.taskId);
 
-      const action = next(accepted.data.projection);
+      const ready = await getTask(context, { taskId: created.data.taskId });
+      if (!ready.ok) throw new Error("task get failed");
+      const action = next(ready.data.projection);
       if (action.type !== "start_stage_worker") throw new Error("expected stage worker action");
       let specSnapshot: unknown;
       let workerRunId = "";
@@ -607,7 +678,8 @@ describe("orchestration process executor", () => {
             const started = await startWorkerRun(context, {
               workspaceId: "sikong",
               taskId: created.data.taskId,
-              stageId: action.input.stageId,
+              roundId: action.input.roundId,
+              workUnitId: action.input.workUnitId,
             });
             if (!started.ok) throw new Error("worker start failed");
             workerRunId = started.data.runId;
@@ -677,7 +749,16 @@ describe("orchestration driver", () => {
         ctx: context,
         taskId: created.data.taskId,
         buildInput: input,
+        maxActions: 2,
         executeAction: async (runCtx, action, runtime) => {
+          if (action.type === "start_lead_requirement_spec") {
+            const submitted = await submitRequirementSpec(runCtx, {
+              taskId: action.spec.taskId,
+              summary: "Drive planning to lead decision.",
+            });
+            if (!submitted.ok) return submitted;
+            return loopCompleted(action.type);
+          }
           if (action.type === "start_planning_worker") {
             const submitted = await submitPlan(runCtx, {
               taskId: action.spec.taskId,
@@ -699,11 +780,11 @@ describe("orchestration driver", () => {
       expect(driven).toMatchObject({
         ok: true,
         data: {
-          stopReason: "waiting",
+          stopReason: "max_actions",
           projection: { status: "plan_submitted" },
           steps: [
+            { action: { type: "start_lead_requirement_spec" } },
             { action: { type: "start_planning_worker" } },
-            { action: { type: "await_plan_decision" } },
           ],
         },
       });
@@ -722,6 +803,7 @@ describe("orchestration driver", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
       const submitted = await submitPlan(context, {
         taskId: created.data.taskId,
         stages: [
@@ -745,6 +827,7 @@ describe("orchestration driver", () => {
         ctx: context,
         taskId: created.data.taskId,
         buildInput: input,
+        maxActions: 6,
         runtime: {
           runTask: async (taskInput: TaskInput) => ({
             status: "completed",
@@ -761,17 +844,18 @@ describe("orchestration driver", () => {
       expect(driven).toMatchObject({
         ok: true,
         data: {
-          stopReason: "waiting",
+          stopReason: "max_actions",
           projection: {
             status: "reviewing",
             finalReview: { status: "recommended", recommendation: "accept" },
           },
           steps: [
+            { action: { type: "start_lead_round_planning" } },
             { action: { type: "start_stage_worker" } },
+            { action: { type: "complete_stage_round" } },
             { action: { type: "start_stage_review" } },
             { action: { type: "start_stage_verification_worker" } },
             { action: { type: "start_final_verification_worker" } },
-            { action: { type: "await_final_decision" } },
           ],
         },
       });
@@ -801,14 +885,24 @@ describe("orchestration action executor", () => {
         },
       } as AgentLoop;
 
-      const planning = next(created.data.projection);
+      const leadSpec = next(created.data.projection);
+      expect(leadSpec.type).toBe("start_lead_requirement_spec");
+      const leadSpecExecuted = await executeOrchestrationAction(context, leadSpec, { loop });
+      expect(leadSpecExecuted).toMatchObject({
+        ok: true,
+        data: { resultType: "loop_completed", actionType: "start_lead_requirement_spec" },
+      });
+      await submitSpec(context, created.data.taskId);
+      const afterSpec = await getTask(context, { taskId: created.data.taskId });
+      if (!afterSpec.ok) throw new Error("task get failed");
+      const planning = next(afterSpec.data.projection);
       expect(planning.type).toBe("start_planning_worker");
       const executed = await executeOrchestrationAction(context, planning, { loop });
       expect(executed).toMatchObject({
         ok: true,
         data: { resultType: "loop_completed", actionType: "start_planning_worker" },
       });
-      expect(loopResults).toHaveLength(1);
+      expect(loopResults).toHaveLength(2);
 
       const submitted = await submitPlan(context, {
         taskId: created.data.taskId,
@@ -821,14 +915,16 @@ describe("orchestration action executor", () => {
         ],
       });
       if (!submitted.ok) throw new Error("plan submit failed");
-      const wait = await executeOrchestrationAction(context, next(submitted.data.projection), {});
-      expect(wait).toMatchObject({
+      const leadPlanDecision = await executeOrchestrationAction(
+        context,
+        next(submitted.data.projection),
+        { loop },
+      );
+      expect(leadPlanDecision).toMatchObject({
         ok: true,
         data: {
-          resultType: "waiting",
-          waitFor: "plan_decision",
-          planId: submitted.data.plan.id,
-          version: submitted.data.plan.version,
+          resultType: "loop_completed",
+          actionType: "start_lead_plan_decision",
         },
       });
     } finally {
@@ -846,6 +942,7 @@ describe("orchestration action executor", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
       const submitted = await submitPlan(context, {
         taskId: created.data.taskId,
         stages: [
@@ -865,7 +962,10 @@ describe("orchestration action executor", () => {
       });
       if (!accepted.ok) throw new Error("plan accept failed");
 
-      const workerAction = next(accepted.data.projection);
+      await planRound(context, created.data.taskId);
+      const ready = await getTask(context, { taskId: created.data.taskId });
+      if (!ready.ok) throw new Error("task get failed");
+      const workerAction = next(ready.data.projection);
       expect(workerAction.type).toBe("start_stage_worker");
       const workerResult = await executeOrchestrationAction(context, workerAction, {
         runTask: async (input: TaskInput) => ({
@@ -881,7 +981,21 @@ describe("orchestration action executor", () => {
       }
       expect(workerResult.data.run.taskResult.status).toBe("completed");
 
-      const reviewAction = next(workerResult.data.projection);
+      const completeRoundAction = next(workerResult.data.projection);
+      expect(completeRoundAction.type).toBe("complete_stage_round");
+      const completeRoundResult = await executeOrchestrationAction(
+        context,
+        completeRoundAction,
+        {},
+      );
+      if (
+        !completeRoundResult.ok ||
+        completeRoundResult.data.resultType !== "stage_round_completed"
+      ) {
+        throw new Error("round action did not complete");
+      }
+
+      const reviewAction = next(completeRoundResult.data.projection);
       expect(reviewAction.type).toBe("start_stage_review");
       const reviewResult = await executeOrchestrationAction(context, reviewAction, {});
       expect(reviewResult).toMatchObject({
@@ -920,6 +1034,18 @@ async function executeDrivenStage(
   action: OrchestrationAction,
   runtime: OrchestrationExecutionRuntime,
 ): Promise<CommandResult<OrchestrationExecutionResult>> {
+  if (action.type === "start_lead_round_planning") {
+    const planned = await planRound(runCtx, action.spec.taskId);
+    return {
+      ok: true,
+      data: {
+        resultType: "loop_completed",
+        actionType: action.type,
+        loopResult: { status: "completed", roundId: planned.id },
+      },
+    };
+  }
+
   if (action.type === "start_stage_verification_worker") {
     const accepted = await acceptStageReview(runCtx, {
       taskId: action.spec.taskId,
@@ -946,6 +1072,8 @@ async function executeDrivenStage(
 
 function loopCompleted(
   actionType:
+    | "start_lead_requirement_spec"
+    | "start_lead_round_planning"
     | "start_planning_worker"
     | "start_stage_verification_worker"
     | "start_final_verification_worker",

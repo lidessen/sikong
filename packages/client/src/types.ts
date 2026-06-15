@@ -11,6 +11,9 @@ export type TaskStatus =
 export interface Workspace {
   id: string;
   name: string;
+  sourceKind?: "git" | "directory" | "empty";
+  taskCount?: number;
+  activeTaskCount?: number;
 }
 
 export interface WorkspacePreference {
@@ -28,6 +31,21 @@ export interface TaskCard {
     id: string;
     title: string;
   };
+  activeRound?: {
+    id: string;
+    title?: string;
+    intent: string;
+    workUnits: number;
+    startedWorkUnits: number;
+    runningWorkUnits: number;
+    completedWorkUnits: number;
+  };
+  plan?: {
+    status?: "requested" | "submitted" | "accepted" | "rejected";
+    id?: string;
+    version?: number;
+    stageCount: number;
+  };
   nextAction: {
     type: string;
     [key: string]: unknown;
@@ -41,6 +59,29 @@ export interface TaskCard {
     outcome: "accepted" | "rejected";
     report?: string;
     at: string;
+  };
+  latestWorkerResult?: {
+    runId: string;
+    stageId: string;
+    status: "running" | "completed" | "failed" | "budget_exceeded";
+    summary?: string;
+    finishedAt?: string;
+  };
+  latestRuntimeProcess?: {
+    processRunId: string;
+    actionType: string;
+    status: string;
+    processStatus?: string;
+    startedAt: string;
+    finishedAt?: string;
+  };
+  latestReview?: {
+    reviewId: string;
+    stageId?: string;
+    status: string;
+    recommendation?: "accept" | "reject";
+    report?: string;
+    finishedAt?: string;
   };
   updatedAt?: string;
 }
@@ -56,16 +97,48 @@ export interface ClientWorkLogEntry {
 
 export interface ClientAgentContextPacket {
   policy: {
-    transcript: "presentation_only";
-    memory: "client_work_log";
-    taskEvents: "detail_only";
+    transcript: "query_with_tools";
+    workspaceState: "authoritative";
+    taskEvents: "inspect_on_demand";
+    memory: "none";
   };
   focus: {
     workspaceId?: string;
     taskId?: string;
+    source?: "ui" | "message_resolved" | "none";
   };
-  workLog: ClientWorkLogEntry[];
-  workspaces: Workspace[];
+  currentMessage: ClientAgentCurrentMessage;
+  workspaceIndex: ClientAgentWorkspaceIndexEntry[];
+  focusedWorkspace?: {
+    workspace: Workspace;
+    preferences: WorkspacePreference[];
+    taskCards: TaskCard[];
+  };
+  focusedTask?: {
+    compact: TaskCard;
+  };
+  recentTranscript: ClientTranscriptMessage[];
+}
+
+export interface ClientAgentCurrentMessage {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface ClientTranscriptMessage {
+  id: string;
+  role: ClientMessageRole | string;
+  createdAt: string;
+  parts?: unknown[];
+}
+
+export interface ClientAgentWorkspaceIndexEntry {
+  workspaceId: string;
+  name: string;
+  status?: string;
+  activeTaskCount: number;
+  updatedAt?: string;
 }
 
 export interface ClientState {
@@ -77,6 +150,220 @@ export interface ClientState {
   transcript?: ClientMessage[];
   settings: SikongSettings;
 }
+
+export interface TaskDetailView {
+  compact: TaskCard;
+  projection: TaskProjectionView;
+  trace: TaskTraceEntry[];
+  events: TaskEventView[];
+  observations: WorkerRunObservationGroup[];
+}
+
+export interface TaskProjectionView {
+  taskId: string;
+  workspaceId: string;
+  request?: string;
+  runtime?: {
+    cwd?: string;
+    repoPath?: string;
+  };
+  status: TaskStatus;
+  createdAt?: string;
+  updatedAt?: string;
+  plan?: {
+    id: string;
+    version: number;
+    summary?: string;
+    stages: TaskPlanStageView[];
+  };
+  planDecision?: {
+    status: "requested" | "submitted" | "accepted" | "rejected";
+    planId?: string;
+    version?: number;
+    report?: string;
+    requestedChanges?: string;
+    updatedAt: string;
+  };
+  currentStageId?: string;
+  acceptedStageIds: string[];
+  stageRounds: Record<string, TaskStageRoundView>;
+  activeRoundId?: string;
+  runtimeProcessRuns?: Record<string, RuntimeProcessRunView>;
+  workerRuns: Record<string, WorkerRunView>;
+  stageReviews: Record<string, StageReviewView>;
+  finalReview?: FinalReviewView;
+  terminal?: TaskCard["terminal"];
+  eventCount: number;
+}
+
+export interface TaskPlanStageView {
+  id: string;
+  title: string;
+  objective: string;
+  acceptance: string[];
+}
+
+export interface TaskStageRoundView {
+  id: string;
+  stageId: string;
+  title?: string;
+  intent: string;
+  workUnits: TaskStageWorkUnitView[];
+  status: "planned" | "completed";
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface TaskStageWorkUnitView {
+  id: string;
+  title: string;
+  objective: string;
+  acceptance?: string[];
+}
+
+export interface WorkerRunView {
+  runId: string;
+  stageId: string;
+  roundId: string;
+  workUnitId: string;
+  workerId?: string;
+  status: "running" | "completed" | "failed" | "budget_exceeded";
+  objective?: string;
+  result?: {
+    summary: string;
+    report?: string;
+    note?: string;
+    observations?: WorkerRunObservation[];
+  };
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface RuntimeProcessRunView {
+  processRunId: string;
+  actionType: string;
+  status: "running" | "finished";
+  processStatus?: "succeeded" | "failed" | "timed_out" | "cancelled";
+  exitCode?: number;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface StageReviewView {
+  reviewId: string;
+  stageId: string;
+  status: "started" | "accepted" | "rejected";
+  report?: string;
+  requestedChanges?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface FinalReviewView {
+  reviewId: string;
+  status: "started" | "recommended";
+  recommendation?: "accept" | "reject";
+  report?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface TaskTraceEntry {
+  eventId: string;
+  type: string;
+  createdAt: string;
+  summary: string;
+}
+
+export interface TaskEventView {
+  id: string;
+  type: string;
+  taskId: string;
+  workspaceId: string;
+  createdAt: string;
+  [key: string]: unknown;
+}
+
+export interface WorkerRunObservationGroup {
+  runId: string;
+  stageId: string;
+  roundId: string;
+  workUnitId: string;
+  observations: WorkerRunObservation[];
+}
+
+export interface WorkerRunObservation {
+  id: string;
+  kind:
+    | "round_start"
+    | "round_end"
+    | "thinking"
+    | "tool_call"
+    | "text"
+    | "usage"
+    | "step"
+    | "error"
+    | "hook"
+    | "unknown";
+  round?: number;
+  mode?: "work" | "finish" | "gate";
+  at: string;
+  summary: string;
+  toolName?: string;
+  callId?: string;
+  status?: "started" | "completed" | "failed";
+  argsSummary?: string;
+  resultSummary?: string;
+  durationMs?: number;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+}
+
+export type ClientTurnOutcomeKind = "report" | "question" | "request";
+
+export interface ClientTurnOutcomeFact {
+  label: string;
+  value: string;
+}
+
+export interface ClientTurnOutcomeRef {
+  type: "workspace" | "task" | "transcript" | "other";
+  id: string;
+}
+
+export interface ClientTurnOutcomeTarget {
+  workspaceId?: string;
+  taskId?: string;
+  planId?: string;
+  version?: number;
+}
+
+export type ClientTurnOutcome =
+  | {
+      kind: "report";
+      title: string;
+      summary: string;
+      facts?: ClientTurnOutcomeFact[];
+      refs?: ClientTurnOutcomeRef[];
+    }
+  | {
+      kind: "question";
+      question: string;
+      context?: string;
+      options?: string[];
+      refs?: ClientTurnOutcomeRef[];
+    }
+  | {
+      kind: "request";
+      requestType: "plan_decision" | "final_decision" | "permission" | "clarification" | "other";
+      title: string;
+      body: string;
+      target?: ClientTurnOutcomeTarget;
+      refs?: ClientTurnOutcomeRef[];
+    };
 
 export type DefaultAgentRuntimeKey = "clientAgent" | "lead" | "worker";
 
@@ -207,5 +494,6 @@ export interface TurnResponse {
   text: string;
   status: "completed" | "cancelled" | "error";
   context: ClientAgentContextPacket;
+  outcome?: ClientTurnOutcome;
   message?: ClientMessage;
 }

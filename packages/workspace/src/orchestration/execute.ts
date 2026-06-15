@@ -1,5 +1,10 @@
 import type { AgentLoop, TaskInput, TaskResult as AgentTaskResult } from "agent-loop";
-import { startStageReview, type CommandContext, type CommandResult } from "../commands";
+import {
+  completeStageRound,
+  startStageReview,
+  type CommandContext,
+  type CommandResult,
+} from "../commands";
 import { fail, ok } from "../commands";
 import { runWorkerLoop, runWorkerTask, type RunWorkerTaskResult } from "../runtime";
 import type { TaskProjection } from "../coordination";
@@ -14,7 +19,11 @@ export type OrchestrationExecutionResult =
   | {
       resultType: "loop_completed";
       actionType:
+        | "start_lead_requirement_spec"
         | "start_planning_worker"
+        | "start_lead_plan_decision"
+        | "start_lead_round_planning"
+        | "start_lead_final_decision"
         | "start_stage_verification_worker"
         | "start_final_verification_worker";
       loopResult: unknown;
@@ -30,15 +39,17 @@ export type OrchestrationExecutionResult =
       projection: TaskProjection;
     }
   | {
+      resultType: "stage_round_completed";
+      roundId: string;
+      projection: TaskProjection;
+    }
+  | {
       resultType: "waiting";
-      waitFor: "plan_decision" | "worker_results" | "final_decision";
+      waitFor: "worker_results";
       taskId: string;
-      planId?: string;
-      version?: number;
       stageId?: string;
       runningRuns?: number;
       targetRuns?: number;
-      recommendation?: "accept" | "reject";
     }
   | {
       resultType: "terminal";
@@ -57,7 +68,11 @@ export async function executeOrchestrationAction(
   runtime: OrchestrationExecutionRuntime,
 ): Promise<CommandResult<OrchestrationExecutionResult>> {
   switch (action.type) {
+    case "start_lead_requirement_spec":
     case "start_planning_worker":
+    case "start_lead_plan_decision":
+    case "start_lead_round_planning":
+    case "start_lead_final_decision":
     case "start_stage_verification_worker":
     case "start_final_verification_worker": {
       if (!runtime.loop) {
@@ -70,6 +85,20 @@ export async function executeOrchestrationAction(
         resultType: "loop_completed",
         actionType: action.type,
         loopResult,
+      });
+    }
+
+    case "complete_stage_round": {
+      const completed = await completeStageRound(ctx, {
+        workspaceId: action.workspaceId,
+        taskId: action.taskId,
+        roundId: action.roundId,
+      });
+      if (!completed.ok) return completed;
+      return ok({
+        resultType: "stage_round_completed",
+        roundId: action.roundId,
+        projection: completed.data.projection,
       });
     }
 
@@ -105,15 +134,6 @@ export async function executeOrchestrationAction(
       });
     }
 
-    case "await_plan_decision":
-      return ok({
-        resultType: "waiting",
-        waitFor: "plan_decision",
-        taskId: action.taskId,
-        ...(action.planId ? { planId: action.planId } : {}),
-        ...(action.version !== undefined ? { version: action.version } : {}),
-      });
-
     case "await_worker_results":
       return ok({
         resultType: "waiting",
@@ -122,14 +142,6 @@ export async function executeOrchestrationAction(
         stageId: action.stageId,
         runningRuns: action.runningRuns,
         targetRuns: action.targetRuns,
-      });
-
-    case "await_final_decision":
-      return ok({
-        resultType: "waiting",
-        waitFor: "final_decision",
-        taskId: action.taskId,
-        ...(action.recommendation ? { recommendation: action.recommendation } : {}),
       });
 
     case "terminal":

@@ -16,6 +16,7 @@ import {
   type ProcessRunSpec,
   resolveDataDir,
   submitPlan,
+  submitRequirementSpec,
   taskEventsDir,
   taskProjectionsDir,
   taskRuntimeDir,
@@ -46,6 +47,19 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
         context: { dataDir: string; workspaceId: string };
         action: { type: string; spec?: { taskId: string } };
       };
+      if (request.action.type === "start_lead_requirement_spec" && request.action.spec) {
+        const submitted = await submitRequirementSpec(
+          {
+            dataDir: request.context.dataDir,
+            workspaceId: request.context.workspaceId,
+          },
+          {
+            taskId: request.action.spec.taskId,
+            summary: "Drive from typed command.",
+          },
+        );
+        if (!submitted.ok) throw new Error("requirement spec submit failed");
+      }
       if (request.action.type === "start_planning_worker" && request.action.spec) {
         const submitted = await submitPlan(
           {
@@ -76,6 +90,7 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
     },
     async waitProcessRun(runId) {
       if (!state.spec) throw new Error("process was not started");
+      const request = state.requestJson as { action?: { type?: string } };
       return {
         runId,
         workspaceId: state.spec.workspaceId,
@@ -96,7 +111,7 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
               ok: true,
               data: {
                 resultType: "loop_completed",
-                actionType: "start_planning_worker",
+                actionType: request.action?.type ?? "start_planning_worker",
                 loopResult: { status: "completed" },
               },
             }) + "\n",
@@ -270,7 +285,7 @@ describe("task drive command", () => {
       expect(driven).toMatchObject({
         ok: true,
         data: {
-          stopReason: "waiting",
+          stopReason: "max_actions",
           projection: { status: "plan_submitted" },
         },
       });

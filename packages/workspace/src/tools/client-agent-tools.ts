@@ -19,30 +19,60 @@ import {
   type CommandContext,
   type CommandResult,
 } from "../commands";
+import type { ClientTranscriptSource } from "../client-agent/context";
+import { parseClientTurnOutcome, type ClientTurnOutcomeSink } from "../client-agent/outcome";
 
 export interface ClientAgentToolsOptions {
   ctx: CommandContext;
+  transcript?: ClientTranscriptSource;
+  mode?: "work" | "settlement";
+  outcome?: ClientTurnOutcomeSink;
+  onFinish?: () => void;
 }
 
 export function createClientAgentTools(options: ClientAgentToolsOptions): ToolSet {
-  const { ctx } = options;
-  return {
-    createWorkspace: defineTool({
-      description: "Create a Sikong workspace.",
+  const { ctx, transcript } = options;
+  const mode = options.mode ?? "work";
+  const tools: ToolSet = {
+    listTranscriptRecent: defineTool({
+      description: "List recent UI transcript messages for conversation continuity.",
+      inputSchema: objectSchema({ limit: numberSchema() }),
+      execute: async (args) =>
+        await transcriptResult(
+          transcript?.listRecent({ limit: optionalNumber(args, "limit") }) ?? Promise.resolve([]),
+        ),
+    }),
+    searchTranscript: defineTool({
+      description: "Search UI transcript messages when prior conversation matters.",
       inputSchema: objectSchema(
         {
-          id: stringSchema(),
-          name: stringSchema(),
+          query: stringSchema(),
+          limit: numberSchema(),
         },
-        ["id", "name"],
+        ["query"],
       ),
       execute: async (args) => {
-        const id = requiredString(args, "id");
-        if (!id.ok) return id;
-        const name = requiredString(args, "name");
-        if (!name.ok) return name;
-        return await createWorkspace(ctx, { id: id.data, name: name.data });
+        const query = requiredString(args, "query");
+        if (!query.ok) return query;
+        return await transcriptResult(
+          transcript?.search({ query: query.data, limit: optionalNumber(args, "limit") }) ??
+            Promise.resolve([]),
+        );
       },
+    }),
+    getTranscriptRange: defineTool({
+      description: "Read a transcript range before a message id.",
+      inputSchema: objectSchema({
+        beforeMessageId: stringSchema(),
+        limit: numberSchema(),
+      }),
+      execute: async (args) =>
+        await transcriptResult(
+          transcript?.getRange({
+            beforeMessageId: optionalString(args, "beforeMessageId"),
+            limit: optionalNumber(args, "limit"),
+          }) ?? Promise.resolve([]),
+        ),
     }),
     listWorkspaces: defineTool({
       description: "List Sikong workspaces.",
@@ -58,71 +88,36 @@ export function createClientAgentTools(options: ClientAgentToolsOptions): ToolSe
         return await getWorkspace(ctx, { workspaceId: workspaceId.data });
       },
     }),
+    getWorkspaceSource: defineTool({
+      description:
+        "Read authoritative workspace source records: workspace, preferences, and task cards.",
+      inputSchema: objectSchema({ workspaceId: stringSchema() }, ["workspaceId"]),
+      execute: async (args) => {
+        const workspaceId = requiredString(args, "workspaceId");
+        if (!workspaceId.ok) return workspaceId;
+        const [workspace, preferences, tasks] = await Promise.all([
+          getWorkspace(ctx, { workspaceId: workspaceId.data }),
+          listWorkspacePreferences(ctx, { workspaceId: workspaceId.data }),
+          listTasks(ctx, { workspaceId: workspaceId.data }),
+        ]);
+        if (!workspace.ok) return workspace;
+        if (!preferences.ok) return preferences;
+        if (!tasks.ok) return tasks;
+        return {
+          ok: true,
+          data: {
+            workspace: workspace.data.workspace,
+            preferences: preferences.data.preferences,
+            taskCards: tasks.data.tasks,
+          },
+        };
+      },
+    }),
     listWorkspacePreferences: defineTool({
       description: "List workspace preferences.",
       inputSchema: objectSchema({ workspaceId: stringSchema() }),
       execute: async (args) =>
         await listWorkspacePreferences(ctx, { workspaceId: optionalString(args, "workspaceId") }),
-    }),
-    addWorkspacePreference: defineTool({
-      description: "Add a workspace preference.",
-      inputSchema: objectSchema(
-        {
-          workspaceId: stringSchema(),
-          text: stringSchema(),
-          note: stringSchema(),
-        },
-        ["text"],
-      ),
-      execute: async (args) => {
-        const text = requiredString(args, "text");
-        if (!text.ok) return text;
-        return await addWorkspacePreference(ctx, {
-          workspaceId: optionalString(args, "workspaceId"),
-          text: text.data,
-          note: optionalString(args, "note"),
-        });
-      },
-    }),
-    removeWorkspacePreference: defineTool({
-      description: "Remove a workspace preference.",
-      inputSchema: objectSchema(
-        {
-          workspaceId: stringSchema(),
-          preferenceId: stringSchema(),
-        },
-        ["preferenceId"],
-      ),
-      execute: async (args) => {
-        const preferenceId = requiredString(args, "preferenceId");
-        if (!preferenceId.ok) return preferenceId;
-        return await removeWorkspacePreference(ctx, {
-          workspaceId: optionalString(args, "workspaceId"),
-          preferenceId: preferenceId.data,
-        });
-      },
-    }),
-    createTask: defineTool({
-      description: "Create a durable Sikong task.",
-      inputSchema: objectSchema(
-        {
-          workspaceId: stringSchema(),
-          request: stringSchema(),
-          cwd: stringSchema(),
-          repoPath: stringSchema(),
-        },
-        ["request"],
-      ),
-      execute: async (args) => {
-        const request = requiredString(args, "request");
-        if (!request.ok) return request;
-        return await createTask(ctx, {
-          workspaceId: optionalString(args, "workspaceId"),
-          request: request.data,
-          cwd: optionalString(args, "cwd"),
-          repoPath: optionalString(args, "repoPath"),
-        });
-      },
     }),
     getTask: defineTool({
       description: "Read one Sikong task projection.",
@@ -194,6 +189,103 @@ export function createClientAgentTools(options: ClientAgentToolsOptions): ToolSe
         return await inspectTaskProjection(ctx, input.data);
       },
     }),
+  };
+
+  if (options.outcome) {
+    tools.finishClientTurn = defineTool({
+      description:
+        "Finish this client-agent turn with a structured report, question, or user request.",
+      inputSchema: clientTurnOutcomeSchema,
+      execute: async (args) => {
+        const parsed = parseClientTurnOutcome(args);
+        if (!parsed.ok) return parsed;
+        options.outcome!.outcome ??= parsed.data;
+        options.onFinish?.();
+        return { ok: true, data: { outcome: options.outcome!.outcome } };
+      },
+    });
+  }
+
+  if (mode === "settlement") return tools;
+
+  Object.assign(tools, {
+    createWorkspace: defineTool({
+      description: "Create a Sikong workspace.",
+      inputSchema: objectSchema(
+        {
+          id: stringSchema(),
+          name: stringSchema(),
+        },
+        ["id", "name"],
+      ),
+      execute: async (args) => {
+        const id = requiredString(args, "id");
+        if (!id.ok) return id;
+        const name = requiredString(args, "name");
+        if (!name.ok) return name;
+        return await createWorkspace(ctx, { id: id.data, name: name.data });
+      },
+    }),
+    addWorkspacePreference: defineTool({
+      description: "Add a workspace preference.",
+      inputSchema: objectSchema(
+        {
+          workspaceId: stringSchema(),
+          text: stringSchema(),
+          note: stringSchema(),
+        },
+        ["text"],
+      ),
+      execute: async (args) => {
+        const text = requiredString(args, "text");
+        if (!text.ok) return text;
+        return await addWorkspacePreference(ctx, {
+          workspaceId: optionalString(args, "workspaceId"),
+          text: text.data,
+          note: optionalString(args, "note"),
+        });
+      },
+    }),
+    removeWorkspacePreference: defineTool({
+      description: "Remove a workspace preference.",
+      inputSchema: objectSchema(
+        {
+          workspaceId: stringSchema(),
+          preferenceId: stringSchema(),
+        },
+        ["preferenceId"],
+      ),
+      execute: async (args) => {
+        const preferenceId = requiredString(args, "preferenceId");
+        if (!preferenceId.ok) return preferenceId;
+        return await removeWorkspacePreference(ctx, {
+          workspaceId: optionalString(args, "workspaceId"),
+          preferenceId: preferenceId.data,
+        });
+      },
+    }),
+    createTask: defineTool({
+      description: "Create a durable Sikong task.",
+      inputSchema: objectSchema(
+        {
+          workspaceId: stringSchema(),
+          request: stringSchema(),
+          cwd: stringSchema(),
+          repoPath: stringSchema(),
+        },
+        ["request"],
+      ),
+      execute: async (args) => {
+        const request = requiredString(args, "request");
+        if (!request.ok) return request;
+        return await createTask(ctx, {
+          workspaceId: optionalString(args, "workspaceId"),
+          request: request.data,
+          cwd: optionalString(args, "cwd"),
+          repoPath: optionalString(args, "repoPath"),
+        });
+      },
+    }),
     waitTask: defineTool({
       description: "Wait until a Sikong task reaches a caller-visible boundary.",
       inputSchema: objectSchema(
@@ -215,7 +307,13 @@ export function createClientAgentTools(options: ClientAgentToolsOptions): ToolSe
         });
       },
     }),
-  };
+  });
+
+  return tools;
+}
+
+async function transcriptResult(messages: Promise<unknown[]>): Promise<CommandResult<unknown[]>> {
+  return { ok: true, data: await messages };
 }
 
 const taskIdSchema = objectSchema(
@@ -224,6 +322,50 @@ const taskIdSchema = objectSchema(
     taskId: stringSchema(),
   },
   ["taskId"],
+);
+
+const clientTurnOutcomeSchema = objectSchema(
+  {
+    kind: enumSchema(["report", "question", "request"]),
+    title: stringSchema(),
+    summary: stringSchema(),
+    question: stringSchema(),
+    context: stringSchema(),
+    options: arraySchema(stringSchema()),
+    requestType: enumSchema([
+      "plan_decision",
+      "final_decision",
+      "permission",
+      "clarification",
+      "other",
+    ]),
+    body: stringSchema(),
+    facts: arraySchema(
+      objectSchema(
+        {
+          label: stringSchema(),
+          value: stringSchema(),
+        },
+        ["label", "value"],
+      ),
+    ),
+    refs: arraySchema(
+      objectSchema(
+        {
+          type: enumSchema(["workspace", "task", "transcript", "other"]),
+          id: stringSchema(),
+        },
+        ["type", "id"],
+      ),
+    ),
+    target: objectSchema({
+      workspaceId: stringSchema(),
+      taskId: stringSchema(),
+      planId: stringSchema(),
+      version: numberSchema(),
+    }),
+  },
+  ["kind"],
 );
 
 function taskInput(
@@ -283,4 +425,12 @@ function booleanSchema(): Record<string, unknown> {
 
 function numberSchema(): Record<string, unknown> {
   return { type: "number" };
+}
+
+function enumSchema(values: string[]): Record<string, unknown> {
+  return { type: "string", enum: values };
+}
+
+function arraySchema(items: Record<string, unknown>): Record<string, unknown> {
+  return { type: "array", items };
 }

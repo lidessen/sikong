@@ -1,20 +1,21 @@
 import {
   createDefaultRuntimeAssemblyRegistry,
-  acceptPlan,
-  driveTask,
   FileClientWorkLog,
   FileSettingsStore,
+  inspectTaskDetail,
   listTasks,
   listWorkspacePreferences,
   listWorkspaces,
-  rejectPlan,
   resolveDataDir,
   runClientAgentTurn,
+  taskProjectionsDir,
   type ClientWorkLogEntryKind,
+  type ClientTranscriptSource,
   type CommandContext,
   type SikongSettings,
+  type TaskProjection,
 } from "@sikong/workspace";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
   ClientMessage,
@@ -28,6 +29,7 @@ const dataDir = resolveDataDir().dir;
 const settingsStore = new FileSettingsStore(dataDir);
 const transcriptPath = join(dataDir, "state", "client-transcript.json");
 const clientDistDir = process.env.SIKONG_CLIENT_DIST_DIR ?? join(import.meta.dir, "..", "dist");
+const turnStreamHeartbeatMs = 5_000;
 
 function commandContext(workspaceId?: string): CommandContext {
   return {
@@ -39,7 +41,7 @@ function commandContext(workspaceId?: string): CommandContext {
 Bun.serve({
   hostname: "127.0.0.1",
   port,
-  async fetch(request) {
+  async fetch(request, server) {
     const url = new URL(request.url);
     try {
       if (request.method === "OPTIONS") {
@@ -51,6 +53,17 @@ Bun.serve({
       if (request.method === "GET" && url.pathname === "/api/state") {
         return json(await clientState(url.searchParams.get("workspaceId") ?? undefined));
       }
+      if (request.method === "GET" && url.pathname === "/api/task-detail") {
+        const workspaceId = url.searchParams.get("workspaceId") ?? undefined;
+        const taskId = url.searchParams.get("taskId");
+        if (!taskId) return json({ message: "taskId is required" }, 400);
+        const detail = await inspectTaskDetail(commandContext(workspaceId), {
+          workspaceId,
+          taskId,
+        });
+        if (!detail.ok) return json({ message: detail.error.message }, 400);
+        return json(detail.data.detail);
+      }
       if (request.method === "GET" && url.pathname === "/api/settings") {
         return json(await settingsStore.read());
       }
@@ -59,48 +72,6 @@ Bun.serve({
       }
       if (request.method === "PUT" && url.pathname === "/api/settings") {
         return json(await settingsStore.write((await request.json()) as SikongSettings));
-      }
-      if (request.method === "POST" && url.pathname === "/api/tasks/plan-decision") {
-        const body = await request.json();
-        const decision = stringField(body, "decision");
-        const ctx = commandContext(stringField(body, "workspaceId"));
-        const input = {
-          workspaceId: stringField(body, "workspaceId"),
-          taskId: stringField(body, "taskId"),
-          planId: stringField(body, "planId"),
-          version: numberField(body, "version"),
-          report:
-            decision === "accept"
-              ? "Accepted from Sikong client UI."
-              : "Rejected from Sikong client UI.",
-        };
-        const result =
-          decision === "accept"
-            ? await acceptPlan(ctx, input)
-            : await rejectPlan(ctx, {
-                ...input,
-                requestedChanges: "Rejected from Sikong client UI.",
-              });
-        if (!result.ok) throw new Error(result.error.message);
-        const driven =
-          decision === "accept"
-            ? await driveTask(ctx, {
-                workspaceId: stringField(body, "workspaceId"),
-                taskId: stringField(body, "taskId"),
-                processTimeoutMs: 600_000,
-              })
-            : undefined;
-        return json({ decision: result.data, driven: summarizeDriveResult(driven) });
-      }
-      if (request.method === "POST" && url.pathname === "/api/tasks/drive") {
-        const body = await request.json();
-        const result = await driveTask(commandContext(stringField(body, "workspaceId")), {
-          workspaceId: stringField(body, "workspaceId"),
-          taskId: stringField(body, "taskId"),
-          processTimeoutMs: 600_000,
-        });
-        if (!result.ok) throw new Error(result.error.message);
-        return json(summarizeDriveResult(result));
       }
       if (request.method === "POST" && url.pathname === "/api/work-log") {
         const body = await request.json();
@@ -114,6 +85,7 @@ Bun.serve({
         return json(entry, 201);
       }
       if (request.method === "POST" && url.pathname === "/api/turn/stream") {
+        server.timeout(request, 0);
         const body = await request.json();
         const input = parseTurnRequest(body);
         return turnStreamResponse(input);
@@ -165,7 +137,6 @@ async function runTurnWorkflow(
   const progress = async (update: TurnProgressUpdate) => {
     await onProgress?.(update);
   };
-  const beforeTasks = await taskSnapshot();
   const userMessage = textMessage("user", input.message);
   await appendTranscript(userMessage);
   await progress({
@@ -190,10 +161,16 @@ async function runTurnWorkflow(
     ctx: commandContext(input.workspaceId),
     loop: runtime.loop,
     message: messageText(userMessage),
+    currentMessage: {
+      id: userMessage.id,
+      text: messageText(userMessage),
+      createdAt: userMessage.createdAt,
+    },
     focus: {
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       ...(input.taskId ? { taskId: input.taskId } : {}),
     },
+    transcript: transcriptSource({ excludeMessageId: userMessage.id }),
   });
 
   await progress({
@@ -202,21 +179,21 @@ async function runTurnWorkflow(
   });
   const assistantMessage = textMessage(
     "assistant",
-    result.run.text || `Turn finished with status ${result.run.status}.`,
+    result.outcomeText || `Turn finished with status ${result.run.status}.`,
   );
   await appendTranscript(assistantMessage);
-  const autoDriven = await autoDriveNewTasks(beforeTasks);
 
   await progress({
     phaseId: "refresh",
     detail: "Workspace changes are persisted. Refreshing the UI projection.",
   });
   return {
-    text: result.run.text,
-    status: result.run.status,
+    text: result.outcomeText,
+    status: "completed",
     context: result.context,
+    outcome: result.outcome,
     message: assistantMessage,
-    autoDriven,
+    autoDriven: [],
   };
 }
 
@@ -225,13 +202,45 @@ function turnStreamResponse(input: TurnRequestInput): Response {
   const segmentId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   const encoder = new TextEncoder();
-  const stream = new ReadableStream({
+  let closed = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+  const clearHeartbeat = () => {
+    if (heartbeat === undefined) return;
+    clearInterval(heartbeat);
+    heartbeat = undefined;
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const send = (event: TurnStreamEvent) => {
-        controller.enqueue(
-          encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`),
-        );
+      const write = (payload: string): boolean => {
+        if (closed) return false;
+        try {
+          controller.enqueue(encoder.encode(payload));
+          return true;
+        } catch {
+          closed = true;
+          clearHeartbeat();
+          return false;
+        }
       };
+      const send = (event: TurnStreamEvent) => {
+        write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        clearHeartbeat();
+        try {
+          controller.close();
+        } catch {
+          // The browser or Bun may have already closed the stream.
+        }
+      };
+
+      heartbeat = setInterval(() => {
+        write(`: heartbeat ${new Date().toISOString()}\n\n`);
+      }, turnStreamHeartbeatMs);
 
       void (async () => {
         send({
@@ -269,9 +278,13 @@ function turnStreamResponse(input: TurnRequestInput): Response {
             at: new Date().toISOString(),
           });
         } finally {
-          controller.close();
+          close();
         }
       })();
+    },
+    cancel() {
+      closed = true;
+      clearHeartbeat();
     },
   });
 
@@ -291,7 +304,7 @@ async function clientState(workspaceId?: string) {
     listWorkspaces(commandContext()),
   ]);
   if (!workspacesResult.ok) throw new Error(workspacesResult.error.message);
-  const workspaces = workspacesResult.data.workspaces;
+  const workspaces = await Promise.all(workspacesResult.data.workspaces.map(workspaceView));
   const selectedWorkspaceId = workspaceId ?? workspaces[0]?.id;
   const ctx = commandContext(selectedWorkspaceId);
   const [workLog, transcript] = await Promise.all([
@@ -324,83 +337,46 @@ async function clientState(workspaceId?: string) {
   };
 }
 
-async function taskSnapshot(): Promise<Set<string>> {
-  const workspacesResult = await listWorkspaces(commandContext());
-  if (!workspacesResult.ok) throw new Error(workspacesResult.error.message);
-  const ids = new Set<string>();
-  for (const workspace of workspacesResult.data.workspaces) {
-    const tasks = await listTasks(commandContext(workspace.id), { workspaceId: workspace.id });
-    if (!tasks.ok) continue;
-    for (const task of tasks.data.tasks) {
-      ids.add(taskKey(task.workspaceId, task.taskId));
-    }
-  }
-  return ids;
-}
-
-async function autoDriveNewTasks(before: Set<string>): Promise<unknown[]> {
-  const workspacesResult = await listWorkspaces(commandContext());
-  if (!workspacesResult.ok) throw new Error(workspacesResult.error.message);
-  const driven: unknown[] = [];
-  for (const workspace of workspacesResult.data.workspaces) {
-    const tasks = await listTasks(commandContext(workspace.id), { workspaceId: workspace.id });
-    if (!tasks.ok) continue;
-    for (const task of tasks.data.tasks) {
-      if (before.has(taskKey(task.workspaceId, task.taskId))) continue;
-      if (task.nextAction.type !== "start_planning_worker") continue;
-      const result = await driveTask(commandContext(task.workspaceId), {
-        workspaceId: task.workspaceId,
-        taskId: task.taskId,
-        processTimeoutMs: 600_000,
-      });
-      driven.push({
-        workspaceId: task.workspaceId,
-        taskId: task.taskId,
-        result: summarizeDriveResult(result),
-      });
-    }
-  }
-  return driven;
-}
-
-function summarizeDriveResult(result: unknown): unknown {
-  if (!result || typeof result !== "object") return result;
-  const record = result as Record<string, unknown>;
-  if (record.ok !== true) return result;
-  const data = record.data;
-  if (!data || typeof data !== "object") return result;
-  const drive = data as Record<string, unknown>;
+async function workspaceView(workspace: { id: string; name: string }) {
+  const tasks = await workspaceTaskRuntimeFacts(workspace.id);
   return {
-    ok: true,
-    data: {
-      taskId: drive.taskId,
-      stopReason: drive.stopReason,
-      steps: Array.isArray(drive.steps)
-        ? drive.steps.map((step) => {
-            const stepRecord = step as Record<string, unknown>;
-            const action = stepRecord.action as Record<string, unknown> | undefined;
-            const resultRecord = stepRecord.result as Record<string, unknown> | undefined;
-            return {
-              actionType: action?.type,
-              resultType: resultRecord?.resultType,
-              waitFor: resultRecord?.waitFor,
-            };
-          })
-        : [],
-      projection:
-        drive.projection && typeof drive.projection === "object"
-          ? {
-              taskId: (drive.projection as Record<string, unknown>).taskId,
-              status: (drive.projection as Record<string, unknown>).status,
-              updatedAt: (drive.projection as Record<string, unknown>).updatedAt,
-            }
-          : undefined,
-    },
+    ...workspace,
+    sourceKind: tasks.hasGit ? "git" : tasks.hasDirectory ? "directory" : "empty",
+    taskCount: tasks.total,
+    activeTaskCount: tasks.active,
   };
 }
 
-function taskKey(workspaceId: string, taskId: string): string {
-  return `${workspaceId}:${taskId}`;
+async function workspaceTaskRuntimeFacts(workspaceId: string): Promise<{
+  total: number;
+  active: number;
+  hasGit: boolean;
+  hasDirectory: boolean;
+}> {
+  const dir = taskProjectionsDir(dataDir, workspaceId);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { total: 0, active: 0, hasGit: false, hasDirectory: false };
+    }
+    throw err;
+  }
+
+  let total = 0;
+  let active = 0;
+  let hasGit = false;
+  let hasDirectory = false;
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    total += 1;
+    const projection = JSON.parse(await readFile(join(dir, entry), "utf8")) as TaskProjection;
+    if (!projection.terminal) active += 1;
+    if (projection.runtime?.repoPath) hasGit = true;
+    if (projection.runtime?.cwd) hasDirectory = true;
+  }
+  return { total, active, hasGit, hasDirectory };
 }
 
 async function readTranscript(): Promise<ClientMessage[]> {
@@ -435,6 +411,59 @@ function textMessage(role: "user" | "assistant", text: string): ClientMessage {
 function messageText(message: ClientMessage): string {
   const part = message.parts.find((item) => item.type === "text");
   return part?.type === "text" ? part.text : "";
+}
+
+function transcriptSearchText(message: ClientMessage): string {
+  return message.parts
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      if (part.type === "task-card") return part.taskId;
+      if (part.type === "work-log-summary") {
+        return part.entries.map((entry) => entry.summary).join("\n");
+      }
+      if (part.type === "progress-card") return part.progress.title;
+      if (part.type === "ui") return part.spec.root;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function transcriptSource(options: { excludeMessageId?: string } = {}): ClientTranscriptSource {
+  const load = async () => {
+    const messages = await readTranscript();
+    return options.excludeMessageId
+      ? messages.filter((message) => message.id !== options.excludeMessageId)
+      : messages;
+  };
+  return {
+    listRecent: async ({ limit = 12 } = {}) => {
+      const messages = await load();
+      return messages.slice(-normalizeLimit(limit));
+    },
+    search: async ({ query, limit = 20 }) => {
+      const needle = query.trim().toLowerCase();
+      if (!needle) return [];
+      const messages = await load();
+      return messages
+        .filter((message) => transcriptSearchText(message).toLowerCase().includes(needle))
+        .slice(-normalizeLimit(limit));
+    },
+    getRange: async ({ beforeMessageId, limit = 20 } = {}) => {
+      const messages = await load();
+      const end = beforeMessageId
+        ? Math.max(
+            0,
+            messages.findIndex((message) => message.id === beforeMessageId),
+          )
+        : messages.length;
+      return messages.slice(Math.max(0, end - normalizeLimit(limit)), end);
+    },
+  };
+}
+
+function normalizeLimit(value: number): number {
+  return Number.isFinite(value) ? Math.max(1, Math.min(100, Math.floor(value))) : 20;
 }
 
 function isClientMessage(value: unknown): value is ClientMessage {
@@ -522,15 +551,6 @@ function optionalStringField(body: unknown, key: string): string | undefined {
   if (!body || typeof body !== "object") return undefined;
   const value = (body as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function numberField(body: unknown, key: string): number {
-  if (!body || typeof body !== "object") throw new Error("JSON body is required");
-  const value = (body as Record<string, unknown>)[key];
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-    throw new Error(`${key} must be an integer`);
-  }
-  return value;
 }
 
 function optionalStringArrayField(body: unknown, key: string): string[] | undefined {

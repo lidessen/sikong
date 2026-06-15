@@ -1,5 +1,10 @@
 import type { Skill, TaskInput, ToolSet } from "agent-loop";
-import type { StageReviewProjection, TaskProjection, WorkerRunProjection } from "../coordination";
+import type {
+  StageReviewProjection,
+  StageRoundProjection,
+  TaskProjection,
+  WorkerRunProjection,
+} from "../coordination";
 import {
   createFinalVerificationPreset,
   createPlanningPreset,
@@ -10,6 +15,7 @@ import {
 import type { RunWorkerTaskInput } from "../runtime";
 
 export interface OrchestrationPresetTools {
+  leadProtocolTools?: ToolSet;
   planningProtocolTools: ToolSet;
   stageReviewProtocolTools: ToolSet;
   finalReviewProtocolTools: ToolSet;
@@ -30,14 +36,20 @@ export interface OrchestrationInput {
 
 export type OrchestrationAction =
   | {
+      type: "start_lead_requirement_spec";
+      spec: WorkerRunSpec;
+    }
+  | {
       type: "start_planning_worker";
       spec: WorkerRunSpec;
     }
   | {
-      type: "await_plan_decision";
-      taskId: string;
-      planId?: string;
-      version?: number;
+      type: "start_lead_plan_decision";
+      spec: WorkerRunSpec;
+    }
+  | {
+      type: "start_lead_round_planning";
+      spec: WorkerRunSpec;
     }
   | {
       type: "start_stage_worker";
@@ -49,6 +61,12 @@ export type OrchestrationAction =
       stageId: string;
       runningRuns: number;
       targetRuns: number;
+    }
+  | {
+      type: "complete_stage_round";
+      taskId: string;
+      workspaceId: string;
+      roundId: string;
     }
   | {
       type: "start_stage_review";
@@ -67,9 +85,8 @@ export type OrchestrationAction =
       reviewId: string;
     }
   | {
-      type: "await_final_decision";
-      taskId: string;
-      recommendation?: "accept" | "reject";
+      type: "start_lead_final_decision";
+      spec: WorkerRunSpec;
     }
   | {
       type: "terminal";
@@ -108,11 +125,15 @@ export function planNextOrchestrationAction(input: OrchestrationInput): Orchestr
   }
 
   if (projection.status === "plan_submitted") {
+    return startLeadPlanDecision(input);
+  }
+
+  if (projection.status === "created") {
+    if (!projection.requirementSpec) return startLeadRequirementSpec(input);
     return {
-      type: "await_plan_decision",
+      type: "blocked",
       taskId: projection.taskId,
-      planId: projection.plan?.id,
-      version: projection.plan?.version,
+      reason: "Created task has a requirement spec but no planning trigger.",
     };
   }
 
@@ -144,32 +165,72 @@ function planRunningAction(input: OrchestrationInput): OrchestrationAction {
 
   const latestReview = latestStageReview(projection, stageId);
   if (latestReview?.status === "rejected") {
-    return startStageWorker(input);
+    return startLeadRoundPlanning(input);
   }
 
-  const stage = projection.plan?.stages.find((candidate) => candidate.id === stageId);
-  const targetRuns = stageWorkerCount(stage);
-  const allRuns = runsForStage(projection, stageId);
-  if (allRuns.length < targetRuns) {
-    return startStageWorker(input);
+  const activeRound = projection.activeRoundId
+    ? projection.stageRounds[projection.activeRoundId]
+    : undefined;
+  const latestRound = latestRoundForStage(projection, stageId);
+
+  if (!activeRound) {
+    if (latestRound?.status === "completed") {
+      return {
+        type: "start_stage_review",
+        taskId: projection.taskId,
+        workspaceId: projection.workspaceId,
+        stageId,
+      };
+    }
+    return startLeadRoundPlanning(input);
   }
 
-  const terminalRuns = terminalRunsForStage(projection, stageId);
-  if (terminalRuns.length < targetRuns) {
+  const unstartedWorkUnit = activeRound.workUnits.find(
+    (workUnit) =>
+      !Object.values(projection.workerRuns).some(
+        (run) => run.roundId === activeRound.id && run.workUnitId === workUnit.id,
+      ),
+  );
+  if (unstartedWorkUnit) return startStageWorker(input, activeRound, unstartedWorkUnit.id);
+
+  const allRuns = runsForRound(projection, activeRound.id);
+  const terminalRuns = terminalRunsForRound(projection, activeRound.id);
+  if (terminalRuns.length < activeRound.workUnits.length) {
     return {
       type: "await_worker_results",
       taskId: projection.taskId,
       stageId,
       runningRuns: allRuns.length - terminalRuns.length,
-      targetRuns,
+      targetRuns: activeRound.workUnits.length,
     };
   }
 
   return {
-    type: "start_stage_review",
+    type: "complete_stage_round",
     taskId: projection.taskId,
     workspaceId: projection.workspaceId,
-    stageId,
+    roundId: activeRound.id,
+  };
+}
+
+function startLeadRequirementSpec(input: OrchestrationInput): OrchestrationAction {
+  return {
+    type: "start_lead_requirement_spec",
+    spec: createLeadPreset(input, "requirement_spec"),
+  };
+}
+
+function startLeadPlanDecision(input: OrchestrationInput): OrchestrationAction {
+  return {
+    type: "start_lead_plan_decision",
+    spec: createLeadPreset(input, "plan_decision"),
+  };
+}
+
+function startLeadRoundPlanning(input: OrchestrationInput): OrchestrationAction {
+  return {
+    type: "start_lead_round_planning",
+    spec: createLeadPreset(input, "round_planning"),
   };
 }
 
@@ -209,9 +270,8 @@ function planReviewingAction(input: OrchestrationInput): OrchestrationAction {
 
   if (projection.finalReview?.status === "recommended") {
     return {
-      type: "await_final_decision",
-      taskId: projection.taskId,
-      recommendation: projection.finalReview.recommendation,
+      type: "start_lead_final_decision",
+      spec: createLeadPreset(input, "final_decision"),
     };
   }
 
@@ -222,11 +282,17 @@ function planReviewingAction(input: OrchestrationInput): OrchestrationAction {
   };
 }
 
-function startStageWorker(input: OrchestrationInput): OrchestrationAction {
+function startStageWorker(
+  input: OrchestrationInput,
+  round: StageRoundProjection,
+  workUnitId: string,
+): OrchestrationAction {
   return {
     type: "start_stage_worker",
     input: createStageExecutionPreset({
       projection: input.projection,
+      roundId: round.id,
+      workUnitId,
       baseTaskInput: input.workerTaskInput,
       executionTools: input.tools.executionTools,
       skills: input.executionSkills,
@@ -234,16 +300,55 @@ function startStageWorker(input: OrchestrationInput): OrchestrationAction {
   };
 }
 
-function terminalRunsForStage(projection: TaskProjection, stageId: string): WorkerRunProjection[] {
-  return runsForStage(projection, stageId).filter((run) => run.status !== "running");
+function createLeadPreset(
+  input: OrchestrationInput,
+  phase: "requirement_spec" | "plan_decision" | "round_planning" | "final_decision",
+): WorkerRunSpec {
+  return {
+    workspaceId: input.projection.workspaceId,
+    taskId: input.projection.taskId,
+    prompt: [
+      `You are Sikong's internal Task Lead for phase: ${phase}.`,
+      "",
+      `Task: ${input.projection.request ?? input.projection.taskId}`,
+      "",
+      ...(input.projection.requirementSpec
+        ? ["Requirement spec:", input.projection.requirementSpec.summary, ""]
+        : []),
+      ...(input.projection.plan
+        ? [
+            "Submitted/accepted plan:",
+            input.projection.plan.summary ?? input.projection.plan.id,
+            "",
+          ]
+        : []),
+      "Use only the provided protocol tool for the current phase.",
+    ].join("\n"),
+    tools:
+      phase === "requirement_spec" || phase === "plan_decision" || phase === "round_planning"
+        ? input.tools.leadProtocolTools
+        : undefined,
+    skills: input.planningSkills,
+  };
 }
 
-function runsForStage(projection: TaskProjection, stageId: string): WorkerRunProjection[] {
-  return Object.values(projection.workerRuns).filter((run) => run.stageId === stageId);
+function terminalRunsForRound(projection: TaskProjection, roundId: string): WorkerRunProjection[] {
+  return runsForRound(projection, roundId).filter((run) => run.status !== "running");
 }
 
-function stageWorkerCount(stage: { workerCount?: number } | undefined): number {
-  return stage?.workerCount && stage.workerCount > 1 ? stage.workerCount : 1;
+function runsForRound(projection: TaskProjection, roundId: string): WorkerRunProjection[] {
+  return Object.values(projection.workerRuns).filter((run) => run.roundId === roundId);
+}
+
+function latestRoundForStage(
+  projection: TaskProjection,
+  stageId: string,
+): StageRoundProjection | undefined {
+  return Object.values(projection.stageRounds)
+    .filter((round) => round.stageId === stageId)
+    .sort((a, b) =>
+      String(b.completedAt ?? b.startedAt).localeCompare(String(a.completedAt ?? a.startedAt)),
+    )[0];
 }
 
 function latestStageReview(

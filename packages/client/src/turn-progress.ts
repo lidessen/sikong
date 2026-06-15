@@ -33,9 +33,9 @@ const PHASES: TurnProgressPhaseTemplate[] = [
   {
     id: "context",
     title: "Load context",
-    detail: "Read the workspace, work log, and runtime settings.",
+    detail: "Read the workspace, saved notes, and runtime settings.",
     startsAtMs: 1200,
-    substeps: ["Read work log", "Read workspace summaries", "Apply runtime settings"],
+    substeps: ["Read saved notes", "Read workspace summaries", "Apply runtime settings"],
   },
   {
     id: "agent",
@@ -56,7 +56,7 @@ const PHASES: TurnProgressPhaseTemplate[] = [
     title: "Refresh UI",
     detail: "Reload the visible workspace projection before showing the final reply.",
     startsAtMs: 24000,
-    substeps: ["Refresh work items", "Refresh work log", "Replace progress card"],
+    substeps: ["Refresh work items", "Refresh saved notes", "Replace progress card"],
   },
 ];
 

@@ -1,54 +1,84 @@
 import {
   inspectTaskCompact,
-  inspectTaskSummary,
   listTasks,
   listWorkspacePreferences,
   listWorkspaces,
   type CommandContext,
   type TaskCompactView,
-  type TaskSummary,
 } from "../commands";
 import type { WorkspacePreference, WorkspaceDef } from "../workspace";
-import { FileClientWorkLog, type ClientWorkLog, type ClientWorkLogEntry } from "./work-log";
 
 export interface ClientAgentFocus {
   workspaceId?: string;
   taskId?: string;
+  source?: "ui" | "message_resolved" | "none";
+}
+
+export interface ClientAgentCurrentMessage {
+  id: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface ClientTranscriptMessage {
+  id: string;
+  role: string;
+  createdAt: string;
+  parts?: unknown[];
+}
+
+export interface ClientTranscriptSource {
+  listRecent(options?: { limit?: number }): Promise<ClientTranscriptMessage[]>;
+  search(options: { query: string; limit?: number }): Promise<ClientTranscriptMessage[]>;
+  getRange(options: {
+    beforeMessageId?: string;
+    limit?: number;
+  }): Promise<ClientTranscriptMessage[]>;
+}
+
+export interface ClientAgentWorkspaceIndexEntry {
+  workspaceId: string;
+  name: string;
+  status?: string;
+  activeTaskCount: number;
+  updatedAt?: string;
 }
 
 export interface ClientAgentContextOptions {
   ctx: CommandContext;
+  currentMessage: ClientAgentCurrentMessage;
   focus?: ClientAgentFocus;
-  workLog?: ClientWorkLog;
-  workLogLimit?: number;
+  transcript?: ClientTranscriptSource;
+  recentTranscriptLimit?: number;
 }
 
 export interface ClientAgentContextPacket {
   policy: {
-    transcript: "presentation_only";
-    memory: "client_work_log";
-    taskEvents: "detail_only";
+    transcript: "query_with_tools";
+    workspaceState: "authoritative";
+    taskEvents: "inspect_on_demand";
+    memory: "none";
   };
   focus: ClientAgentFocus;
-  workLog: ClientWorkLogEntry[];
-  workspaces: WorkspaceDef[];
+  currentMessage: ClientAgentCurrentMessage;
+  workspaceIndex: ClientAgentWorkspaceIndexEntry[];
   focusedWorkspace?: {
     workspace: WorkspaceDef;
     preferences: WorkspacePreference[];
     taskCards: TaskCompactView[];
   };
   focusedTask?: {
-    summary: TaskSummary;
     compact: TaskCompactView;
   };
+  recentTranscript: ClientTranscriptMessage[];
 }
 
 export async function buildClientAgentContext(
   options: ClientAgentContextOptions,
 ): Promise<ClientAgentContextPacket> {
-  const workLog = options.workLog ?? new FileClientWorkLog(options.ctx.dataDir);
-  const [workLogEntries, workspacesResult] = await Promise.all([
-    workLog.list({ limit: options.workLogLimit ?? 40 }),
+  const transcript = options.transcript ?? emptyTranscriptSource();
+  const [recentTranscript, workspacesResult] = await Promise.all([
+    transcript.listRecent({ limit: options.recentTranscriptLimit ?? 12 }),
     listWorkspaces(options.ctx),
   ]);
   const workspaces = workspacesResult.ok ? workspacesResult.data.workspaces : [];
@@ -56,17 +86,24 @@ export async function buildClientAgentContext(
   const focus: ClientAgentFocus = {
     ...(workspaceId ? { workspaceId } : {}),
     ...(options.focus?.taskId ? { taskId: options.focus.taskId } : {}),
+    source:
+      options.focus?.source ??
+      (options.focus?.workspaceId || options.focus?.taskId || options.ctx.workspaceId
+        ? "ui"
+        : "none"),
   };
 
   const packet: ClientAgentContextPacket = {
     policy: {
-      transcript: "presentation_only",
-      memory: "client_work_log",
-      taskEvents: "detail_only",
+      transcript: "query_with_tools",
+      workspaceState: "authoritative",
+      taskEvents: "inspect_on_demand",
+      memory: "none",
     },
+    currentMessage: options.currentMessage,
     focus,
-    workLog: workLogEntries,
-    workspaces,
+    workspaceIndex: await buildWorkspaceIndex(options.ctx, workspaces),
+    recentTranscript,
   };
 
   if (!workspaceId) return packet;
@@ -85,13 +122,12 @@ export async function buildClientAgentContext(
   }
 
   if (options.focus?.taskId) {
-    const [summary, compact] = await Promise.all([
-      inspectTaskSummary(options.ctx, { workspaceId, taskId: options.focus.taskId }),
-      inspectTaskCompact(options.ctx, { workspaceId, taskId: options.focus.taskId }),
-    ]);
-    if (summary.ok && compact.ok) {
+    const compact = await inspectTaskCompact(options.ctx, {
+      workspaceId,
+      taskId: options.focus.taskId,
+    });
+    if (compact.ok) {
       packet.focusedTask = {
-        summary: summary.data.summary,
         compact: compact.data.compact,
       };
     }
@@ -104,13 +140,46 @@ export function formatClientAgentContext(packet: ClientAgentContextPacket): stri
   return JSON.stringify(
     {
       policy: packet.policy,
+      currentMessage: packet.currentMessage,
       focus: packet.focus,
-      workLog: packet.workLog,
-      workspaces: packet.workspaces,
+      workspaceIndex: packet.workspaceIndex,
       focusedWorkspace: packet.focusedWorkspace,
       focusedTask: packet.focusedTask,
+      recentTranscript: packet.recentTranscript,
     },
     null,
     2,
   );
+}
+
+async function buildWorkspaceIndex(
+  ctx: CommandContext,
+  workspaces: WorkspaceDef[],
+): Promise<ClientAgentWorkspaceIndexEntry[]> {
+  return await Promise.all(
+    workspaces.map(async (workspace) => {
+      const tasks = await listTasks(ctx, { workspaceId: workspace.id });
+      const taskCards = tasks.ok ? tasks.data.tasks : [];
+      const activeTaskCount = taskCards.filter((task) => !task.terminal).length;
+      const updatedAt = taskCards
+        .map((task) => task.updatedAt)
+        .filter((value): value is string => typeof value === "string")
+        .sort()
+        .at(-1);
+      return {
+        workspaceId: workspace.id,
+        name: workspace.name,
+        activeTaskCount,
+        ...(updatedAt ? { updatedAt } : {}),
+      };
+    }),
+  );
+}
+
+function emptyTranscriptSource(): ClientTranscriptSource {
+  return {
+    listRecent: async () => [],
+    search: async () => [],
+    getRange: async () => [],
+  };
 }

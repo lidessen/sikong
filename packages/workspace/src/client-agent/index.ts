@@ -3,7 +3,11 @@ export {
   formatClientAgentContext,
   type ClientAgentContextOptions,
   type ClientAgentContextPacket,
+  type ClientAgentCurrentMessage,
   type ClientAgentFocus,
+  type ClientAgentWorkspaceIndexEntry,
+  type ClientTranscriptMessage,
+  type ClientTranscriptSource,
 } from "./context";
 export {
   FileClientWorkLog,
@@ -17,7 +21,18 @@ export {
 export {
   CLIENT_AGENT_SYSTEM_PROMPT,
   formatClientAgentPrompt,
+  formatClientAgentSettlementPrompt,
   runClientAgentTurn,
   type RunClientAgentTurnInput,
   type RunClientAgentTurnResult,
 } from "./turn";
+export {
+  formatClientTurnOutcomeText,
+  parseClientTurnOutcome,
+  type ClientTurnOutcome,
+  type ClientTurnOutcomeFact,
+  type ClientTurnOutcomeKind,
+  type ClientTurnOutcomeRef,
+  type ClientTurnOutcomeSink,
+  type ClientTurnOutcomeTarget,
+} from "./outcome";

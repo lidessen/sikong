@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { worktreeDir } from "../data-dir";
 import { runCli } from "./index";
-import { getTask, recordRuntimeProcessStarted, submitPlan, type CommandContext } from "../commands";
+import {
+  getTask,
+  planStageRound,
+  recordRuntimeProcessStarted,
+  submitPlan,
+  submitRequirementSpec,
+  type CommandContext,
+} from "../commands";
 import type { OrchestrationProcessExecutionClient } from "../orchestration";
 import { FileSettingsStore } from "../settings";
 
@@ -38,11 +45,18 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
         context: { dataDir: string; workspaceId: string };
         action: { type: string; spec?: { taskId: string } };
       };
+      const context: CommandContext = {
+        dataDir: request.context.dataDir,
+        workspaceId: request.context.workspaceId,
+      };
+      if (request.action.type === "start_lead_requirement_spec" && request.action.spec) {
+        const submitted = await submitRequirementSpec(context, {
+          taskId: request.action.spec.taskId,
+          summary: "Submit plan through process-backed CLI drive.",
+        });
+        if (!submitted.ok) throw new Error(submitted.error.message);
+      }
       if (request.action.type === "start_planning_worker" && request.action.spec) {
-        const context: CommandContext = {
-          dataDir: request.context.dataDir,
-          workspaceId: request.context.workspaceId,
-        };
         const submitted = await submitPlan(context, {
           taskId: request.action.spec.taskId,
           stages: [
@@ -65,16 +79,17 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
       };
     },
     async waitProcessRun(runId) {
-      const spec = state.startedSpecs[0] as {
+      const spec = state.startedSpecs.at(-1) as {
         workspaceId: string;
         taskId?: string;
       };
+      const request = state.requestJson as { action?: { type?: string } };
       return {
         runId,
         workspaceId: spec.workspaceId,
         taskId: spec.taskId,
         state: "finished",
-        spec: state.startedSpecs[0] as never,
+        spec: spec as never,
         startedAt: "2026-06-14T00:00:00Z",
         finishedAt: "2026-06-14T00:00:01Z",
         result: {
@@ -89,7 +104,7 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
               ok: true,
               data: {
                 resultType: "loop_completed",
-                actionType: "start_planning_worker",
+                actionType: request.action?.type ?? "start_planning_worker",
                 loopResult: { status: "completed" },
               },
             }) + "\n",
@@ -217,7 +232,7 @@ describe("workspace cli adapter", () => {
         ),
       ).toMatchObject({
         ok: true,
-        data: { summary: { status: "planning", planStatus: "requested" } },
+        data: { summary: { status: "created" } },
       });
       expect(
         json(
@@ -228,9 +243,9 @@ describe("workspace cli adapter", () => {
         ok: true,
         data: {
           compact: {
-            status: "planning",
-            nextAction: { type: "start_planning_worker" },
-            waitingForLead: false,
+            status: "created",
+            nextAction: { type: "start_lead_requirement_spec" },
+            waitingForLead: true,
           },
         },
       });
@@ -321,6 +336,17 @@ describe("workspace cli adapter", () => {
         ).stdout,
       ) as { data: { taskId: string } };
       const taskId = created.data.taskId;
+      await runCli([
+        "--data-dir",
+        dir,
+        "--workspace",
+        "sikong",
+        "task",
+        "submit-requirement-spec",
+        taskId,
+        "--summary",
+        "Close protocol loop.",
+      ]);
 
       const submitted = json(
         (
@@ -369,7 +395,7 @@ describe("workspace cli adapter", () => {
           compact: {
             status: "plan_submitted",
             nextAction: {
-              type: "await_plan_decision",
+              type: "start_lead_plan_decision",
               planId: submitted.data.plan.id,
               version: submitted.data.plan.version,
             },
@@ -394,9 +420,44 @@ describe("workspace cli adapter", () => {
         "Accepted.",
       ]);
 
+      const acceptedTask = await getTask({ dataDir: dir, workspaceId: "sikong" }, { taskId });
+      if (!acceptedTask.ok || !acceptedTask.data.projection.currentStageId) {
+        throw new Error("accepted task missing current stage");
+      }
+      const round = await planStageRound(
+        { dataDir: dir, workspaceId: "sikong" },
+        {
+          taskId,
+          stageId: acceptedTask.data.projection.currentStageId,
+          intent: "Run the implementation work unit.",
+          workUnits: [
+            {
+              title: "Implement",
+              objective: "Use protocol commands.",
+              acceptance: ["Worker terminal result is recorded."],
+            },
+          ],
+        },
+      );
+      if (!round.ok) throw new Error(round.error.message);
+      const workUnit = round.data.round.workUnits[0];
+      if (!workUnit) throw new Error("round missing work unit");
       const worker = json(
-        (await runCli(["--data-dir", dir, "--workspace", "sikong", "task", "start-worker", taskId]))
-          .stdout,
+        (
+          await runCli([
+            "--data-dir",
+            dir,
+            "--workspace",
+            "sikong",
+            "task",
+            "start-worker",
+            taskId,
+            "--round",
+            round.data.round.id,
+            "--work-unit",
+            workUnit.id,
+          ])
+        ).stdout,
       ) as { data: { runId: string } };
 
       expect(
@@ -472,7 +533,7 @@ describe("workspace cli adapter", () => {
               "--backend",
               "mock",
               "--max-actions",
-              "4",
+              "2",
             ],
             process.env,
             { processClient: client, packageCwd: join(import.meta.dir, "../..") },
@@ -483,15 +544,15 @@ describe("workspace cli adapter", () => {
       expect(driven).toMatchObject({
         ok: true,
         data: {
-          stopReason: "waiting",
+          stopReason: "max_actions",
           projection: { status: "plan_submitted" },
           steps: [
+            { action: { type: "start_lead_requirement_spec" } },
             { action: { type: "start_planning_worker" } },
-            { action: { type: "await_plan_decision" } },
           ],
         },
       });
-      expect(client.startedSpecs).toHaveLength(1);
+      expect(client.startedSpecs).toHaveLength(2);
       expect(client.requestJson).toMatchObject({
         runtimeAssembly: {
           backend: "mock",
@@ -550,7 +611,7 @@ describe("workspace cli adapter", () => {
           "drive",
           task.data.taskId,
           "--max-actions",
-          "1",
+          "2",
         ],
         process.env,
         { processClient: client, packageCwd: join(import.meta.dir, "../..") },

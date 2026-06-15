@@ -7,6 +7,8 @@ import {
   acceptPlan,
   createTask,
   createWorkspace,
+  planStageRound,
+  submitRequirementSpec,
   submitPlan,
   type CommandContext,
 } from "../commands";
@@ -35,14 +37,48 @@ describe("worker run task bridge", () => {
     const dir = await tmp();
     try {
       const context = ctx(dir);
-      const taskId = await readyTask(context, dir);
+      const target = await readyTask(context, dir);
       const seenGoals: string[] = [];
 
       const result = await runWorkerTask(context, {
-        taskId,
+        taskId: target.taskId,
+        roundId: target.roundId,
+        workUnitId: target.workUnitId,
         taskInput: { loop: fakeLoop },
         runTask: async (input: TaskInput): Promise<AgentTaskResult> => {
           seenGoals.push(input.goal);
+          await input.hooks?.onRoundStart?.(1, "Use secret token.", "work");
+          input.hooks?.onEvent?.(
+            { type: "thinking", text: "Inspecting the current files." },
+            1,
+            "work",
+          );
+          input.hooks?.onEvent?.(
+            {
+              type: "tool_call_start",
+              name: "readFile",
+              callId: "call-1",
+              args: { path: "README.md", apiKey: "secret-value" },
+            },
+            1,
+            "work",
+          );
+          input.hooks?.onEvent?.(
+            {
+              type: "tool_call_end",
+              name: "readFile",
+              callId: "call-1",
+              result: { text: "content" },
+              durationMs: 12,
+            },
+            1,
+            "work",
+          );
+          await input.hooks?.onRoundEnd?.(1, {
+            mode: "work",
+            outcome: null,
+            report: "Worker completed through runTask.",
+          });
           return {
             status: "completed",
             rounds: 1,
@@ -65,6 +101,24 @@ describe("worker run task bridge", () => {
                 result: {
                   summary: "Worker completed through runTask.",
                   report: expect.stringContaining("Gate accepted."),
+                  observations: expect.arrayContaining([
+                    expect.objectContaining({
+                      kind: "thinking",
+                      summary: "Inspecting the current files.",
+                    }),
+                    expect.objectContaining({
+                      kind: "tool_call",
+                      toolName: "readFile",
+                      status: "started",
+                      argsSummary: expect.stringContaining("[redacted]"),
+                    }),
+                    expect.objectContaining({
+                      kind: "tool_call",
+                      toolName: "readFile",
+                      status: "completed",
+                      durationMs: 12,
+                    }),
+                  ]),
                 },
               },
             },
@@ -83,9 +137,11 @@ describe("worker run task bridge", () => {
     const dir = await tmp();
     try {
       const context = ctx(dir);
-      const failedTaskId = await readyTask(context, dir);
+      const failedTarget = await readyTask(context, dir);
       const failed = await runWorkerTask(context, {
-        taskId: failedTaskId,
+        taskId: failedTarget.taskId,
+        roundId: failedTarget.roundId,
+        workUnitId: failedTarget.workUnitId,
         taskInput: { loop: fakeLoop },
         runTask: async (): Promise<AgentTaskResult> => ({
           status: "failed",
@@ -106,9 +162,11 @@ describe("worker run task bridge", () => {
         },
       });
 
-      const budgetTaskId = await readyTask(context, dir);
+      const budgetTarget = await readyTask(context, dir);
       const budget = await runWorkerTask(context, {
-        taskId: budgetTaskId,
+        taskId: budgetTarget.taskId,
+        roundId: budgetTarget.roundId,
+        workUnitId: budgetTarget.workUnitId,
         taskInput: { loop: fakeLoop },
         runTask: async (): Promise<AgentTaskResult> => ({
           status: "budget_exceeded",
@@ -137,13 +195,21 @@ describe("worker run task bridge", () => {
   });
 });
 
-async function readyTask(context: CommandContext, dir: string): Promise<string> {
+async function readyTask(
+  context: CommandContext,
+  dir: string,
+): Promise<{ taskId: string; roundId: string; workUnitId: string }> {
   await createWorkspace(context, { id: "sikong", name: "Sikong" });
   const created = await createTask(context, {
     request: "Implement runtime worker adapter.",
     cwd: dir,
   });
   if (!created.ok) throw new Error("task create failed");
+  const spec = await submitRequirementSpec(context, {
+    taskId: created.data.taskId,
+    summary: "Implement runtime worker adapter.",
+  });
+  if (!spec.ok) throw new Error("requirement spec submit failed");
   const submitted = await submitPlan(context, {
     taskId: created.data.taskId,
     stages: [
@@ -162,7 +228,23 @@ async function readyTask(context: CommandContext, dir: string): Promise<string> 
     report: "Accepted.",
   });
   if (!accepted.ok) throw new Error("plan accept failed");
-  return created.data.taskId;
+  const round = await planStageRound(context, {
+    taskId: created.data.taskId,
+    stageId: accepted.data.projection.currentStageId ?? "",
+    intent: "Execute runtime worker adapter work.",
+    workUnits: [
+      {
+        title: "Runtime worker adapter",
+        objective: "Connect runTask to worker terminal result commands.",
+      },
+    ],
+  });
+  if (!round.ok) throw new Error("round plan failed");
+  return {
+    taskId: created.data.taskId,
+    roundId: round.data.round.id,
+    workUnitId: round.data.round.workUnits[0]!.id,
+  };
 }
 
 const fakeLoop = () => {

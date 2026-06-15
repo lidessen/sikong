@@ -1,4 +1,11 @@
-import { AlertTriangle, Bot, CheckCircle2, CircleDot, Loader2, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  BotMessageSquare,
+  CheckCircle2,
+  CircleDot,
+  CircleUserRound,
+  Loader2,
+} from "lucide-react";
 import type React from "react";
 import { Badge } from "./components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
@@ -35,24 +42,9 @@ export interface MessageRenderContext {
 }
 
 export function MessageView(props: { message: ClientMessage; context: MessageRenderContext }) {
-  const isUser = props.message.role === "user";
   return (
     <article className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-      <div
-        className={`mt-0.5 flex size-7 items-center justify-center rounded-[var(--radius-lg)] border ${
-          isUser
-            ? "border-[var(--accent-dim)] bg-[var(--accent-soft)] text-primary"
-            : "bg-card text-primary"
-        }`}
-      >
-        {props.message.pending ? (
-          <Loader2 className="animate-spin" />
-        ) : isUser ? (
-          <Sparkles />
-        ) : (
-          <Bot />
-        )}
-      </div>
+      <MessageAvatar message={props.message} />
       <div className="min-w-0">
         <div className="mb-1.5 flex items-center gap-2">
           <p className="text-[13px] font-medium tracking-[-0.01em]">
@@ -77,6 +69,32 @@ export function MessageView(props: { message: ClientMessage; context: MessageRen
   );
 }
 
+function MessageAvatar(props: { message: ClientMessage }) {
+  const className = `mt-0.5 flex size-7 items-center justify-center rounded-[var(--radius-lg)] border ${
+    props.message.pending
+      ? "border-[color-mix(in_srgb,var(--info)_35%,transparent)] bg-[var(--info-soft)] text-info"
+      : props.message.role === "user"
+        ? "border-[var(--accent-dim)] bg-[var(--accent-soft)] text-primary"
+        : props.message.role === "system"
+          ? "border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[var(--warn-soft)] text-warn"
+          : "border-[color-mix(in_srgb,var(--info)_35%,transparent)] bg-[var(--info-soft)] text-info"
+  }`;
+
+  return (
+    <div className={className} aria-hidden="true">
+      {props.message.pending ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : props.message.role === "user" ? (
+        <CircleUserRound className="size-4" />
+      ) : props.message.role === "system" ? (
+        <AlertTriangle className="size-4" />
+      ) : (
+        <BotMessageSquare className="size-4" />
+      )}
+    </div>
+  );
+}
+
 function MessagePartView(props: { part: MessagePart; context: MessageRenderContext }) {
   switch (props.part.type) {
     case "text":
@@ -88,7 +106,12 @@ function MessagePartView(props: { part: MessagePart; context: MessageRenderConte
     case "progress-card":
       return <TurnProgressCard progress={props.part.progress} />;
     case "task-card":
-      return <TaskCardPart task={findTask(props.context.state.taskCards, props.part.taskId)} />;
+      return (
+        <TaskCardPart
+          task={findTask(props.context.state.taskCards, props.part.taskId)}
+          onOpen={(taskId) => props.context.onAction?.({ type: "focusTask", taskId })}
+        />
+      );
     case "work-log-summary":
       return <WorkLogSummary entries={props.part.entries} />;
     case "ui":
@@ -285,7 +308,12 @@ function renderKnownElement(
         />
       );
     case "TaskSummary":
-      return <TaskCardPart task={findTask(context.state.taskCards, stringProp(props, "taskId"))} />;
+      return (
+        <TaskCardPart
+          task={findTask(context.state.taskCards, stringProp(props, "taskId"))}
+          onOpen={(taskId) => context.onAction?.({ type: "focusTask", taskId })}
+        />
+      );
     case "TaskList":
       return <TaskList tasks={filterTasks(context.state.taskCards, props)} />;
     case "PlanStageList":
@@ -311,10 +339,10 @@ function messageLabel(message: ClientMessage): string {
   return "Sikong";
 }
 
-function TaskCardPart(props: { task?: TaskCard }) {
+function TaskCardPart(props: { task?: TaskCard; onOpen?: (taskId: string) => void }) {
   if (!props.task) return <UnsupportedElement reason="Work item not found" />;
-  return (
-    <div className="rounded-[var(--radius-lg)] border bg-background p-3">
+  const content = (
+    <>
       <div className="mb-2 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-mono text-[11px] text-muted-foreground">
@@ -327,11 +355,29 @@ function TaskCardPart(props: { task?: TaskCard }) {
         <TaskStatusBadge task={props.task} />
       </div>
       <div className="flex flex-wrap gap-2">
-        <Badge variant="outline">{props.task.nextAction.type}</Badge>
-        <Badge variant="outline">{props.task.runtimeProcesses.running} worker runs</Badge>
+        <Badge variant="outline">{actionTypeLabel(props.task.nextAction.type)}</Badge>
+        {props.task.activeRound ? (
+          <Badge variant="outline">
+            {props.task.activeRound.completedWorkUnits}/{props.task.activeRound.workUnits} work
+            units
+          </Badge>
+        ) : null}
+        <Badge variant="outline">{props.task.runtimeProcesses.running} runtime</Badge>
       </div>
-    </div>
+    </>
   );
+  if (props.onOpen) {
+    return (
+      <button
+        type="button"
+        className="w-full rounded-[var(--radius-lg)] border bg-background p-3 text-left outline-none transition-[background-color,border-color] hover:border-ring/25 hover:bg-hover focus-visible:border-ring"
+        onClick={() => props.onOpen?.(props.task!.taskId)}
+      >
+        {content}
+      </button>
+    );
+  }
+  return <div className="rounded-[var(--radius-lg)] border bg-background p-3">{content}</div>;
 }
 
 function TaskList(props: { tasks: TaskCard[] }) {
@@ -354,7 +400,7 @@ function WorkLogSummary(props: { entries: ClientWorkLogEntry[] }) {
   if (props.entries.length === 0)
     return (
       <p className="rounded-[var(--radius-md)] border border-dashed bg-background p-2.5 text-[13px] text-muted-foreground">
-        No work-log entries.
+        No saved notes.
       </p>
     );
   return (
@@ -385,13 +431,28 @@ function WorkspaceSummary(props: { workspace?: Workspace }) {
 }
 
 function PlanStageList(props: { task?: TaskCard }) {
-  if (!props.task?.currentStage)
-    return <p className="text-sm text-muted-foreground">No current stage.</p>;
+  if (!props.task?.currentStage && !props.task?.activeRound)
+    return <p className="text-sm text-muted-foreground">No active stage round.</p>;
   return (
     <div className="rounded-[var(--radius-lg)] border bg-background p-3">
-      <p className="text-xs text-muted-foreground">Current stage</p>
-      <p className="mt-1 font-medium">{props.task.currentStage.title}</p>
-      <p className="font-mono text-xs text-muted-foreground">{props.task.currentStage.id}</p>
+      <p className="text-xs text-muted-foreground">Current execution layer</p>
+      {props.task.currentStage ? (
+        <>
+          <p className="mt-1 font-medium">{props.task.currentStage.title}</p>
+          <p className="font-mono text-xs text-muted-foreground">{props.task.currentStage.id}</p>
+        </>
+      ) : null}
+      {props.task.activeRound ? (
+        <div className="mt-2 space-y-1.5">
+          <p className="line-clamp-2 text-[13px] leading-5">{props.task.activeRound.intent}</p>
+          <p className="text-xs text-muted-foreground">
+            {props.task.activeRound.startedWorkUnits} started ·{" "}
+            {props.task.activeRound.runningWorkUnits} running ·{" "}
+            {props.task.activeRound.completedWorkUnits} completed /{" "}
+            {props.task.activeRound.workUnits}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -410,6 +471,37 @@ function RuntimeProcessList(props: { task?: TaskCard }) {
       </div>
     </div>
   );
+}
+
+function actionTypeLabel(actionType: string): string {
+  switch (actionType) {
+    case "start_lead_requirement_spec":
+      return "Lead spec";
+    case "start_planning_worker":
+      return "Planner";
+    case "start_lead_plan_decision":
+      return "Lead plan decision";
+    case "start_lead_round_planning":
+      return "Lead round planning";
+    case "start_stage_worker":
+      return "Worker unit";
+    case "await_worker_results":
+      return "Waiting for workers";
+    case "complete_stage_round":
+      return "Complete round";
+    case "start_stage_review":
+      return "Start stage review";
+    case "start_stage_verification_worker":
+      return "Stage reviewer";
+    case "start_final_verification_worker":
+      return "Final reviewer";
+    case "start_lead_final_decision":
+      return "Lead final decision";
+    case "terminal":
+      return "Closed";
+    default:
+      return actionType.replace(/^start_/, "").replaceAll("_", " ");
+  }
 }
 
 function ReviewResult(props: { props: Record<string, unknown> }) {
@@ -541,12 +633,7 @@ function UnsupportedElement(props: { reason: string }) {
 }
 
 function TaskStatusBadge(props: { task: TaskCard }) {
-  if (props.task.terminal) {
-    return <Badge variant={statusBadgeVariant(props.task)}>{props.task.terminal.outcome}</Badge>;
-  }
-  if (props.task.waitingForLead) return <Badge variant="warn">lead wait</Badge>;
-  if (props.task.runtimeProcesses.running > 0) return <Badge variant="info">running</Badge>;
-  return <Badge variant={statusBadgeVariant(props.task)}>{props.task.status}</Badge>;
+  return <Badge variant={statusBadgeVariant(props.task)}>{taskPhaseLabel(props.task)}</Badge>;
 }
 
 function findTask(tasks: TaskCard[], taskId: string): TaskCard | undefined {
@@ -625,6 +712,14 @@ function statusBadgeVariant(task: TaskCard): ConsoleBadgeVariant {
   if (task.status === "planning" || task.nextAction.type.includes("plan")) return "warn";
   if (task.status === "running") return "info";
   return "neutral";
+}
+
+function taskPhaseLabel(task: TaskCard): string {
+  if (task.terminal) return task.terminal.outcome;
+  if (task.activeRound) return "round active";
+  if (task.currentStage) return "stage active";
+  if (task.plan?.status) return `plan ${task.plan.status}`;
+  return actionTypeLabel(task.nextAction.type);
 }
 
 function textVariantClass(variant: "body" | "muted"): string {

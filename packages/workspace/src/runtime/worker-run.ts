@@ -1,9 +1,11 @@
 import type {
   AgentLoop,
+  LoopEvent,
   McpServers,
   Skill,
   TaskInput,
   TaskResult as AgentTaskResult,
+  TaskRoundMode,
   ToolSet,
 } from "agent-loop";
 import {
@@ -16,7 +18,13 @@ import {
   type StartWorkerRunInput,
 } from "../commands";
 import { fail, ok } from "../commands";
-import type { PlanStageDef, TaskProjection } from "../coordination";
+import type {
+  PlanStageDef,
+  StageRoundProjection,
+  StageWorkUnitDef,
+  TaskProjection,
+  WorkerRunObservation,
+} from "../coordination";
 
 export interface WorkerRunSpec {
   workspaceId?: string;
@@ -56,19 +64,38 @@ export async function runWorkerTask(
   if (!started.ok) return started;
 
   const { runId, projection } = started.data;
-  const stage = currentRunStage(projection, runId);
-  if (!stage) {
-    return fail("invalid_state", "Worker run did not resolve to a plan stage.", {
+  const target = currentRunTarget(projection, runId);
+  if (!target) {
+    return fail("invalid_state", "Worker run did not resolve to a stage round work unit.", {
       taskId: input.taskId,
       runId,
     });
   }
 
   let taskResult: AgentTaskResult;
+  const observations = new WorkerObservationCollector();
+  const existingHooks = input.taskInput.hooks;
   try {
     taskResult = await input.runTask({
       ...input.taskInput,
-      goal: input.goal ?? buildStageWorkerPrompt(projection, stage),
+      goal:
+        input.goal ??
+        buildStageWorkerPrompt(projection, target.stage, target.round, target.workUnit),
+      hooks: {
+        ...existingHooks,
+        async onRoundStart(round, prompt, mode) {
+          observations.roundStart(round, mode, prompt);
+          await existingHooks?.onRoundStart?.(round, prompt, mode);
+        },
+        onEvent(ev, round, mode) {
+          observations.event(ev, round, mode);
+          existingHooks?.onEvent?.(ev, round, mode);
+        },
+        async onRoundEnd(round, end) {
+          observations.roundEnd(round, end.mode, end.report);
+          await existingHooks?.onRoundEnd?.(round, end);
+        },
+      },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -99,6 +126,7 @@ export async function runWorkerTask(
   }
 
   const terminal = terminalInput(input, runId, taskResult);
+  if (observations.items.length > 0) terminal.observations = observations.items;
   const recorded =
     taskResult.status === "completed"
       ? await completeWorkerRun(ctx, terminal)
@@ -129,7 +157,12 @@ export async function runWorkerLoop(input: RunWorkerLoopInput) {
   return await run.result;
 }
 
-export function buildStageWorkerPrompt(projection: TaskProjection, stage: PlanStageDef): string {
+export function buildStageWorkerPrompt(
+  projection: TaskProjection,
+  stage: PlanStageDef,
+  round: StageRoundProjection,
+  workUnit: StageWorkUnitDef,
+): string {
   return [
     `Task: ${projection.request ?? projection.taskId}`,
     `Stage: ${stage.title}`,
@@ -139,15 +172,34 @@ export function buildStageWorkerPrompt(projection: TaskProjection, stage: PlanSt
     "",
     "Acceptance:",
     ...stage.acceptance.map((item) => `- ${item}`),
+    "",
+    `Stage round: ${round.title ?? round.id}`,
+    "",
+    "Round intent:",
+    round.intent,
+    "",
+    `Work unit: ${workUnit.title}`,
+    "",
+    "Work unit objective:",
+    workUnit.objective,
+    ...(workUnit.acceptance?.length
+      ? ["", "Work unit acceptance:", ...workUnit.acceptance.map((item) => `- ${item}`)]
+      : []),
   ].join("\n");
 }
 
 export const buildWorkerGoal = buildStageWorkerPrompt;
 export const runTaskWorker = runWorkerTask;
 
-function currentRunStage(projection: TaskProjection, runId: string): PlanStageDef | undefined {
+function currentRunTarget(
+  projection: TaskProjection,
+  runId: string,
+): { stage: PlanStageDef; round: StageRoundProjection; workUnit: StageWorkUnitDef } | undefined {
   const run = projection.workerRuns[runId];
-  return projection.plan?.stages.find((stage) => stage.id === run?.stageId);
+  const stage = projection.plan?.stages.find((candidate) => candidate.id === run?.stageId);
+  const round = run ? projection.stageRounds[run.roundId] : undefined;
+  const workUnit = round?.workUnits.find((candidate) => candidate.id === run?.workUnitId);
+  return stage && round && workUnit ? { stage, round, workUnit } : undefined;
 }
 
 function terminalInput(
@@ -161,6 +213,7 @@ function terminalInput(
   summary: string;
   report: string;
   note?: string;
+  observations?: WorkerRunObservation[];
 } {
   return {
     workspaceId: input.workspaceId,
@@ -169,6 +222,189 @@ function terminalInput(
     summary: result.report,
     report: taskResultReport(result),
   };
+}
+
+class WorkerObservationCollector {
+  readonly items: WorkerRunObservation[] = [];
+  private sequence = 0;
+
+  roundStart(round: number, mode: TaskRoundMode, prompt: string): void {
+    this.push({
+      kind: "round_start",
+      round,
+      mode,
+      summary: `Round ${round} ${mode} started. ${summarizeText(prompt)}`,
+    });
+  }
+
+  roundEnd(round: number, mode: TaskRoundMode, report: string): void {
+    this.push({
+      kind: "round_end",
+      round,
+      mode,
+      summary: `Round ${round} ${mode} ended. ${summarizeText(report)}`,
+    });
+  }
+
+  event(ev: LoopEvent, round: number, mode: TaskRoundMode): void {
+    switch (ev.type) {
+      case "thinking":
+        this.push({
+          kind: "thinking",
+          round,
+          mode,
+          summary: summarizeText(ev.text),
+        });
+        break;
+      case "text":
+        this.push({
+          kind: "text",
+          round,
+          mode,
+          summary: summarizeText(ev.text),
+        });
+        break;
+      case "tool_call_start":
+        this.push({
+          kind: "tool_call",
+          round,
+          mode,
+          summary: `${ev.name} started.`,
+          toolName: ev.name,
+          callId: ev.callId,
+          status: "started",
+          argsSummary: summarizeUnknown(ev.args),
+        });
+        break;
+      case "tool_call_end":
+        this.push({
+          kind: "tool_call",
+          round,
+          mode,
+          summary: `${ev.name} ${ev.error ? "failed" : "completed"}.`,
+          toolName: ev.name,
+          callId: ev.callId,
+          status: ev.error ? "failed" : "completed",
+          resultSummary: ev.error ? summarizeText(ev.error) : summarizeUnknown(ev.result),
+          durationMs: ev.durationMs,
+        });
+        break;
+      case "usage":
+        this.push({
+          kind: "usage",
+          round,
+          mode,
+          summary: `${ev.totalTokens} tokens used.`,
+          usage: {
+            inputTokens: ev.inputTokens,
+            outputTokens: ev.outputTokens,
+            totalTokens: ev.totalTokens,
+          },
+        });
+        break;
+      case "step":
+        this.push({
+          kind: "step",
+          round,
+          mode,
+          summary: `Step ${ev.index} ${ev.phase}.`,
+        });
+        break;
+      case "error":
+        this.push({
+          kind: "error",
+          round,
+          mode,
+          summary: summarizeText(ev.error.message),
+        });
+        break;
+      case "hook":
+        this.push({
+          kind: "hook",
+          round,
+          mode,
+          summary: summarizeText(`${ev.name} ${ev.phase} ${ev.outcome ?? ""}`.trim()),
+          resultSummary: summarizeText(ev.output ?? ev.stdout ?? ev.stderr ?? ""),
+        });
+        break;
+      case "steer":
+        this.push({
+          kind: "text",
+          round,
+          mode,
+          summary: `Steer ${ev.mode}: ${summarizeText(ev.message)}`,
+        });
+        break;
+      case "unknown":
+        this.push({
+          kind: "unknown",
+          round,
+          mode,
+          summary: summarizeUnknown(ev.data) ?? "Unknown runtime event.",
+        });
+        break;
+    }
+  }
+
+  private push(input: Omit<WorkerRunObservation, "id" | "at">): void {
+    this.items.push({
+      id: `obs_${++this.sequence}`,
+      at: new Date().toISOString(),
+      ...compactObservation(input),
+    });
+  }
+}
+
+const OBSERVATION_TEXT_LIMIT = 420;
+const OBSERVATION_JSON_LIMIT = 520;
+const SENSITIVE_FIELD = /api[_-]?key|authorization|bearer|cookie|password|secret|token/i;
+
+function compactObservation(
+  input: Omit<WorkerRunObservation, "id" | "at">,
+): Omit<WorkerRunObservation, "id" | "at"> {
+  return removeUndefined({
+    ...input,
+    summary: summarizeText(input.summary),
+    argsSummary: input.argsSummary
+      ? summarizeText(input.argsSummary, OBSERVATION_JSON_LIMIT)
+      : undefined,
+    resultSummary: input.resultSummary
+      ? summarizeText(input.resultSummary, OBSERVATION_JSON_LIMIT)
+      : undefined,
+  }) as Omit<WorkerRunObservation, "id" | "at">;
+}
+
+function summarizeText(text: string, limit = OBSERVATION_TEXT_LIMIT): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 1)}…`;
+}
+
+function summarizeUnknown(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return summarizeText(value, OBSERVATION_JSON_LIMIT);
+  try {
+    return summarizeText(JSON.stringify(redactUnknown(value)), OBSERVATION_JSON_LIMIT);
+  } catch {
+    return summarizeText(String(value), OBSERVATION_JSON_LIMIT);
+  }
+}
+
+function redactUnknown(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactUnknown);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      SENSITIVE_FIELD.test(key) ? "[redacted]" : redactUnknown(item),
+    ]),
+  );
+}
+
+function removeUndefined<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined),
+  ) as Partial<T>;
 }
 
 function taskResultReport(result: AgentTaskResult): string {

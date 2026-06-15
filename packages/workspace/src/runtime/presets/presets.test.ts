@@ -35,10 +35,28 @@ const projection: TaskProjection = {
   },
   currentStageId: "stage_1",
   acceptedStageIds: ["stage_1"],
+  activeRoundId: "round_1",
+  stageRounds: {
+    round_1: {
+      id: "round_1",
+      stageId: "stage_1",
+      status: "planned",
+      intent: "Implement runtime preset work.",
+      workUnits: [
+        {
+          id: "work_unit_1",
+          title: "Runtime preset work",
+          objective: "Refactor runtime into presets.",
+        },
+      ],
+    },
+  },
   workerRuns: {
     run_1: {
       runId: "run_1",
       stageId: "stage_1",
+      roundId: "round_1",
+      workUnitId: "work_unit_1",
       status: "completed",
       result: { summary: "Runtime presets implemented." },
     },
@@ -73,14 +91,16 @@ describe("worker preset wrappers", () => {
   test("stage execution preset uses the current stage and the generic worker task input", () => {
     const preset = createStageExecutionPreset({
       projection,
+      roundId: "round_1",
+      workUnitId: "work_unit_1",
       baseTaskInput: { loop: fakeLoop },
       executionTools: tool("edit_file"),
     });
 
     expect(preset).toMatchObject({
       taskId: "task_1",
-      stageId: "stage_1",
-      objective: "Refactor runtime into presets.",
+      roundId: "round_1",
+      workUnitId: "work_unit_1",
       taskInput: {
         tools: { edit_file: expect.any(Object) },
       },

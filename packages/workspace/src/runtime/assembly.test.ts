@@ -9,8 +9,10 @@ import {
   createTask,
   createWorkspace,
   getTask,
+  planStageRound,
   startStageReview,
   startWorkerRun,
+  submitRequirementSpec,
   type CommandContext,
 } from "../commands";
 import {
@@ -104,7 +106,8 @@ describe("runtime assembly registry", () => {
         input: {
           workspaceId: "sikong",
           taskId: "task_1",
-          stageId: "stage_1",
+          roundId: "round_1",
+          workUnitId: "work_unit_1",
           taskInput: {},
         },
       } as OrchestrationAction,
@@ -126,6 +129,11 @@ describe("runtime assembly registry", () => {
         cwd: dir,
       });
       if (!created.ok) throw new Error("task create failed");
+      const spec = await submitRequirementSpec(context, {
+        taskId: created.data.taskId,
+        summary: "Submit durable task decisions.",
+      });
+      if (!spec.ok) throw new Error("requirement spec submit failed");
 
       const planningModule = createRuntimeAssemblyModule({
         toolProfiles: { planningProtocol: "sikong-planning-protocol" },
@@ -170,7 +178,18 @@ describe("runtime assembly registry", () => {
         report: "Accepted.",
       });
       if (!accepted.ok) throw new Error("plan accept failed");
-      const started = await startWorkerRun(context, { taskId: created.data.taskId });
+      const round = await planStageRound(context, {
+        taskId: created.data.taskId,
+        stageId: accepted.data.projection.currentStageId ?? "",
+        intent: "Execute runtime assembly test work.",
+        workUnits: [{ title: "Work", objective: "Complete assembly test work." }],
+      });
+      if (!round.ok) throw new Error("round plan failed");
+      const started = await startWorkerRun(context, {
+        taskId: created.data.taskId,
+        roundId: round.data.round.id,
+        workUnitId: round.data.round.workUnits[0]!.id,
+      });
       if (!started.ok) throw new Error("worker start failed");
       const completed = await completeWorkerRun(context, {
         taskId: created.data.taskId,
@@ -284,7 +303,8 @@ describe("runtime assembly registry", () => {
           input: {
             workspaceId: "sikong",
             taskId: created.data.taskId,
-            stageId: "stage_1",
+            roundId: "round_1",
+            workUnitId: "work_unit_1",
             taskInput: {},
           },
         },

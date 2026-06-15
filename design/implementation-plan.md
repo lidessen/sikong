@@ -47,18 +47,21 @@ Implemented:
 - daemon-backed orchestration subprocess runner and process-spec/client helpers;
 - compact task inspect view for next action and lead wait state;
 - named runtime assembly registry for backend and tool-profile injection;
-- initial parallel stage worker policy through `PlanStageDef.workerCount`.
 - production runtime defaults for task cwd, adapter permissions, and AI SDK
   local inspection/execution tool profiles.
 - workspace-owned git worktree allocation for `task create --repo`.
 - runtime process start/finish facts and process-level `task cancel`.
 - thin client-agent tool adapter over command handlers.
-- client-agent context packet/work-log/turn facade and the first React+Vite
-  client UI slice.
+- client-agent bootstrap context/turn facade and the first React+Vite client UI
+  slice.
 
 Not implemented yet:
 
 - runtime process steer command surface.
+- mandatory Task Lead runtime.
+- lead-submitted requirement specs.
+- Stage Round / Work Unit execution protocol.
+- removal of the `PlanStageDef.workerCount` execution path.
 
 ## Phase 1: Go Generic Process Supervisor
 
@@ -124,8 +127,10 @@ Deliverables:
 - stage review start action calls the review command handler; _(implemented)_
 - verification actions start loop-backed verification preset runs whose durable
   state changes only through protocol tools; _(implemented)_
-- `await_plan_decision` and `await_final_decision` return wait states and do not
-  auto-accept anything. _(implemented)_
+- lead requirement, plan decision, round planning, and final decision actions
+  run through the Lead protocol tool profile; _(implemented)_
+- worker-result waiting remains explicit only for active round work units.
+  _(implemented)_
 - daemon-backed child process entrypoints for these actions. _(implemented)_
 
 Constraints:
@@ -199,29 +204,30 @@ Constraints:
   bundle; Claude Code, Codex, and Cursor use adapter-native cwd, sandbox, and
   permission options.
 
-## Phase 6: Parallel Stage Workers
+## Phase 6: Remove Stage Worker Count Policy
 
-Add controlled parallelism after the serial orchestration path is stable.
+Remove the old `PlanStageDef.workerCount` scheduling policy instead of keeping
+it beside Stage Round / Work Unit execution.
 
-Status: initial policy implemented in `packages/workspace/src/orchestration`.
+Status: implemented.
 
 Deliverables:
 
-- an explicit per-stage worker concurrency policy;
-  _(implemented as optional `PlanStageDef.workerCount`, default `1`)_
-- orchestration support for starting multiple execution worker runs when policy
-  allows; _(implemented)_
-- stage verification over accumulated terminal worker results;
-  _(implemented through existing stage verification prompt over worker runs)_
-- concurrency tests proving event logs and projections remain stable.
-  _(implemented at store level, plus orchestration tests for multi-worker
-  stage scheduling)_
+- remove `workerCount` from `PlanStageDef` and planner-facing plan input;
+- remove CLI `--plan-json.stages[].workerCount` parsing and validation;
+- remove orchestration logic that starts stage workers by comparing worker run
+  count against a stage-level target;
+- remove or rewrite tests that encode stage-level worker-count scheduling;
+- ensure stage parallelism is represented only by work units inside a
+  lead-planned stage round.
 
 Constraints:
 
 - per-task event locking remains the write-safety boundary;
 - Go daemon concurrency remains process/resource based;
 - stage workers do not transition stages themselves.
+- do not keep a compatibility fallback for old plan payloads;
+- do not support both worker-count scheduling and stage-round scheduling.
 
 ## Phase 7: Orchestration Driver
 
@@ -439,15 +445,17 @@ Status: initial slice implemented in `packages/workspace/src/client-agent` and
 
 Deliverables:
 
-- file-backed client work log outside `WorkspaceDef`; _(implemented)_
-- explicit `ClientAgentContextPacket` built from client work log plus focused
-  workspace/task summaries; _(implemented)_
+- file-backed UI transcript plus workspace/task source stores;
+  _(implemented)_
+- explicit `ClientAgentBootstrapContext` built from current message, UI focus,
+  workspace index, focused workspace/task snapshot, and recent transcript;
+  _(designed; implementation still uses the initial context packet shape)_
 - per-turn `runClientAgentTurn` facade over `agent-loop.run` and
   `createClientAgentTools`; _(implemented)_
 - local Bun client API adapter for browser JSON and SSE turn calls;
   _(implemented)_
 - React+Vite client with one continuous activity stream, task cards, workspace
-  switching, and secondary work-log/task detail views. _(implemented)_
+  switching, and secondary source/task detail views. _(implemented)_
 - typed client message parts and a restricted dynamic UI part based on a small
   Sikong catalog; _(designed, not implemented)_
 - a client-side renderer that maps the restricted catalog to native UI
@@ -467,6 +475,38 @@ Constraints:
 - the current client API uses `mockLoop` as the dev default until a real
   client-agent runtime selection is wired.
 
+## Phase 16: Task Lead And Stage Rounds
+
+Implement the target team workflow above the current process-backed
+orchestration path.
+
+Status: not implemented.
+
+Deliverables:
+
+- a Task Lead runtime using `defaults.lead`;
+- a requirement-spec protocol tool for the lead;
+- engine-triggered planning after the requirement spec is recorded;
+- plan acceptance/rejection through the lead runtime, not the Client Agent;
+- `StageRoundDef` and `StageWorkUnitDef` event/projection types;
+- a lead round-planning protocol tool that submits one round for the current
+  stage;
+- orchestration support for starting one worker run per work unit in the active
+  round;
+- stage review after all work-unit runs in the round reach terminal state;
+- rejection flow that returns to lead round planning with reviewer feedback;
+- compact inspect output for active round, work units, and stage review gaps.
+
+Constraints:
+
+- the planner still submits only ordered stages, not rounds or work units;
+- `Work Item` remains the user-facing name for the top-level task object;
+- `Work Unit` is the stage-round child work target;
+- work units in a round run concurrently; rounds in a stage run serially;
+- stage review acceptance is the normal round-loop stop condition;
+- Client Agent and web UI must not expose internal protocol actions for plan,
+  round, work unit, worker, or review decisions.
+
 ## Verification For Each Phase
 
 Run at minimum:
@@ -482,5 +522,5 @@ before handoff:
 rg -n "AgentKind|PlannerAdapter|ReviewerAdapter|WorkerAdapter|role\\s*:|kind\\s*:" packages/workspace/src cmd internal design
 ```
 
-Expected matches are only explanatory documentation or non-agent UI/work-log
+Expected matches are only explanatory documentation or non-agent UI/source-store
 fields. There should be no code-level agent role or kind driving behavior.

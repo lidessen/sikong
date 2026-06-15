@@ -29,10 +29,10 @@ Go CLI/daemon
 `agent-loop` owns a single agent run and the simple `runTask` primitive. It is
 not the multi-worker coordination layer.
 
-The workspace coordination engine owns durable work items, parent/child task
-graphs, worker assignment, workspace context, event storage, inspection views,
-and wake scheduling. In the existing command/model API these durable work items
-are still represented by names such as `TaskProjection` and `taskId`.
+The workspace coordination engine owns durable work items, stage round and
+work-unit coordination, workspace context, event storage, inspection views, and
+wake scheduling. In the existing command/model API these durable work items are
+still represented by names such as `TaskProjection` and `taskId`.
 
 The Go layer owns process concerns: CLI entrypoints, daemon lifecycle, local IPC
 or API serving, signal handling, child-process supervision, concurrency limits,
@@ -85,8 +85,9 @@ packages/workspace/src/
 ```
 
 The coordination model is finalized at the high level in
-`design/coordination-engine.md`: lead-initiated planning, planner-produced
-`PlanDef`, ordered stages, stage review, final review, and worker execution
+`design/coordination-engine.md`: lead-submitted requirement specs,
+engine-triggered planning, planner-produced `PlanDef`, ordered stages,
+lead-planned stage rounds, stage review, final review, and worker execution
 through `agent-loop.runTask`.
 
 The important shape decision is that Sikong owns a fixed multi-worker
@@ -121,7 +122,7 @@ Defer these until the coordination engine is stable:
 - multi-workspace orchestrator.
 - visual design workflow tooling.
 - release workflow.
-- historical builtin workflow compatibility versions.
+- old builtin workflow version migration.
 - full worker health and pooling policy.
 
 ## Process Boundary

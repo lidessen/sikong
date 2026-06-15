@@ -35,6 +35,10 @@ export function applyTaskEvent(
       next.createdAt = event.createdAt;
       next.status = "created";
       break;
+    case "requirement_spec.submitted":
+      next.requirementSpec = event.spec;
+      next.status = "created";
+      break;
     case "plan.requested":
       next.status = "planning";
       next.planDecision = planDecision("requested", event.createdAt);
@@ -96,12 +100,39 @@ export function applyTaskEvent(
     case "stage.started":
       next.status = "running";
       next.currentStageId = event.stageId;
+      next.activeRoundId = undefined;
       break;
+    case "stage_round.planned":
+      next.status = "running";
+      next.stageRounds[event.round.id] = {
+        ...event.round,
+        status: "planned",
+        startedAt: event.createdAt,
+      };
+      next.activeRoundId = event.round.id;
+      break;
+    case "stage_round.completed": {
+      const existing = next.stageRounds[event.roundId];
+      next.stageRounds[event.roundId] = {
+        ...(existing ?? {
+          id: event.roundId,
+          stageId: event.stageId,
+          intent: "",
+          workUnits: [],
+        }),
+        status: "completed",
+        completedAt: event.createdAt,
+      };
+      next.activeRoundId = undefined;
+      break;
+    }
     case "worker_run.started":
       next.status = "running";
       next.workerRuns[event.runId] = {
         runId: event.runId,
         stageId: event.stageId,
+        roundId: event.roundId,
+        workUnitId: event.workUnitId,
         workerId: event.workerId,
         status: "running",
         objective: event.objective,
@@ -211,6 +242,7 @@ function emptyProjection(event: TaskEvent): TaskProjection {
     acceptedStageIds: [],
     workerRuns: {},
     stageReviews: {},
+    stageRounds: {},
     eventCount: 0,
   };
 }
@@ -219,6 +251,7 @@ function cloneProjection(projection: TaskProjection): TaskProjection {
   return {
     ...projection,
     acceptedStageIds: [...projection.acceptedStageIds],
+    stageRounds: { ...projection.stageRounds },
     ...(projection.runtimeProcessRuns
       ? { runtimeProcessRuns: { ...projection.runtimeProcessRuns } }
       : {}),
@@ -251,6 +284,8 @@ function finishWorkerRun(
     ...(existing ?? {
       runId: event.runId,
       stageId: event.stageId,
+      roundId: "",
+      workUnitId: "",
     }),
     runId: event.runId,
     stageId: event.stageId,

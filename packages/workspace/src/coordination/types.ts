@@ -15,7 +15,27 @@ export interface PlanStageDef {
   title: string;
   objective: string;
   acceptance: string[];
-  workerCount?: number;
+}
+
+export interface RequirementSpec {
+  summary: string;
+  constraints?: string[];
+  acceptance?: string[];
+}
+
+export interface StageRoundDef {
+  id: string;
+  stageId: string;
+  title?: string;
+  intent: string;
+  workUnits: StageWorkUnitDef[];
+}
+
+export interface StageWorkUnitDef {
+  id: string;
+  title: string;
+  objective: string;
+  acceptance?: string[];
 }
 
 export interface TaskEventBase {
@@ -27,6 +47,7 @@ export interface TaskEventBase {
 
 export type TaskEvent =
   | TaskCreatedEvent
+  | RequirementSpecSubmittedEvent
   | PlanRequestedEvent
   | PlanSubmittedEvent
   | PlanAcceptedEvent
@@ -34,6 +55,8 @@ export type TaskEvent =
   | RuntimeProcessStartedEvent
   | RuntimeProcessFinishedEvent
   | StageStartedEvent
+  | StageRoundPlannedEvent
+  | StageRoundCompletedEvent
   | WorkerRunStartedEvent
   | WorkerRunCompletedEvent
   | WorkerRunFailedEvent
@@ -52,6 +75,11 @@ export interface TaskCreatedEvent extends TaskEventBase {
   type: "task.created";
   request: string;
   runtime?: RuntimeInput;
+}
+
+export interface RequirementSpecSubmittedEvent extends TaskEventBase {
+  type: "requirement_spec.submitted";
+  spec: RequirementSpec;
 }
 
 export interface PlanRequestedEvent extends TaskEventBase {
@@ -99,10 +127,23 @@ export interface StageStartedEvent extends TaskEventBase {
   stageId: string;
 }
 
+export interface StageRoundPlannedEvent extends TaskEventBase {
+  type: "stage_round.planned";
+  round: StageRoundDef;
+}
+
+export interface StageRoundCompletedEvent extends TaskEventBase {
+  type: "stage_round.completed";
+  roundId: string;
+  stageId: string;
+}
+
 export interface WorkerRunStartedEvent extends TaskEventBase {
   type: "worker_run.started";
   runId: string;
   stageId: string;
+  roundId: string;
+  workUnitId: string;
   workerId?: string;
   objective?: string;
 }
@@ -132,6 +173,39 @@ export interface TaskRunResult {
   summary: string;
   report?: string;
   note?: string;
+  observations?: WorkerRunObservation[];
+}
+
+export type WorkerRunObservationKind =
+  | "round_start"
+  | "round_end"
+  | "thinking"
+  | "tool_call"
+  | "text"
+  | "usage"
+  | "step"
+  | "error"
+  | "hook"
+  | "unknown";
+
+export interface WorkerRunObservation {
+  id: string;
+  kind: WorkerRunObservationKind;
+  round?: number;
+  mode?: "work" | "finish" | "gate";
+  at: string;
+  summary: string;
+  toolName?: string;
+  callId?: string;
+  status?: "started" | "completed" | "failed";
+  argsSummary?: string;
+  resultSummary?: string;
+  durationMs?: number;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
 }
 
 export interface StageReviewStartedEvent extends TaskEventBase {
@@ -216,6 +290,8 @@ export interface RuntimeProcessRunProjection {
 export interface WorkerRunProjection {
   runId: string;
   stageId: string;
+  roundId: string;
+  workUnitId: string;
   workerId?: string;
   status: WorkerRunStatus;
   objective?: string;
@@ -259,6 +335,7 @@ export interface TaskProjection {
   workspaceId: string;
   request?: string;
   runtime?: RuntimeInput;
+  requirementSpec?: RequirementSpec;
   status: TaskStatus;
   createdAt?: string;
   updatedAt?: string;
@@ -266,6 +343,8 @@ export interface TaskProjection {
   planDecision?: PlanDecisionProjection;
   currentStageId?: string;
   acceptedStageIds: string[];
+  stageRounds: Record<string, StageRoundProjection>;
+  activeRoundId?: string;
   runtimeProcessRuns?: Record<string, RuntimeProcessRunProjection>;
   workerRuns: Record<string, WorkerRunProjection>;
   stageReviews: Record<string, StageReviewProjection>;
@@ -276,4 +355,10 @@ export interface TaskProjection {
     at: string;
   };
   eventCount: number;
+}
+
+export interface StageRoundProjection extends StageRoundDef {
+  status: "planned" | "completed";
+  startedAt?: string;
+  completedAt?: string;
 }

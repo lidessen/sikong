@@ -68,8 +68,11 @@ The UI should be conversation-shaped as a product surface, but the `Client
 Agent` is not a traditional chat-session agent.
 
 Each `Client Agent` turn is a fresh loop over an explicit context packet. The
-packet is built from the client work log plus the current workspace/task focus.
-The full UI transcript is deliberately not loaded as model context.
+packet is a bootstrap orientation packet, not a memory dump. It contains the
+current user message, the UI focus, a compact workspace index, the focused
+workspace/task snapshot, and a small recent transcript window. The full UI
+transcript and raw task events are deliberately not loaded into the prompt; the
+agent must inspect them through tools when needed.
 
 There are three separate records:
 
@@ -90,6 +93,10 @@ type ClientMessage = {
   id: string;
   role: "user" | "assistant" | "system";
   createdAt: string;
+  loopId?: string;
+  segmentId?: string;
+  workspaceId?: string;
+  taskId?: string;
   parts: MessagePart[];
 };
 
@@ -97,9 +104,15 @@ type MessagePart =
   | { type: "text"; text: string }
   | { type: "progress-card"; progress: ClientTurnProgress }
   | { type: "task-card"; taskId: string } // rendered as a Work Item card
-  | { type: "work-log-summary"; entries: ClientWorkLogEntry[] }
+  | { type: "source-summary"; title: string; entries: string[] }
   | { type: "ui"; spec: SikongUISpec };
 ```
+
+Transcript history is available through transcript tools. The bootstrap packet
+may include a small recent window for conversation continuity, but previous chat
+messages are not authoritative workspace facts. When a user asks about earlier
+work, the client agent should inspect transcript, workspace, and task stores as
+needed.
 
 ### Turn Stream
 
@@ -155,7 +168,7 @@ progress card forever. The durable control boundary is:
 3. `steer.applied`: the steer is folded into the next segment's prompt/context.
 
 Those control events belong to the transcript/control ledger and turn stream.
-They do not automatically become client work-log entries.
+They do not automatically become a separate memory layer.
 
 The `ui` part is optional dynamic content. It is inspired by catalog-based
 renderers such as `json-render`, but Sikong should not become a general-purpose
@@ -203,99 +216,177 @@ append, or stage advancement through the dynamic UI spec. Those operations must
 continue to go through the `Client Agent` tool surface and Sikong command
 handlers.
 
-### Client Work Log
+### Source Stores And Bootstrap Context
 
-The client work log is the durable cross-workspace context for the `Client
-Agent`.
+There is no separate client work-log context layer. Sikong should keep ordinary
+records in ordinary stores, and the `Client Agent` should inspect those stores
+through tools when it needs more than the bootstrap packet.
 
-It may contain:
+The source stores are:
 
-- task summaries;
-- cross-project decisions;
-- user working preferences;
-- active project status;
+- transcript store: user messages, assistant messages, steer messages, and
+  rendered UI parts;
+- workspace store: workspace definitions, names, goals, preferences, and
+  high-level metadata;
+- task store/event log: work-item projections, task events, traces, plans,
+  worker runs, reviews, and terminal records;
+- turn stream/control ledger: live turn segments, SSE progress, steer
+  submission, checkpoint, and applied-steer control events.
 
-It should be bounded and curated. Raw task event logs should not be copied into
-the client work log.
+Message routing is simple:
 
-The work log should record semantic facts that should influence later turns:
+1. If a client-agent loop is running, the new user message is stored in the
+   transcript and routed as steer into the current loop segment.
+2. If no client-agent loop is running, the new user message is stored in the
+   transcript and starts a new loop with a bootstrap context.
 
-- `task_summary`: terminal or action-required task outcomes, compact enough to
-  read without replaying task events;
-- `decision`: user or lead decisions that change direction, scope, acceptance,
-  priority, or constraints;
-- `user_preference`: durable operator preferences, including steer messages
-  that should apply beyond the current turn;
-- `project_status`: current workspace status, next recommended action, or an
-  unresolved thread that the user expects Sikong to remember.
-
-The work log should not record:
-
-- SSE progress ticks such as `turn.progress`;
-- model token deltas, raw tool stdout/stderr, or full task traces;
-- every UI transcript message;
-- transient steer lifecycle events unless they resulted in a durable decision
-  or preference;
-- implementation detail that can be recomputed from task inspection.
-
-For steer, the default rule is: keep the steer message and
-`steer.submitted/checkpoint_reached/steer.applied` in the transcript/control
-projection; write a work-log entry only when the steer creates a durable
-preference or decision. Example: "do not use React for this workspace" is a
-`user_preference`; "actually make the button smaller in this run" usually stays
-inside the current turn unless the user asks Sikong to remember it.
-
-Candidate entry shape:
+The bootstrap packet is stable and intentionally small:
 
 ```ts
-type ClientWorkLogEntry = {
-  id: string;
-  kind: "task_summary" | "decision" | "user_preference" | "project_status";
-  summary: string;
-  workspaceId?: string;
-  relatedTaskIds?: string[];
-  createdAt: string;
-};
-```
-
-The client work log is outside `WorkspaceDef`. It belongs to the client layer or
-local service layer that runs the `Client Agent`.
-
-The default context packet is:
-
-```ts
-type ClientAgentContextPacket = {
+type ClientAgentBootstrapContext = {
   policy: {
-    transcript: "presentation_only";
-    memory: "client_work_log";
-    taskEvents: "detail_only";
+    transcript: "query_with_tools";
+    workspaceState: "authoritative";
+    taskEvents: "inspect_on_demand";
+    memory: "none";
   };
-  focus: { workspaceId?: string; taskId?: string };
-  workLog: ClientWorkLogEntry[];
-  workspaces: WorkspaceDef[];
+  currentMessage: {
+    id: string;
+    text: string;
+    createdAt: string;
+  };
+  focus: {
+    workspaceId?: string;
+    taskId?: string;
+    source: "ui" | "message_resolved" | "none";
+  };
+  workspaceIndex: Array<{
+    workspaceId: string;
+    name: string;
+    status?: string;
+    activeTaskCount: number;
+    updatedAt?: string;
+  }>;
   focusedWorkspace?: {
     workspace: WorkspaceDef;
     preferences: WorkspacePreference[];
     taskCards: TaskCompactView[];
   };
   focusedTask?: {
-    summary: TaskSummary;
     compact: TaskCompactView;
+  };
+  recentTranscript: ClientMessage[];
+};
+```
+
+The recent transcript window is for local conversation continuity only. It is
+not a memory system and not authoritative project state.
+
+When the current message refers to earlier work, another project, or task
+status, the client agent should use tools to inspect the relevant source store.
+Recommended client-agent inspection tools:
+
+```ts
+transcript.listRecent({ limit });
+transcript.search({ query });
+transcript.getRange({ beforeMessageId, limit });
+
+workspace.list();
+workspace.get({ workspaceId });
+workspace.events({ workspaceId, limit });
+workspace.search({ query });
+
+task.list({ workspaceId });
+task.get({ workspaceId, taskId });
+task.inspectSummary({ workspaceId, taskId });
+task.inspectCompact({ workspaceId, taskId });
+task.inspectTrace({ workspaceId, taskId });
+task.wait({ workspaceId, taskId, timeoutMs });
+
+preference.list({ workspaceId });
+```
+
+The stable client-agent system prompt should make these boundaries explicit:
+
+```text
+You are Sikong's Client Agent.
+
+The transcript is a UI record, not authoritative project state.
+Workspace and task stores are authoritative.
+
+Use the bootstrap context to orient yourself.
+When the current message refers to previous work, workspace state, task state,
+or earlier conversation, inspect the relevant source store with tools before
+acting.
+
+Do not assume all relevant history is in the prompt.
+Do not invent workspace facts from memory.
+If focus is ambiguous, resolve by workspace/task names, recent transcript, or
+ask a concise clarification.
+```
+
+This keeps multi-project management simple: the prompt gives the agent a map and
+a current focus, while the agent uses tools to look up the project-specific
+facts it needs.
+
+### Context Source Stores
+
+Transcript messages should be stored normally and may carry loop and focus
+metadata:
+
+```ts
+type ClientMessageRecord = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  createdAt: string;
+  loopId?: string;
+  segmentId?: string;
+  workspaceId?: string;
+  taskId?: string;
+  parts: MessagePart[];
+};
+```
+
+Workspace events should be factual project records, not memory summaries. They
+can record:
+
+- workspace created or renamed;
+- workspace goal or preference added/removed;
+- task created;
+- plan accepted or rejected;
+- task state changed;
+- deployment or runtime configuration changed.
+
+Task events remain the detailed task source of truth. The client agent should
+inspect task events only when task projection or summary is insufficient.
+
+The default loop context shape becomes:
+
+```ts
+type ClientAgentContextPacket = {
+  bootstrap: ClientAgentBootstrapContext;
+  tools: {
+    transcript: "available";
+    workspace: "available";
+    task: "available";
+    preference: "available";
   };
 };
 ```
 
-The default context scope is global client work log plus the focused workspace
-and task summaries. This preserves multi-project continuity without turning the
-transcript into memory.
+There is no default durable memory packet beyond source-store indexes and the
+recent transcript window. If future product needs require curation, it should be
+introduced as a source-store summary tool, not as automatically injected hidden
+memory.
 
 ### Task Event Log
 
 The task event log is detailed Sikong work-item telemetry. It is used for
 inspect views, work-item cards, reviews, summaries, and debugging.
 
-It does not automatically become `Client Agent` context. Summaries may be
-written to the client work log after terminal or action-required task states.
+It does not automatically become full `Client Agent` context. The bootstrap may
+include focused task compact views, and the agent can inspect detailed task
+events with tools when needed.
 
 ## Visual Direction
 
@@ -321,8 +412,6 @@ Practical implications:
   composition.
 
 ## Workspace Preferences
-
-Workspace preferences are different from the client work log.
 
 They are workspace-scoped project preferences and constraints, such as standard
 verification commands, architectural boundaries, generated-file rules, or
@@ -359,7 +448,7 @@ waitTask({ workspaceId?, taskId, timeoutMs?, intervalMs? })
 ```
 
 The tool schemas should be narrow and typed. Tool results should be structured
-objects that the UI can render into cards, details, or work-log candidates.
+objects that the UI can render into cards, details, or source summaries.
 The initial tool adapter is `createClientAgentTools` in
 `packages/workspace/src/tools`. It is intentionally a thin wrapper over command
 handlers, not a second command implementation.
@@ -396,7 +485,8 @@ cancel semantics should stay separate from final task acceptance/rejection.
 ### Monitor
 
 The current client-agent loop ends or moves on. The UI keeps work-item cards
-updated, and terminal summaries may be proposed for the client work log.
+updated. If the user later asks about the task, the client agent should inspect
+the task projection, task events, transcript, or workspace records with tools.
 
 Use this when the task can continue in the background.
 
@@ -409,5 +499,5 @@ terminal records.
 Sikong owns the internal `Task Lead`, planner, worker, reviewer, event reducer,
 and runtime execution.
 
-The client owns transcript rendering, client work-log curation, workspace
-switching UX, and mapping tool results into visible work-item cards.
+The client owns transcript rendering, workspace switching UX, and mapping tool
+results into visible work-item cards.

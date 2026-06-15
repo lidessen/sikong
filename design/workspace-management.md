@@ -20,6 +20,10 @@ and runtime artifacts. It replaces the earlier `project` term.
 - Work item: the user-facing name for a durable coordination process that
   belongs to one workspace. The command/model layer may still use `Task` names
   for this object.
+- Stage round: one Task Lead-planned execution round inside the current stage
+  of a work item.
+- Work unit: one executable child target inside a stage round. The engine starts
+  one worker run per work unit.
 - Worker run: one concrete worker execution inside a work item.
 - Worker: a data-dir-level hireable agent configuration.
 - Workspace preferences: lead-maintained project preferences and conventions,

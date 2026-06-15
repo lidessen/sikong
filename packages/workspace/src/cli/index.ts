@@ -31,6 +31,7 @@ import {
   removeWorkspacePreference,
   startStageReview,
   startWorkerRun,
+  submitRequirementSpec,
   submitPlan,
   waitTask,
   type CommandContext,
@@ -207,6 +208,14 @@ async function dispatch(
         ...parsePlanJson(required(value(parsed, "plan-json"), "--plan-json is required.")),
       });
     }
+    if (action === "submit-requirement-spec") {
+      return submitRequirementSpec(ctx, {
+        ...taskInput(parsed, arg),
+        summary: required(value(parsed, "summary"), "--summary is required."),
+        constraints: listFlagValue(parsed, "constraint"),
+        acceptance: listFlagValue(parsed, "acceptance"),
+      });
+    }
     if (action === "accept-plan") {
       return acceptPlan(ctx, {
         ...taskInput(parsed, arg),
@@ -227,9 +236,9 @@ async function dispatch(
     if (action === "start-worker") {
       return startWorkerRun(ctx, {
         ...taskInput(parsed, arg),
-        stageId: value(parsed, "stage"),
+        roundId: required(value(parsed, "round"), "--round is required."),
+        workUnitId: required(value(parsed, "work-unit"), "--work-unit is required."),
         workerId: value(parsed, "worker"),
-        objective: value(parsed, "objective"),
       });
     }
     if (action === "complete-worker") {
@@ -526,7 +535,8 @@ async function driveTask(
 ): Promise<CommandResult<CliCommandData>> {
   const taskId = required(taskIdArg, "task id is required.");
   const settings = await new FileSettingsStore(ctx.dataDir).read();
-  const runtimeAssembly = parseRuntimeAssembly(parsed, settings.defaults.worker);
+  const workerAssembly = parseRuntimeAssembly(parsed, settings.defaults.worker);
+  const leadAssembly = parseRuntimeAssembly(parsed, settings.defaults.lead);
   const client =
     options.processClient ??
     new DaemonProcessClient({
@@ -555,7 +565,7 @@ async function driveTask(
         client,
         ctx: runCtx,
         action,
-        runtimeAssembly,
+        runtimeAssembly: isLeadAction(action) ? leadAssembly : workerAssembly,
         packageCwd,
         command: runnerCommand,
         timeoutMs: optionalNumber(
@@ -680,6 +690,7 @@ function parseRuntimeAssembly(
             execution: "ai-sdk-local-execution",
           }
         : {}),
+      leadProtocol: "sikong-lead-protocol",
       planningProtocol: "sikong-planning-protocol",
       stageReviewProtocol: "sikong-stage-review-protocol",
       finalReviewProtocol: "sikong-final-review-protocol",
@@ -902,6 +913,7 @@ function orchestrationInput(projection: TaskProjection): OrchestrationInput {
   return {
     projection,
     tools: {
+      leadProtocolTools: emptyTools(),
       planningProtocolTools: emptyTools(),
       stageReviewProtocolTools: emptyTools(),
       finalReviewProtocolTools: emptyTools(),
@@ -912,10 +924,23 @@ function orchestrationInput(projection: TaskProjection): OrchestrationInput {
 
 function requiresRuntimeProcess(action: OrchestrationAction): boolean {
   return (
+    action.type === "start_lead_requirement_spec" ||
     action.type === "start_planning_worker" ||
+    action.type === "start_lead_plan_decision" ||
+    action.type === "start_lead_round_planning" ||
+    action.type === "start_lead_final_decision" ||
     action.type === "start_stage_worker" ||
     action.type === "start_stage_verification_worker" ||
     action.type === "start_final_verification_worker"
+  );
+}
+
+function isLeadAction(action: OrchestrationAction): boolean {
+  return (
+    action.type === "start_lead_requirement_spec" ||
+    action.type === "start_lead_plan_decision" ||
+    action.type === "start_lead_round_planning" ||
+    action.type === "start_lead_final_decision"
   );
 }
 
@@ -960,18 +985,19 @@ function parsePlanJson(text: string): Pick<SubmitPlanInput, "summary" | "stages"
           }
           return item;
         }),
-        ...(stage.workerCount !== undefined
-          ? {
-              workerCount: numberField(
-                stage,
-                "workerCount",
-                `--plan-json.stages[${index}].workerCount must be a positive integer.`,
-              ),
-            }
-          : {}),
       };
     }),
   };
+}
+
+function listFlagValue(parsed: ParsedArgs, name: string): string[] | undefined {
+  const raw = value(parsed, name);
+  if (!raw) return undefined;
+  const items = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
 }
 
 function workerResultInput(parsed: ParsedArgs, taskId: string | undefined): FinishWorkerRunInput {
@@ -1008,14 +1034,6 @@ function stringField(record: Record<string, unknown>, key: string, message: stri
   return value;
 }
 
-function numberField(record: Record<string, unknown>, key: string, message: string): number {
-  const value = record[key];
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(message);
-  }
-  return value;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1044,10 +1062,11 @@ Usage:
   sikong task show <taskId> --workspace <workspaceId>
   sikong task drive <taskId> --workspace <workspaceId> [--backend <name>] [--daemon <url>]
   sikong task wait <taskId> --workspace <workspaceId> [--timeout-ms <n>]
+  sikong task submit-requirement-spec <taskId> --workspace <workspaceId> --summary <text>
   sikong task submit-plan <taskId> --workspace <workspaceId> --plan-json <json>
   sikong task accept-plan <taskId> --workspace <workspaceId> --plan <planId> --version <n> --report <text>
   sikong task reject-plan <taskId> --workspace <workspaceId> --plan <planId> --version <n> --report <text>
-  sikong task start-worker <taskId> --workspace <workspaceId>
+  sikong task start-worker <taskId> --workspace <workspaceId> --round <roundId> --work-unit <workUnitId>
   sikong task complete-worker <taskId> --workspace <workspaceId> --run <runId> --result-json <json>
   sikong task fail-worker <taskId> --workspace <workspaceId> --run <runId> --result-json <json>
   sikong task exceed-worker-budget <taskId> --workspace <workspaceId> --run <runId> --result-json <json>

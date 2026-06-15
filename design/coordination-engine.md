@@ -9,14 +9,15 @@ It owns:
 
 - creating durable tasks under a registered workspace;
 - planning a task into ordered stages;
-- assigning one or more workers to the current stage;
+- asking the Task Lead to plan each stage round;
+- scheduling worker runs for the current round's work units;
 - recording worker run results and review decisions;
 - deciding when a stage advances;
 - deciding when the whole task is accepted or rejected.
 
-It does not replace `agent-loop.runTask`. A stage worker still performs one
-bounded worker run through `runTask`. Sikong coordinates many such runs over
-durable task state.
+It does not replace `agent-loop.runTask`. A worker still performs one bounded
+worker run through `runTask`. Sikong coordinates many such runs over durable
+task state.
 
 Workspace directories are Sikong state namespaces, not agent execution
 directories. Runtime must provide a workspace-derived agent cwd for each run.
@@ -40,6 +41,7 @@ The first design deliberately excludes:
 - stage guard expressions or field-based transition rules;
 - Sikong-specific worker progress tools;
 - worker-issued transition requests;
+- stage-initial dependency graphs between all future worker jobs;
 - stage-specific runtime tool allowlists;
 - automatic workspace preference injection or recording.
 
@@ -58,28 +60,33 @@ The lead is the decision owner and overall driver.
 
 The lead can:
 
-- request a plan;
+- submit a requirement spec for a newly created task;
 - accept or reject a submitted plan;
+- plan the next round of work for the current stage;
 - override a stage review when needed;
 - make the final task acceptance decision.
 
-The lead should not author the plan directly by default. It starts the planning
-work and decides whether the planner's result is acceptable.
+The lead should not author the stage roadmap directly by default. It turns the
+user request into a requirement spec, decides whether the planner's stage-level
+roadmap is acceptable, and plans tactical stage rounds as execution evidence
+arrives.
 
 ### Planner
 
-The planner receives the lead's planning request and submits a `PlanDef`.
+The planner receives an engine-triggered planning run based on the lead's
+requirement spec and submits a `PlanDef`.
 
 The planner can revise a rejected plan, but it does not drive execution after a
 plan is accepted.
 
 ### Stage Worker
 
-A stage worker executes assigned work for the current stage.
+A stage worker executes one work unit in the current stage round.
 
-The worker receives the stage objective, acceptance criteria, relevant task
-context, and previous durable record. It completes one bounded run through
-`agent-loop.runTask` and returns a `TaskResult`.
+The worker receives the stage objective, stage acceptance criteria, the round
+intent, its work unit objective, relevant task context, and previous durable
+record. It completes one bounded run through `agent-loop.runTask` and returns a
+`TaskResult`.
 
 The worker does not transition stages, update Sikong progress through custom
 tools, or decide whether the stage is done.
@@ -90,7 +97,8 @@ The stage reviewer evaluates whether all available worker output satisfies the
 current stage's acceptance criteria.
 
 By default, the stage reviewer can accept or reject the stage. A rejection keeps
-the task on the same stage and lets the engine schedule more worker runs.
+the task on the same stage and gives the lead concrete gaps for the next stage
+round.
 
 ### Final Reviewer
 
@@ -143,10 +151,12 @@ action comes next.
 
 ## Plan Lifecycle
 
-Planning is lead-initiated and planner-produced:
+Planning is engine-triggered and planner-produced after the lead submits a
+requirement spec:
 
 ```text
 no_plan
+  -> requirement_spec_submitted
   -> plan_requested
   -> plan_submitted
   -> plan_accepted
@@ -181,23 +191,21 @@ type PlanStageDef = {
   title: string;
   objective: string;
   acceptance: string[];
-  workerCount?: number;
 };
 ```
 
 Field rationale:
 
-| Field                      | Required | Owner   | Why it exists                                                                  |
-| -------------------------- | -------- | ------- | ------------------------------------------------------------------------------ |
-| `PlanDef.id`               | yes      | engine  | Stable reference for events, review decisions, and inspection.                 |
-| `PlanDef.version`          | yes      | engine  | Distinguishes rejected and revised plans under the same task.                  |
-| `PlanDef.summary`          | no       | planner | Human-readable orientation for lead/reviewer/inspect views.                    |
-| `PlanDef.stages`           | yes      | planner | Ordered coarse work phases. Must be non-empty.                                 |
-| `PlanStageDef.id`          | yes      | engine  | Stable reference for stage events and worker assignments.                      |
-| `PlanStageDef.title`       | yes      | planner | Short display label for traces and inspection.                                 |
-| `PlanStageDef.objective`   | yes      | planner | The stage's execution target for assigned workers.                             |
-| `PlanStageDef.acceptance`  | yes      | planner | The review rubric for advancing out of the stage.                              |
-| `PlanStageDef.workerCount` | no       | planner | Number of worker runs the engine should start for this stage. Defaults to `1`. |
+| Field                     | Required | Owner   | Why it exists                                                  |
+| ------------------------- | -------- | ------- | -------------------------------------------------------------- |
+| `PlanDef.id`              | yes      | engine  | Stable reference for events, review decisions, and inspection. |
+| `PlanDef.version`         | yes      | engine  | Distinguishes rejected and revised plans under the same task.  |
+| `PlanDef.summary`         | no       | planner | Human-readable orientation for lead/reviewer/inspect views.    |
+| `PlanDef.stages`          | yes      | planner | Ordered coarse work phases. Must be non-empty.                 |
+| `PlanStageDef.id`         | yes      | engine  | Stable reference for stage events and round planning.          |
+| `PlanStageDef.title`      | yes      | planner | Short display label for traces and inspection.                 |
+| `PlanStageDef.objective`  | yes      | planner | The stage-level target.                                        |
+| `PlanStageDef.acceptance` | yes      | planner | The review rubric for advancing out of the stage.              |
 
 The planner-facing tool input does not include engine-owned fields:
 
@@ -208,24 +216,77 @@ submit_plan({
     title: string;
     objective: string;
     acceptance: string[];
-    workerCount?: number;
   }>;
 });
 ```
 
-The engine assigns `id`, `version`, and stage ids when recording the plan.
-`workerCount` is optional and must be a positive integer. Omitted or `1` means
-serial execution for that stage.
+The engine assigns `id`, `version`, and stage ids when recording the plan. The
+planner does not define stage rounds or work units. Those are planned by the
+lead when each stage is active.
+
+## Stage Round Definition
+
+`StageRoundDef` is a tactical execution plan for the current stage only. It is
+not part of `PlanDef` and is not predicted upfront by the planner.
+
+```ts
+type StageRoundDef = {
+  id: string;
+  stageId: string;
+  title?: string;
+  intent: string;
+  workUnits: StageWorkUnitDef[];
+};
+
+type StageWorkUnitDef = {
+  id: string;
+  title: string;
+  objective: string;
+  acceptance?: string[];
+};
+```
+
+Field rationale:
+
+| Field                         | Required | Owner  | Why it exists                                             |
+| ----------------------------- | -------- | ------ | --------------------------------------------------------- |
+| `StageRoundDef.id`            | yes      | engine | Stable reference for worker runs and inspection.          |
+| `StageRoundDef.stageId`       | yes      | engine | Binds the round to the current stage.                     |
+| `StageRoundDef.title`         | no       | lead   | Short display label for the round.                        |
+| `StageRoundDef.intent`        | yes      | lead   | Why this round is the next useful work against the stage. |
+| `StageRoundDef.workUnits`     | yes      | lead   | Work units that can run concurrently in this round.       |
+| `StageWorkUnitDef.id`         | yes      | engine | Stable reference for one worker run target.               |
+| `StageWorkUnitDef.title`      | yes      | lead   | Short display label for a worker's task.                  |
+| `StageWorkUnitDef.objective`  | yes      | lead   | The concrete target for one worker run.                   |
+| `StageWorkUnitDef.acceptance` | no       | lead   | Optional work-unit-specific completion rubric.            |
+
+The lead-facing tool input does not include engine-owned fields:
+
+```ts
+plan_stage_round({
+  stageId: string;
+  title?: string;
+  intent: string;
+  workUnits: Array<{
+    title: string;
+    objective: string;
+    acceptance?: string[];
+  }>;
+});
+```
+
+Use `Work Unit` only for stage-round child work. Use `Work Item` only for the
+user-facing durable coordination object in a workspace.
 
 ## Lead Tools
 
-The lead's plan tools are narrow:
+The lead's protocol tools are narrow:
 
 ```ts
-request_plan({
-  brief?: string;
-  constraints?: string;
-  expectedStages?: string;
+submit_requirement_spec({
+  summary: string;
+  constraints?: string[];
+  acceptance?: string[];
 });
 
 accept_plan({
@@ -240,32 +301,62 @@ reject_plan({
   report: string;
   requestedChanges?: string;
 });
+
+plan_stage_round({
+  stageId: string;
+  title?: string;
+  intent: string;
+  workUnits: Array<{
+    title: string;
+    objective: string;
+    acceptance?: string[];
+  }>;
+});
 ```
 
-`request_plan` starts or restarts planning. The planner must end its planning
-run by calling `submit_plan`; a plan inferred from stdout or narrative text is
-not accepted as a submitted plan.
+`submit_requirement_spec` is the only path from a newly created task into
+planning. The engine writes the planning trigger after the requirement spec is
+recorded. The planner must end its planning run by calling `submit_plan`; a
+plan inferred from stdout or narrative text is not accepted as a submitted
+plan.
 
 `accept_plan` is the only path into stage execution. `reject_plan` records why
 the current plan is not acceptable and gives the next planner run concrete
 revision context.
 
+`plan_stage_round` is the only path from an active stage into worker execution.
+The lead may plan another round only after the previous round has reached a
+reviewed boundary.
+
 ## Stage Execution
 
 Accepted plans execute stages in order.
 
-Within one stage, the engine may run one or more worker runs concurrently. This
-is the key difference from `agent-loop.runTask`: Sikong can coordinate multiple
-workers against the same stage and persist their outputs.
+Within one stage, execution proceeds as a loop of stage rounds. This is the key
+difference from `agent-loop.runTask`: Sikong can coordinate multiple worker
+runs across one durable stage and review the accumulated result.
 
-The initial policy is intentionally small: the current stage declares
-`workerCount`, the engine starts worker runs until that count has been reached,
-waits for those runs to end, and then starts stage review over the accumulated
-terminal results. Workers still do not transition stages themselves.
+The round policy is intentionally small:
+
+1. when a stage starts, the engine waits for the lead to plan the next
+   `StageRoundDef`;
+2. the engine starts one worker run for each work unit in the round;
+3. work units in the same round run concurrently;
+4. rounds for the same stage are serial;
+5. after all work-unit runs in a round are terminal, the engine starts stage
+   review over the stage evidence accumulated so far;
+6. accepted stage review advances to the next stage;
+7. rejected stage review keeps the task on the same stage and returns to lead
+   round planning with reviewer feedback.
+
+The normal round-loop stop condition is accepted stage review. Budget,
+cancellation, blocked, and final lead rejection are system or lead-level escape
+conditions, not normal stage completion.
 
 Each worker run:
 
-1. receives the current task context and stage definition;
+1. receives the current task context, stage definition, round intent, and one
+   work unit definition;
 2. runs through `agent-loop.runTask`;
 3. ends as `completed`, `failed`, or `budget_exceeded`;
 4. records its `TaskResult` into the durable task event log.
@@ -286,8 +377,8 @@ The stage reviewer evaluates the accumulated evidence.
 
 ## Stage Review
 
-Stage review starts after the engine decides there is enough worker output to
-evaluate the current stage.
+Stage review starts after the current stage round's work-unit runs are all
+terminal.
 
 The reviewer evaluates:
 
@@ -298,7 +389,7 @@ The reviewer evaluates:
 
 Accepted stage review advances the task to the next stage. Rejected stage
 review keeps the task on the same stage and records review feedback for the next
-worker assignment.
+stage round.
 
 Stage review is similar in spirit to `agent-loop.runTask` gate review, but it is
 at a different layer:
@@ -327,11 +418,14 @@ Core events:
 
 ```text
 task.created
+requirement_spec.submitted
 plan.requested
 plan.submitted
 plan.accepted
 plan.rejected
 stage.started
+stage_round.planned
+stage_round.completed
 worker_run.started
 worker_run.completed
 worker_run.failed
@@ -351,10 +445,14 @@ The exact event payloads can evolve, but the state machine should stay small:
 
 - no accepted plan means planning is the only available path;
 - an accepted plan has exactly one current stage until stage review accepts it;
+- a current stage has at most one active stage round;
+- a stage round has one or more work units;
+- the engine starts one worker run per work unit;
 - workers can only add run results to the current stage;
 - worker results must be submitted through the terminal `runTask` result tool;
 - reviewers decide stage advancement;
-- the lead decides plan acceptance and final task acceptance.
+- the lead submits requirement specs, decides plan acceptance, plans stage
+  rounds, and decides final task acceptance.
 
 Workspace preferences are not part of the reducer input and are not
 automatically injected into planner, worker, or reviewer runs. The lead may read
@@ -371,8 +469,9 @@ The replacement is simpler:
 - methodology is used by the planner to create a concrete `PlanDef`;
 - `PlanDef` stages are ordered;
 - stage acceptance criteria are textual review rubrics;
+- stage rounds are planned dynamically by the lead during execution;
 - reviewers judge whether the criteria are satisfied;
-- workers only execute assigned work through `runTask`.
+- workers only execute work units through `runTask`.
 
 This keeps process structure durable without turning Sikong into a general
 workflow language.
@@ -397,6 +496,7 @@ Sikong owns the durable multi-worker task:
 
 - accepted plan;
 - current stage;
+- stage round history;
 - worker run history;
 - stage and final reviews;
 - lead decisions;
@@ -409,7 +509,6 @@ Sikong may use many `runTask` calls to complete one durable task.
 
 The first implementation should not solve these yet:
 
-- how stage worker assignments are generated inside a stage;
 - whether accepted plans can be amended during execution;
 - exact Go-to-TypeScript daemon/API boundary;
 - advanced worktree allocation, branch naming, and cleanup policy;
@@ -434,7 +533,12 @@ terminal result through the validated worker result command handlers. Planning,
 execution, and verification are preset wrappers over the same worker-run core,
 not code-level agent roles. The orchestration tick chooses the next preset
 action from projection state. The orchestration driver can repeatedly execute
-non-lead actions until a wait, terminal, blocked, or action-budget boundary.
-Runtime-backed actions can be executed through daemon-supervised generic Bun
-child processes, while task semantics remain in the TypeScript engine and
-command handlers.
+Lead, planner, worker, and reviewer runtime-backed actions until a worker-result
+wait, terminal, blocked, or action-budget boundary. Runtime-backed actions can
+be executed through daemon-supervised generic Bun child processes, while task
+semantics remain in the TypeScript engine and command handlers.
+
+`PlanStageDef.workerCount` has been removed from protocol types, planner tool
+input, CLI plan JSON, orchestration scheduling, tests, and inspect output. Do
+not keep a compatibility fallback or a second worker-count execution path. Stage
+parallelism is expressed only by work units inside one lead-planned stage round.

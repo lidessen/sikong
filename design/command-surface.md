@@ -41,7 +41,7 @@ The engine owns durable coordination semantics:
 
 - event append and reduction;
 - plan and stage lifecycle;
-- worker scheduling;
+- stage round and work-unit scheduling;
 - reviewer decisions;
 - runtime execution through `agent-loop.runTask`.
 
@@ -120,10 +120,12 @@ getTask({ workspaceId?, taskId })
 listTasks({ workspaceId? })
 driveTask({ workspaceId?, taskId, runtimeAssembly?, maxActions? })
 waitTask({ workspaceId?, taskId, timeoutMs?, intervalMs? })
+submitRequirementSpec({ workspaceId?, taskId, summary, constraints?, acceptance? })
 submitPlan({ workspaceId?, taskId, summary?, stages })
 acceptPlan({ workspaceId?, taskId, planId, version, report })
 rejectPlan({ workspaceId?, taskId, planId, version, report, requestedChanges? })
-startWorkerRun({ workspaceId?, taskId, stageId?, workerId?, objective? })
+planStageRound({ workspaceId?, taskId, stageId, title?, intent, workUnits })
+startWorkerRun({ workspaceId?, taskId, stageId?, roundId?, workUnitId?, workerId?, objective? })
 completeWorkerRun({ workspaceId?, taskId, runId, summary, report?, note? })
 failWorkerRun({ workspaceId?, taskId, runId, summary, report?, note? })
 exceedWorkerRunBudget({ workspaceId?, taskId, runId, summary, report?, note? })
@@ -138,10 +140,11 @@ recordRuntimeProcessFinished({ workspaceId?, taskId, processRunId, processStatus
 ```
 
 These task protocol commands are not generic reducer operations. They are the
-validated command-layer landing points for planner tools, lead decisions,
-worker terminal task tools, stage review, final review, and final lead closure.
-Worker terminal result commands model the `agent-loop.runTask` terminal tool
-contract and must not be replaced by stdout/stderr parsing.
+validated command-layer landing points for lead requirement specs, planner
+tools, lead plan decisions, lead stage-round decisions, worker terminal task
+tools, stage review, final review, and final lead closure. Worker terminal
+result commands model the `agent-loop.runTask` terminal tool contract and must
+not be replaced by stdout/stderr parsing.
 
 ### Inspect
 
@@ -189,9 +192,10 @@ The command surface should not expose low-level reducer operations:
 - no direct `writeProjection`.
 
 Those actions belong behind engine APIs. Protocol actions such as
-`submitPlan`, `completeWorkerRun`, and `acceptStageReview` are allowed because
-they validate current state and append only the event sequence owned by that
-specific protocol step.
+`submitRequirementSpec`, `submitPlan`, `planStageRound`,
+`completeWorkerRun`, and `acceptStageReview` are allowed because they validate
+current state and append only the event sequence owned by that specific
+protocol step.
 
 ## Implementation Order
 
@@ -207,9 +211,10 @@ Items 1, 2, 3, 4, and the task protocol handlers from item 5 are implemented.
 exposes them to external agents, and `packages/workspace/src/tools` exposes a
 thin `createClientAgentTools` adapter for UI/client-agent usage. The current
 task handlers can create a durable task, submit and accept/reject a plan, record
-worker terminal results, run stage/final review state transitions, close a task,
-inspect summary/compact/events/trace/projection, and wait on compact task
-boundaries.
+worker terminal results, run stage/final review state transitions, close a
+task, inspect summary/compact/events/trace/projection, and wait on compact task
+boundaries. They do not yet implement lead-submitted requirement specs or
+Stage Round / Work Unit protocol events.
 `packages/workspace/src/runtime` can run one injected `agent-loop.runTask`
 worker and record its terminal result through those handlers. Preset wrappers
 can assemble planning, execution, and verification worker runs from prompt,
@@ -235,4 +240,6 @@ parallel Bun child processes can write safely.
 The client-facing tool adapter also exposes `listTasks` and `waitTask` for task
 cards and caller-visible wait boundaries. It does not expose low-level reducer
 operations or internal planner/worker/reviewer protocol tools to the default
-Client Agent surface.
+Client Agent surface. It also must not expose lead requirement-spec, plan
+decision, stage-round, work-unit, worker-run, or review protocol tools to the
+default Client Agent surface.

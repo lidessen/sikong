@@ -2,6 +2,7 @@ import type {
   ClientMessage,
   ClientState,
   SikongSettings,
+  TaskDetailView,
   TurnResponse,
   TurnStreamEvent,
 } from "./types";
@@ -32,6 +33,15 @@ export async function getClientState(workspaceId?: string): Promise<ClientState>
   return await request<ClientState>(`/api/state${query}`);
 }
 
+export async function getTaskDetail(input: {
+  workspaceId?: string;
+  taskId: string;
+}): Promise<TaskDetailView> {
+  const query = new URLSearchParams({ taskId: input.taskId });
+  if (input.workspaceId) query.set("workspaceId", input.workspaceId);
+  return await request<TaskDetailView>(`/api/task-detail?${query.toString()}`);
+}
+
 export async function updateSettings(settings: SikongSettings): Promise<SikongSettings> {
   return await request<SikongSettings>("/api/settings", {
     method: "PUT",
@@ -41,26 +51,6 @@ export async function updateSettings(settings: SikongSettings): Promise<SikongSe
 
 export async function getTranscript(): Promise<ClientMessage[]> {
   return await request<ClientMessage[]>("/api/transcript");
-}
-
-export async function submitPlanDecision(input: {
-  workspaceId: string;
-  taskId: string;
-  planId: string;
-  version: number;
-  decision: "accept" | "reject";
-}): Promise<unknown> {
-  return await request<unknown>("/api/tasks/plan-decision", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function driveTask(input: { workspaceId: string; taskId: string }): Promise<unknown> {
-  return await request<unknown>("/api/tasks/drive", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
 }
 
 export async function runTurn(input: {

@@ -8,6 +8,7 @@ import {
   acceptPlan,
   acceptStageReview,
   acceptTask,
+  completeStageRound,
   completeWorkerRun,
   createTask,
   createWorkspace,
@@ -17,6 +18,7 @@ import {
   getTask,
   getWorkspace,
   inspectTaskCompact,
+  inspectTaskDetail,
   inspectTaskEvents,
   inspectTaskSummary,
   inspectTaskTrace,
@@ -29,8 +31,10 @@ import {
   reconcileTaskRuntime,
   rejectPlan,
   removeWorkspacePreference,
+  planStageRound,
   startStageReview,
   startWorkerRun,
+  submitRequirementSpec,
   submitPlan,
   waitTask,
   type CommandContext,
@@ -46,6 +50,30 @@ function ctx(dataDir: string): CommandContext {
     now: () => new Date("2026-06-14T00:00:00.000Z"),
     id: () => `id_${++id}`,
   };
+}
+
+async function planSingleWorkUnitRound(context: CommandContext, taskId: string) {
+  const task = await getTask(context, { taskId });
+  if (!task.ok || !task.data.projection.currentStageId) throw new Error("current stage missing");
+  const round = await planStageRound(context, {
+    taskId,
+    stageId: task.data.projection.currentStageId,
+    intent: "Execute the next focused work unit.",
+    workUnits: [{ title: "Implement", objective: "Complete the current stage work." }],
+  });
+  if (!round.ok) throw new Error("round plan failed");
+  return {
+    roundId: round.data.round.id,
+    workUnitId: round.data.round.workUnits[0]!.id,
+  };
+}
+
+async function submitSpec(context: CommandContext, taskId: string) {
+  const submitted = await submitRequirementSpec(context, {
+    taskId,
+    summary: "Implement the requested work.",
+  });
+  if (!submitted.ok) throw new Error("requirement spec submit failed");
 }
 
 describe("workspace command handlers", () => {
@@ -136,10 +164,9 @@ describe("task command handlers", () => {
           projection: {
             taskId: "task_id_1",
             workspaceId: "sikong",
-            status: "planning",
+            status: "created",
             request: "Implement command handlers.",
-            planDecision: { status: "requested" },
-            eventCount: 2,
+            eventCount: 1,
           },
         },
       });
@@ -149,11 +176,11 @@ describe("task command handlers", () => {
 
       expect(await getTask(context, { taskId })).toMatchObject({
         ok: true,
-        data: { projection: { taskId, status: "planning" } },
+        data: { projection: { taskId, status: "created" } },
       });
       expect(await listTasks(context)).toMatchObject({
         ok: true,
-        data: { tasks: [{ taskId, workspaceId: "sikong", status: "planning" }] },
+        data: { tasks: [{ taskId, workspaceId: "sikong", status: "created" }] },
       });
       expect(await inspectTaskSummary(context, { taskId })).toMatchObject({
         ok: true,
@@ -161,8 +188,7 @@ describe("task command handlers", () => {
           summary: {
             taskId,
             workspaceId: "sikong",
-            status: "planning",
-            planStatus: "requested",
+            status: "created",
           },
         },
       });
@@ -172,23 +198,20 @@ describe("task command handlers", () => {
           compact: {
             taskId,
             workspaceId: "sikong",
-            status: "planning",
-            nextAction: { type: "start_planning_worker" },
-            waitingForLead: false,
+            status: "created",
+            nextAction: { type: "start_lead_requirement_spec" },
+            waitingForLead: true,
           },
         },
       });
       expect(await inspectTaskEvents(context, { taskId })).toMatchObject({
         ok: true,
-        data: { events: [{ type: "task.created" }, { type: "plan.requested" }] },
+        data: { events: [{ type: "task.created" }] },
       });
       expect(await inspectTaskTrace(context, { taskId })).toMatchObject({
         ok: true,
         data: {
-          trace: [
-            { type: "task.created", summary: "Implement command handlers." },
-            { type: "plan.requested", summary: "Implement command handlers." },
-          ],
+          trace: [{ type: "task.created", summary: "Implement command handlers." }],
         },
       });
     } finally {
@@ -272,6 +295,7 @@ describe("task command handlers", () => {
       });
       if (!created.ok) throw new Error("task create failed");
       const taskId = created.data.taskId;
+      await submitSpec(context, taskId);
       const submitted = await submitPlan(context, {
         taskId,
         stages: [
@@ -290,7 +314,8 @@ describe("task command handlers", () => {
         report: "Accepted.",
       });
       if (!accepted.ok) throw new Error("plan accept failed");
-      const startedWorker = await startWorkerRun(context, { taskId });
+      const workTarget = await planSingleWorkUnitRound(context, taskId);
+      const startedWorker = await startWorkerRun(context, { taskId, ...workTarget });
       if (!startedWorker.ok) throw new Error("worker start failed");
       await recordRuntimeProcessStarted(context, {
         taskId,
@@ -393,6 +418,7 @@ describe("task command handlers", () => {
       });
       if (!created.ok) throw new Error("task create failed");
       const taskId = created.data.taskId;
+      await submitSpec(context, taskId);
 
       const submitted = await submitPlan(context, {
         taskId,
@@ -424,7 +450,7 @@ describe("task command handlers", () => {
         data: {
           compact: {
             status: "plan_submitted",
-            nextAction: { type: "await_plan_decision", planId, version },
+            nextAction: { type: "start_lead_plan_decision", planId, version },
             waitingForLead: true,
           },
         },
@@ -434,7 +460,7 @@ describe("task command handlers", () => {
         data: {
           compact: {
             status: "plan_submitted",
-            nextAction: { type: "await_plan_decision", planId, version },
+            nextAction: { type: "start_lead_plan_decision", planId, version },
             waitingForLead: true,
           },
         },
@@ -465,7 +491,12 @@ describe("task command handlers", () => {
         },
       });
 
-      const started = await startWorkerRun(context, { taskId, workerId: "worker-a" });
+      const workTarget = await planSingleWorkUnitRound(context, taskId);
+      const started = await startWorkerRun(context, {
+        taskId,
+        workerId: "worker-a",
+        ...workTarget,
+      });
       if (!started.ok) throw new Error("worker start failed");
       const runId = started.data.runId;
       expect(started).toMatchObject({
@@ -490,6 +521,16 @@ describe("task command handlers", () => {
           runId,
           summary: "Implemented protocol commands.",
           report: "Commands and tests were added.",
+          observations: [
+            {
+              id: "obs_1",
+              kind: "thinking",
+              round: 1,
+              mode: "work",
+              at: "2026-06-14T00:00:00.000Z",
+              summary: "Reviewed files and prepared the implementation.",
+            },
+          ],
         }),
       ).resolves.toMatchObject({
         ok: true,
@@ -500,8 +541,23 @@ describe("task command handlers", () => {
         data: {
           compact: {
             status: "running",
-            nextAction: { type: "start_stage_review" },
+            nextAction: { type: "complete_stage_round", roundId: workTarget.roundId },
             latestWorkerResult: { runId, status: "completed" },
+          },
+        },
+      });
+
+      const roundCompleted = await completeStageRound(context, {
+        taskId,
+        roundId: workTarget.roundId,
+      });
+      if (!roundCompleted.ok) throw new Error("round complete failed");
+      expect(await inspectTaskCompact(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          compact: {
+            status: "running",
+            nextAction: { type: "start_stage_review" },
           },
         },
       });
@@ -526,7 +582,12 @@ describe("task command handlers", () => {
         },
       });
 
-      const secondRun = await startWorkerRun(context, { taskId, workerId: "worker-b" });
+      const secondTarget = await planSingleWorkUnitRound(context, taskId);
+      const secondRun = await startWorkerRun(context, {
+        taskId,
+        workerId: "worker-b",
+        ...secondTarget,
+      });
       if (!secondRun.ok) throw new Error("second worker start failed");
       const secondRunId = secondRun.data.runId;
       expect(
@@ -591,6 +652,31 @@ describe("task command handlers", () => {
           ]),
         },
       });
+
+      const detail = await inspectTaskDetail(context, { taskId });
+      expect(detail).toMatchObject({ ok: true });
+      if (!detail.ok) throw new Error("task detail failed");
+      expect(detail.data.detail.compact).toMatchObject({ taskId, status: "completed" });
+      expect(detail.data.detail.projection.plan?.stages).toHaveLength(2);
+      expect(detail.data.detail.projection.workerRuns[runId]?.result?.observations).toEqual([
+        expect.objectContaining({
+          kind: "thinking",
+          summary: "Reviewed files and prepared the implementation.",
+        }),
+      ]);
+      expect(detail.data.detail.trace).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "task.completed" })]),
+      );
+      expect(detail.data.detail.observations).toEqual([
+        expect.objectContaining({
+          runId,
+          observations: [
+            expect.objectContaining({
+              kind: "thinking",
+            }),
+          ],
+        }),
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

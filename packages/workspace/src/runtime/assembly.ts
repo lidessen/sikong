@@ -29,6 +29,7 @@ import type {
 import type { OrchestrationAction } from "../orchestration/tick";
 import {
   createFinalReviewProtocolTools,
+  createLeadProtocolTools,
   createPlanningProtocolTools,
   createStageReviewProtocolTools,
 } from "./protocol-tools";
@@ -42,6 +43,7 @@ export interface RuntimeBackendConfig {
 export interface RuntimeAssemblyToolProfiles {
   inspection?: string;
   execution?: string;
+  leadProtocol?: string;
   planningProtocol?: string;
   stageReviewProtocol?: string;
   finalReviewProtocol?: string;
@@ -97,6 +99,20 @@ export class RuntimeAssemblyRegistry {
   ): Promise<OrchestrationAction> {
     const profiles = config.toolProfiles ?? {};
     switch (action.type) {
+      case "start_lead_requirement_spec":
+      case "start_lead_plan_decision":
+      case "start_lead_round_planning":
+      case "start_lead_final_decision":
+        return {
+          ...action,
+          spec: {
+            ...action.spec,
+            tools: mergeToolSets(
+              await this.resolveToolProfile(profiles.inspection, context),
+              await this.resolveToolProfile(profiles.leadProtocol, context),
+            ),
+          },
+        };
       case "start_planning_worker":
         return {
           ...action,
@@ -201,6 +217,7 @@ export function createDefaultRuntimeAssemblyRegistry(): RuntimeAssemblyRegistry 
     .registerToolProfile("empty", () => undefined)
     .registerToolProfile("ai-sdk-local-inspection", createAiSdkLocalInspectionTools)
     .registerToolProfile("ai-sdk-local-execution", createAiSdkLocalExecutionTools)
+    .registerToolProfile("sikong-lead-protocol", createLeadProtocolTools)
     .registerToolProfile("sikong-planning-protocol", createPlanningProtocolTools)
     .registerToolProfile("sikong-stage-review-protocol", createStageReviewProtocolTools)
     .registerToolProfile("sikong-final-review-protocol", createFinalReviewProtocolTools);
@@ -369,7 +386,11 @@ async function resolveRuntimeCwd(context: RuntimeAssemblyContext): Promise<strin
 
 function taskIdFromAction(action: SerializableOrchestrationAction): string | undefined {
   switch (action.type) {
+    case "start_lead_requirement_spec":
     case "start_planning_worker":
+    case "start_lead_plan_decision":
+    case "start_lead_round_planning":
+    case "start_lead_final_decision":
     case "start_stage_verification_worker":
     case "start_final_verification_worker":
       return action.spec.taskId;
@@ -382,7 +403,11 @@ function taskIdFromAction(action: SerializableOrchestrationAction): string | und
 
 function workspaceIdFromAction(action: SerializableOrchestrationAction): string | undefined {
   switch (action.type) {
+    case "start_lead_requirement_spec":
     case "start_planning_worker":
+    case "start_lead_plan_decision":
+    case "start_lead_round_planning":
+    case "start_lead_final_decision":
     case "start_stage_verification_worker":
     case "start_final_verification_worker":
       return action.spec.workspaceId;

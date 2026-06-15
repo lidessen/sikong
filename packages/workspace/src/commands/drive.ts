@@ -1,7 +1,7 @@
 import type { AgentLoop, ToolSet } from "agent-loop";
 import { join } from "node:path";
 import type { TaskProjection } from "../coordination";
-import { FileSettingsStore } from "../settings";
+import { FileSettingsStore, type DefaultAgentRuntime } from "../settings";
 import { LocalProcessExecutionClient } from "../process";
 import type { RuntimeAssemblyConfig } from "../runtime";
 import { reconcileTaskRuntime } from "./task";
@@ -33,7 +33,9 @@ export async function driveTask(
   input: DriveTaskInput,
 ): Promise<CommandResult<OrchestrationDriverResult>> {
   if (!input.taskId.trim()) return fail("invalid_input", "taskId is required.");
-  const runtimeAssembly = input.runtimeAssembly ?? (await workerRuntimeAssembly(ctx.dataDir));
+  const settings = await new FileSettingsStore(ctx.dataDir).read();
+  const workerAssembly = input.runtimeAssembly ?? runtimeAssembly(settings.defaults.worker);
+  const leadAssembly = input.runtimeAssembly ?? runtimeAssembly(settings.defaults.lead);
   const client = input.processClient ?? new LocalProcessExecutionClient();
   const packageCwd =
     input.packageCwd ?? process.env.SIKONG_PACKAGE_CWD ?? join(import.meta.dir, "../..");
@@ -59,7 +61,7 @@ export async function driveTask(
           client,
           ctx: runCtx,
           action,
-          runtimeAssembly,
+          runtimeAssembly: isLeadAction(action) ? leadAssembly : workerAssembly,
           packageCwd,
           command,
           timeoutMs: input.processTimeoutMs,
@@ -72,9 +74,7 @@ export async function driveTask(
   }
 }
 
-async function workerRuntimeAssembly(dataDir: string): Promise<RuntimeAssemblyConfig> {
-  const settings = await new FileSettingsStore(dataDir).read();
-  const runtime = settings.defaults.worker;
+function runtimeAssembly(runtime: DefaultAgentRuntime): RuntimeAssemblyConfig {
   const options =
     runtime.provider || runtime.model
       ? {
@@ -97,6 +97,7 @@ async function workerRuntimeAssembly(dataDir: string): Promise<RuntimeAssemblyCo
             execution: "ai-sdk-local-execution",
           }
         : {}),
+      leadProtocol: "sikong-lead-protocol",
       planningProtocol: "sikong-planning-protocol",
       stageReviewProtocol: "sikong-stage-review-protocol",
       finalReviewProtocol: "sikong-final-review-protocol",
@@ -108,6 +109,7 @@ function orchestrationInput(projection: TaskProjection): OrchestrationInput {
   return {
     projection,
     tools: {
+      leadProtocolTools: emptyTools(),
       planningProtocolTools: emptyTools(),
       stageReviewProtocolTools: emptyTools(),
       finalReviewProtocolTools: emptyTools(),
@@ -118,10 +120,23 @@ function orchestrationInput(projection: TaskProjection): OrchestrationInput {
 
 function requiresRuntimeProcess(action: OrchestrationAction): boolean {
   return (
+    action.type === "start_lead_requirement_spec" ||
     action.type === "start_planning_worker" ||
+    action.type === "start_lead_plan_decision" ||
+    action.type === "start_lead_round_planning" ||
+    action.type === "start_lead_final_decision" ||
     action.type === "start_stage_worker" ||
     action.type === "start_stage_verification_worker" ||
     action.type === "start_final_verification_worker"
+  );
+}
+
+function isLeadAction(action: OrchestrationAction): boolean {
+  return (
+    action.type === "start_lead_requirement_spec" ||
+    action.type === "start_lead_plan_decision" ||
+    action.type === "start_lead_round_planning" ||
+    action.type === "start_lead_final_decision"
   );
 }
 
