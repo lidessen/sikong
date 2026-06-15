@@ -1,5 +1,7 @@
 import {
   createDefaultRuntimeAssemblyRegistry,
+  DaemonProcessClient,
+  driveTask,
   FileClientWorkLog,
   FileSettingsStore,
   inspectTaskDetail,
@@ -12,6 +14,8 @@ import {
   type ClientWorkLogEntryKind,
   type ClientTranscriptSource,
   type CommandContext,
+  type CommandResult,
+  type OrchestrationDriverResult,
   type SikongSettings,
   type TaskProjection,
 } from "@sikong/workspace";
@@ -30,6 +34,9 @@ const settingsStore = new FileSettingsStore(dataDir);
 const transcriptPath = join(dataDir, "state", "client-transcript.json");
 const clientDistDir = process.env.SIKONG_CLIENT_DIST_DIR ?? join(import.meta.dir, "..", "dist");
 const turnStreamHeartbeatMs = 5_000;
+const autoDriveMaxActions = 40;
+const autoDriveProcessTimeoutMs = 300_000;
+const autoDriveWaitTimeoutMs = 300_000;
 
 function commandContext(workspaceId?: string): CommandContext {
   return {
@@ -119,7 +126,23 @@ interface TurnProgressUpdate {
 }
 
 interface TurnWorkflowResponse extends TurnResponse {
-  autoDriven: unknown[];
+  autoDriven: AutoDriveResult[];
+}
+
+interface TaskSnapshotEntry {
+  workspaceId: string;
+  taskId: string;
+}
+
+interface AutoDriveResult {
+  workspaceId: string;
+  taskId: string;
+  ok: boolean;
+  stopReason?: string;
+  status?: string;
+  terminal?: string;
+  stepCount?: number;
+  error?: string;
 }
 
 function parseTurnRequest(body: unknown): TurnRequestInput {
@@ -137,6 +160,7 @@ async function runTurnWorkflow(
   const progress = async (update: TurnProgressUpdate) => {
     await onProgress?.(update);
   };
+  const beforeTasks = await taskSnapshot();
   const userMessage = textMessage("user", input.message);
   await appendTranscript(userMessage);
   await progress({
@@ -175,11 +199,13 @@ async function runTurnWorkflow(
 
   await progress({
     phaseId: "workspace",
-    detail: "Agent result received. Persisting transcript and updating workspace work items.",
+    detail: "Agent result received. Starting newly created work items when needed.",
   });
+  const autoDriven = await autoDriveNewTasks(beforeTasks);
+  const responseText = appendAutoDriveSummary(result.outcomeText, autoDriven);
   const assistantMessage = textMessage(
     "assistant",
-    result.outcomeText || `Turn finished with status ${result.run.status}.`,
+    responseText || `Turn finished with status ${result.run.status}.`,
   );
   await appendTranscript(assistantMessage);
 
@@ -188,13 +214,97 @@ async function runTurnWorkflow(
     detail: "Workspace changes are persisted. Refreshing the UI projection.",
   });
   return {
-    text: result.outcomeText,
+    text: responseText,
     status: "completed",
     context: result.context,
     outcome: result.outcome,
     message: assistantMessage,
-    autoDriven: [],
+    autoDriven,
   };
+}
+
+async function taskSnapshot(): Promise<Map<string, TaskSnapshotEntry>> {
+  const workspaces = await listWorkspaces(commandContext());
+  if (!workspaces.ok) throw new Error(workspaces.error.message);
+  const entries = new Map<string, TaskSnapshotEntry>();
+  for (const workspace of workspaces.data.workspaces) {
+    const tasks = await listTasks(commandContext(workspace.id), { workspaceId: workspace.id });
+    if (!tasks.ok) throw new Error(tasks.error.message);
+    for (const task of tasks.data.tasks) {
+      entries.set(taskSnapshotKey(workspace.id, task.taskId), {
+        workspaceId: workspace.id,
+        taskId: task.taskId,
+      });
+    }
+  }
+  return entries;
+}
+
+async function autoDriveNewTasks(beforeTasks: Map<string, TaskSnapshotEntry>) {
+  const afterTasks = await taskSnapshot();
+  const created = [...afterTasks.values()].filter(
+    (task) => !beforeTasks.has(taskSnapshotKey(task.workspaceId, task.taskId)),
+  );
+  const client = new DaemonProcessClient({ baseUrl: daemonProcessBaseUrl() });
+  const results: AutoDriveResult[] = [];
+  for (const task of created) {
+    const result = await driveTask(commandContext(task.workspaceId), {
+      workspaceId: task.workspaceId,
+      taskId: task.taskId,
+      maxActions: autoDriveMaxActions,
+      processTimeoutMs: autoDriveProcessTimeoutMs,
+      waitTimeoutMs: autoDriveWaitTimeoutMs,
+      processClient: client,
+    });
+    results.push(autoDriveResult(task, result));
+  }
+  return results;
+}
+
+function autoDriveResult(
+  task: TaskSnapshotEntry,
+  result: CommandResult<OrchestrationDriverResult>,
+): AutoDriveResult {
+  if (!result.ok) {
+    return {
+      ...task,
+      ok: false,
+      error: result.error.message,
+    };
+  }
+  return {
+    ...task,
+    ok: true,
+    stopReason: result.data.stopReason,
+    status: result.data.projection.status,
+    terminal: result.data.projection.terminal?.outcome,
+    stepCount: result.data.steps.length,
+  };
+}
+
+function appendAutoDriveSummary(text: string, driven: AutoDriveResult[]): string {
+  if (driven.length === 0) return text;
+  const lines = [
+    text,
+    "",
+    "Auto-run summary:",
+    ...driven.map((item) =>
+      item.ok
+        ? `- ${item.workspaceId}/${item.taskId}: ${item.status ?? "unknown"}; stop=${item.stopReason ?? "unknown"}; terminal=${item.terminal ?? "none"}; steps=${item.stepCount ?? 0}`
+        : `- ${item.workspaceId}/${item.taskId}: failed to auto-run; ${item.error ?? "unknown error"}`,
+    ),
+  ];
+  return lines.filter((line, index) => index === 1 || line.trim()).join("\n");
+}
+
+function taskSnapshotKey(workspaceId: string, taskId: string): string {
+  return `${workspaceId}/${taskId}`;
+}
+
+function daemonProcessBaseUrl(): string {
+  const raw = process.env.SIKONG_DAEMON_ADDR ?? "127.0.0.1:8765";
+  if (raw.startsWith("http://") || raw.startsWith("https://")) return raw.replace(/\/+$/, "");
+  return `http://${raw.replace(/\/+$/, "")}`;
 }
 
 function turnStreamResponse(input: TurnRequestInput): Response {

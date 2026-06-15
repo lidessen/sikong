@@ -307,29 +307,100 @@ function createLeadPreset(
   return {
     workspaceId: input.projection.workspaceId,
     taskId: input.projection.taskId,
-    prompt: [
-      `You are Sikong's internal Task Lead for phase: ${phase}.`,
-      "",
-      `Task: ${input.projection.request ?? input.projection.taskId}`,
-      "",
-      ...(input.projection.requirementSpec
-        ? ["Requirement spec:", input.projection.requirementSpec.summary, ""]
-        : []),
-      ...(input.projection.plan
-        ? [
-            "Submitted/accepted plan:",
-            input.projection.plan.summary ?? input.projection.plan.id,
-            "",
-          ]
-        : []),
-      "Use only the provided protocol tool for the current phase.",
-    ].join("\n"),
-    tools:
-      phase === "requirement_spec" || phase === "plan_decision" || phase === "round_planning"
-        ? input.tools.leadProtocolTools
-        : undefined,
+    prompt: buildLeadPrompt(input, phase),
+    tools: input.tools.leadProtocolTools,
     skills: input.planningSkills,
   };
+}
+
+function buildLeadPrompt(
+  input: OrchestrationInput,
+  phase: "requirement_spec" | "plan_decision" | "round_planning" | "final_decision",
+): string {
+  const { projection } = input;
+  return [
+    "You are Sikong's internal Task Lead.",
+    "",
+    "Your responsibility is to own task decisions and keep the durable workflow moving. You translate the user's request into a requirement spec, decide whether the Planner's stage roadmap is acceptable, plan the next tactical round for the current stage, and make the final accept/reject decision after review evidence is available.",
+    "",
+    "Execution belongs to Stage Workers. Plan authoring belongs to the Planner. Verification belongs to Reviewers. Your output for this phase is the relevant lead protocol decision.",
+    "",
+    `Current lead phase: ${phase}`,
+    `Task: ${projection.request ?? projection.taskId}`,
+    "",
+    ...leadPhaseGuidance(phase),
+    ...leadProjectionContext(projection),
+    "Submit the current phase decision through the provided lead protocol tool.",
+  ].join("\n");
+}
+
+function leadPhaseGuidance(
+  phase: "requirement_spec" | "plan_decision" | "round_planning" | "final_decision",
+): string[] {
+  switch (phase) {
+    case "requirement_spec":
+      return [
+        "Phase responsibility:",
+        "- Capture the user's request as a clear requirement spec for planning.",
+        "- Preserve important constraints, success criteria, and workspace intent.",
+        "",
+      ];
+    case "plan_decision":
+      return [
+        "Phase responsibility:",
+        "- Review the submitted stage roadmap against the requirement spec.",
+        "- Accept a plan that gives the workers a coherent path to satisfy the request.",
+        "- Reject with concrete requested changes when the roadmap is missing critical work.",
+        "",
+      ];
+    case "round_planning":
+      return [
+        "Phase responsibility:",
+        "- Plan only the next useful round for the active stage.",
+        "- Split the round into one or more work units that can be executed independently.",
+        "- Use prior worker and reviewer evidence to aim the next round.",
+        "",
+      ];
+    case "final_decision":
+      return [
+        "Phase responsibility:",
+        "- Decide whether the completed work satisfies the original request.",
+        "- Use final review recommendation and recorded worker evidence.",
+        "- Accept or reject the task with a concise final report.",
+        "",
+      ];
+  }
+}
+
+function leadProjectionContext(projection: TaskProjection): string[] {
+  return [
+    ...(projection.requirementSpec
+      ? ["Requirement spec:", projection.requirementSpec.summary, ""]
+      : []),
+    ...(projection.plan
+      ? [
+          "Plan:",
+          projection.plan.summary ?? projection.plan.id,
+          ...projection.plan.stages.map(
+            (stage) => `- ${stage.id}: ${stage.title} - ${stage.objective}`,
+          ),
+          "",
+        ]
+      : []),
+    ...(projection.currentStageId ? [`Current stage id: ${projection.currentStageId}`, ""] : []),
+    ...(projection.finalReview?.status
+      ? [
+          "Final review:",
+          `${projection.finalReview.status}${
+            projection.finalReview.recommendation
+              ? ` (${projection.finalReview.recommendation})`
+              : ""
+          }`,
+          ...(projection.finalReview.report ? [projection.finalReview.report] : []),
+          "",
+        ]
+      : []),
+  ];
 }
 
 function terminalRunsForRound(projection: TaskProjection, roundId: string): WorkerRunProjection[] {

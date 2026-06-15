@@ -149,7 +149,7 @@ export async function runOrchestrationRunner(
       action,
       runtime,
     );
-    return result;
+    return compactRunnerOutput(result);
   } catch (err) {
     return {
       ok: false,
@@ -159,6 +159,42 @@ export async function runOrchestrationRunner(
       },
     };
   }
+}
+
+function compactRunnerOutput(output: OrchestrationRunnerOutput): OrchestrationRunnerOutput {
+  if (!output.ok) return output;
+  if (output.data.resultType !== "worker_task_completed") return output;
+  return {
+    ok: true,
+    data: {
+      ...output.data,
+      projection: compactProjection(output.data.projection),
+    },
+  };
+}
+
+function compactProjection<T extends { workerRuns?: unknown }>(projection: T): T {
+  if (!projection.workerRuns || typeof projection.workerRuns !== "object") return projection;
+  const workerRuns: Record<string, unknown> = {};
+  for (const [runId, run] of Object.entries(projection.workerRuns)) {
+    workerRuns[runId] = compactWorkerRun(run);
+  }
+  return {
+    ...projection,
+    workerRuns,
+  };
+}
+
+function compactWorkerRun(run: unknown): unknown {
+  if (!run || typeof run !== "object") return run;
+  const record = run as Record<string, unknown>;
+  const result = record.result;
+  if (!result || typeof result !== "object") return run;
+  const { observations: _observations, ...restResult } = result as Record<string, unknown>;
+  return {
+    ...record,
+    result: restResult,
+  };
 }
 
 export async function readOrchestrationRunnerRequest(

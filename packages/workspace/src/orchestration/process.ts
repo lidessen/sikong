@@ -214,13 +214,31 @@ function parseRunnerOutput(
   stdout: string,
   runId: string,
 ): CommandResult<OrchestrationExecutionResult> {
-  let output: OrchestrationRunnerOutput;
-  try {
-    output = JSON.parse(stdout) as OrchestrationRunnerOutput;
-  } catch {
-    return fail("internal_error", "Orchestration process returned invalid JSON.", { runId });
+  const output = parseLastRunnerJson(stdout);
+  if (!output) {
+    return fail("internal_error", "Orchestration process returned invalid JSON.", {
+      runId,
+      stdoutTail: stdout.slice(-1_000),
+    });
   }
   return output.ok ? ok(output.data) : output;
+}
+
+function parseLastRunnerJson(stdout: string): OrchestrationRunnerOutput | undefined {
+  const lines = stdout
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    try {
+      const parsed = JSON.parse(lines[index] ?? "") as OrchestrationRunnerOutput;
+      if (parsed && typeof parsed === "object" && "ok" in parsed) return parsed;
+    } catch {
+      // Keep scanning older lines; runtime adapters may print diagnostics before the runner result.
+    }
+  }
+  return undefined;
 }
 
 function taskIdForAction(action: OrchestrationAction): string | undefined {

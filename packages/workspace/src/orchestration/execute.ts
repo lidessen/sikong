@@ -10,9 +10,25 @@ import { runWorkerLoop, runWorkerTask, type RunWorkerTaskResult } from "../runti
 import type { TaskProjection } from "../coordination";
 import type { OrchestrationAction } from "./tick";
 
+export interface OrchestrationLoopSummary {
+  status?: string;
+  stopReason?: string;
+  text?: string;
+  eventCount?: number;
+  messageCount?: number;
+}
+
 export interface OrchestrationExecutionRuntime {
   loop?: AgentLoop;
   runTask?: (input: TaskInput) => Promise<AgentTaskResult>;
+}
+
+export interface OrchestrationWorkerRunSummary {
+  runId: string;
+  taskResult: {
+    status: AgentTaskResult["status"];
+    report?: string;
+  };
 }
 
 export type OrchestrationExecutionResult =
@@ -26,11 +42,11 @@ export type OrchestrationExecutionResult =
         | "start_lead_final_decision"
         | "start_stage_verification_worker"
         | "start_final_verification_worker";
-      loopResult: unknown;
+      loopResult: OrchestrationLoopSummary;
     }
   | {
       resultType: "worker_task_completed";
-      run: RunWorkerTaskResult;
+      run: OrchestrationWorkerRunSummary;
       projection: TaskProjection;
     }
   | {
@@ -84,7 +100,7 @@ export async function executeOrchestrationAction(
       return ok({
         resultType: "loop_completed",
         actionType: action.type,
-        loopResult,
+        loopResult: summarizeLoopResult(loopResult),
       });
     }
 
@@ -115,7 +131,7 @@ export async function executeOrchestrationAction(
       if (!run.ok) return run;
       return ok({
         resultType: "worker_task_completed",
-        run: run.data,
+        run: summarizeWorkerRun(run.data),
         projection: run.data.projection,
       });
     }
@@ -158,4 +174,55 @@ export async function executeOrchestrationAction(
         reason: action.reason,
       });
   }
+}
+
+function summarizeLoopResult(loopResult: unknown): OrchestrationLoopSummary {
+  if (!loopResult || typeof loopResult !== "object") {
+    return { text: truncateText(String(loopResult ?? ""), 1_000) };
+  }
+
+  const record = loopResult as Record<string, unknown>;
+  return {
+    ...stringField(record, "status"),
+    ...stringField(record, "stopReason"),
+    ...textField(record),
+    ...arrayCount(record, "events", "eventCount"),
+    ...arrayCount(record, "messages", "messageCount"),
+  };
+}
+
+function stringField(record: Record<string, unknown>, key: "status" | "stopReason") {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? { [key]: value } : {};
+}
+
+function textField(record: Record<string, unknown>): Pick<OrchestrationLoopSummary, "text"> {
+  const value = record.outcomeText ?? record.text ?? record.output;
+  return typeof value === "string" && value.trim()
+    ? { text: truncateText(value.trim(), 2_000) }
+    : {};
+}
+
+function arrayCount(
+  record: Record<string, unknown>,
+  sourceKey: string,
+  targetKey: "eventCount" | "messageCount",
+) {
+  const value = record[sourceKey];
+  return Array.isArray(value) ? { [targetKey]: value.length } : {};
+}
+
+function truncateText(text: string, maxLength: number): string | undefined {
+  if (!text) return undefined;
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`;
+}
+
+function summarizeWorkerRun(run: RunWorkerTaskResult): OrchestrationWorkerRunSummary {
+  return {
+    runId: run.runId,
+    taskResult: {
+      status: run.taskResult.status,
+      ...(run.taskResult.report ? { report: truncateText(run.taskResult.report, 2_000) } : {}),
+    },
+  };
 }

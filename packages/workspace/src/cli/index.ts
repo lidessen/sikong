@@ -51,7 +51,11 @@ import {
   type OrchestrationInput,
   type OrchestrationProcessExecutionClient,
 } from "../orchestration";
-import type { RuntimeAssemblyConfig } from "../runtime";
+import {
+  defaultRuntimeAssembly,
+  type RuntimeAssemblyConfig,
+  type RuntimeAssemblyProfile,
+} from "../runtime";
 
 export interface CliRunResult {
   exitCode: number;
@@ -535,8 +539,10 @@ async function driveTask(
 ): Promise<CommandResult<CliCommandData>> {
   const taskId = required(taskIdArg, "task id is required.");
   const settings = await new FileSettingsStore(ctx.dataDir).read();
-  const workerAssembly = parseRuntimeAssembly(parsed, settings.defaults.worker);
-  const leadAssembly = parseRuntimeAssembly(parsed, settings.defaults.lead);
+  const workerAssembly = parseRuntimeAssembly(parsed, settings.defaults.worker, "worker");
+  const leadAssembly = parseRuntimeAssembly(parsed, settings.defaults.lead, "lead");
+  const planningAssembly = parseRuntimeAssembly(parsed, settings.defaults.worker, "planning");
+  const reviewAssembly = parseRuntimeAssembly(parsed, settings.defaults.worker, "review");
   const client =
     options.processClient ??
     new DaemonProcessClient({
@@ -565,7 +571,12 @@ async function driveTask(
         client,
         ctx: runCtx,
         action,
-        runtimeAssembly: isLeadAction(action) ? leadAssembly : workerAssembly,
+        runtimeAssembly: runtimeAssemblyForAction(action, {
+          lead: leadAssembly,
+          planning: planningAssembly,
+          review: reviewAssembly,
+          worker: workerAssembly,
+        }),
         packageCwd,
         command: runnerCommand,
         timeoutMs: optionalNumber(
@@ -655,6 +666,7 @@ function optionalNonNegativeNumber(value: string | undefined, message: string): 
 function parseRuntimeAssembly(
   parsed: ParsedArgs,
   defaultRuntime: DefaultAgentRuntime = { backend: "mock" },
+  profile: RuntimeAssemblyProfile = "worker",
 ): RuntimeAssemblyConfig {
   const raw = value(parsed, "runtime-assembly-json");
   if (raw)
@@ -666,36 +678,21 @@ function parseRuntimeAssembly(
   const explicitBackend = value(parsed, "backend");
   const backend = explicitBackend ?? defaultRuntime.backend;
   const backendOptions = value(parsed, "backend-options-json");
-  const defaultBackendOptions =
-    !explicitBackend && (defaultRuntime.provider || defaultRuntime.model)
-      ? {
-          ...(defaultRuntime.provider ? { provider: defaultRuntime.provider } : {}),
-          ...(defaultRuntime.model ? { model: defaultRuntime.model } : {}),
-        }
-      : undefined;
   const options = backendOptions
-    ? parseJson(backendOptions, "--backend-options-json must be a JSON object.")
-    : defaultBackendOptions;
-  return {
-    backend: options
-      ? {
-          name: backend,
-          options,
-        }
-      : backend,
-    toolProfiles: {
-      ...(backend === "ai-sdk"
-        ? {
-            inspection: "ai-sdk-local-inspection",
-            execution: "ai-sdk-local-execution",
-          }
-        : {}),
-      leadProtocol: "sikong-lead-protocol",
-      planningProtocol: "sikong-planning-protocol",
-      stageReviewProtocol: "sikong-stage-review-protocol",
-      finalReviewProtocol: "sikong-final-review-protocol",
+    ? (parseJson(backendOptions, "--backend-options-json must be a JSON object.") as Record<
+        string,
+        unknown
+      >)
+    : {};
+  return defaultRuntimeAssembly(
+    {
+      backend,
+      ...(!explicitBackend && defaultRuntime.provider ? { provider: defaultRuntime.provider } : {}),
+      ...(!explicitBackend && defaultRuntime.model ? { model: defaultRuntime.model } : {}),
     },
-  };
+    profile,
+    options,
+  );
 }
 
 function daemonBaseUrl(value: string | undefined): string {
@@ -942,6 +939,26 @@ function isLeadAction(action: OrchestrationAction): boolean {
     action.type === "start_lead_round_planning" ||
     action.type === "start_lead_final_decision"
   );
+}
+
+function runtimeAssemblyForAction(
+  action: OrchestrationAction,
+  assemblies: {
+    lead: RuntimeAssemblyConfig;
+    planning: RuntimeAssemblyConfig;
+    review: RuntimeAssemblyConfig;
+    worker: RuntimeAssemblyConfig;
+  },
+): RuntimeAssemblyConfig {
+  if (isLeadAction(action)) return assemblies.lead;
+  if (action.type === "start_planning_worker") return assemblies.planning;
+  if (
+    action.type === "start_stage_verification_worker" ||
+    action.type === "start_final_verification_worker"
+  ) {
+    return assemblies.review;
+  }
+  return assemblies.worker;
 }
 
 function emptyTools(): ToolSet {

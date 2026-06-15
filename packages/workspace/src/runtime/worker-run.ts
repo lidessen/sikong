@@ -6,6 +6,7 @@ import type {
   TaskInput,
   TaskResult as AgentTaskResult,
   TaskRoundMode,
+  ToolDefinition,
   ToolSet,
 } from "agent-loop";
 import {
@@ -143,10 +144,17 @@ export async function runWorkerTask(
 }
 
 export async function runWorkerLoop(input: RunWorkerLoopInput) {
-  const run = input.loop.run({
+  let run: ReturnType<AgentLoop["run"]> | undefined;
+  run = input.loop.run({
     prompt: input.prompt,
     ...(input.system ? { system: input.system } : {}),
-    ...(input.tools ? { tools: input.tools } : {}),
+    ...(input.tools
+      ? {
+          tools: terminalProtocolTools(input.tools, () =>
+            run?.cancel("sikong protocol tool called"),
+          ),
+        }
+      : {}),
     ...(input.skills ? { skills: input.skills } : {}),
     ...(input.mcp ? { mcp: input.mcp } : {}),
     ...(input.maxSteps ? { maxSteps: input.maxSteps } : {}),
@@ -157,6 +165,45 @@ export async function runWorkerLoop(input: RunWorkerLoopInput) {
   return await run.result;
 }
 
+const terminalProtocolToolNames = new Set([
+  "submit_requirement_spec",
+  "submit_plan",
+  "accept_plan",
+  "reject_plan",
+  "plan_stage_round",
+  "accept_task",
+  "reject_task",
+  "accept_stage_review",
+  "reject_stage_review",
+  "recommend_final_review",
+]);
+
+function terminalProtocolTools(tools: ToolSet, onTerminal: () => void): ToolSet {
+  const wrapped: ToolSet = {};
+  for (const [name, tool] of Object.entries(tools)) {
+    wrapped[name] = terminalProtocolToolNames.has(name)
+      ? terminalProtocolTool(tool, onTerminal)
+      : tool;
+  }
+  return wrapped;
+}
+
+function terminalProtocolTool(tool: ToolDefinition, onTerminal: () => void): ToolDefinition {
+  if (!tool.execute) return tool;
+  return {
+    ...tool,
+    execute: async (args, ctx) => {
+      const result = await tool.execute?.(args, ctx);
+      if (isSuccessfulCommandResult(result)) onTerminal();
+      return result;
+    },
+  };
+}
+
+function isSuccessfulCommandResult(result: unknown): boolean {
+  return Boolean(result && typeof result === "object" && (result as { ok?: unknown }).ok === true);
+}
+
 export function buildStageWorkerPrompt(
   projection: TaskProjection,
   stage: PlanStageDef,
@@ -164,6 +211,10 @@ export function buildStageWorkerPrompt(
   workUnit: StageWorkUnitDef,
 ): string {
   return [
+    "You are Sikong's Stage Worker for one assigned work unit.",
+    "",
+    "Your responsibility is to complete this work unit inside the current stage round and return concrete evidence of what changed, what was verified, and what remains. The Task Lead plans rounds, and Reviewers decide whether the stage or task is acceptable.",
+    "",
     `Task: ${projection.request ?? projection.taskId}`,
     `Stage: ${stage.title}`,
     "",

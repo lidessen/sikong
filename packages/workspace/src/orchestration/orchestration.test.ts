@@ -197,8 +197,18 @@ describe("orchestration tick", () => {
         report: "Final result is acceptable.",
       });
       if (!recommended.ok) throw new Error("final recommend failed");
-      expect(next(recommended.data.projection)).toMatchObject({
+      const finalLead = next(recommended.data.projection);
+      expect(finalLead).toMatchObject({
         type: "start_lead_final_decision",
+      });
+      if (finalLead.type !== "start_lead_final_decision") {
+        throw new Error("expected final lead decision");
+      }
+      expect(finalLead.spec.prompt).toContain("You are Sikong's internal Task Lead");
+      expect(finalLead.spec.prompt).toContain("make the final accept/reject decision");
+      expect(finalLead.spec.tools).toMatchObject({
+        accept_task: expect.any(Object),
+        reject_task: expect.any(Object),
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -561,6 +571,7 @@ describe("orchestration process executor", () => {
                 command: "bun",
                 args: [],
                 stdout:
+                  "runtime diagnostic\n" +
                   JSON.stringify({
                     ok: true,
                     data: {
@@ -568,7 +579,8 @@ describe("orchestration process executor", () => {
                       actionType: "start_planning_worker",
                       loopResult: { status: "completed" },
                     },
-                  }) + "\n",
+                  }) +
+                  "\n",
                 stderr: "",
                 exitCode: 0,
                 startedAt: "2026-06-14T00:00:00Z",
@@ -1019,6 +1031,14 @@ function input(projection: TaskProjection): OrchestrationInput {
   return {
     projection,
     tools: {
+      leadProtocolTools: {
+        ...tool("submit_requirement_spec"),
+        ...tool("accept_plan"),
+        ...tool("reject_plan"),
+        ...tool("plan_stage_round"),
+        ...tool("accept_task"),
+        ...tool("reject_task"),
+      },
       planningProtocolTools: tool("submit_plan"),
       stageReviewProtocolTools: tool("accept_stage_review"),
       finalReviewProtocolTools: tool("recommend_final_review"),
@@ -1041,7 +1061,7 @@ async function executeDrivenStage(
       data: {
         resultType: "loop_completed",
         actionType: action.type,
-        loopResult: { status: "completed", roundId: planned.id },
+        loopResult: { status: "completed", text: planned.id },
       },
     };
   }

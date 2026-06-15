@@ -255,7 +255,7 @@ describe("sikong settings", () => {
 });
 
 describe("task drive command", () => {
-  test("uses settings worker runtime defaults without shelling through CLI", async () => {
+  test("uses worker runtime defaults with planning-safe tools without shelling through CLI", async () => {
     const dir = await tmp();
     try {
       const ctx: CommandContext = { dataDir: dir, workspaceId: "sikong" };
@@ -296,8 +296,7 @@ describe("task drive command", () => {
             options: {
               provider: "deepseek",
               model: "deepseek-v4-flash",
-              permissionMode: "bypassPermissions",
-              allowedTools: expect.arrayContaining(["Read", "Write", "Edit", "Bash"]),
+              allowedTools: ["Read", "Glob", "Grep", "LS"],
             },
           },
           toolProfiles: {

@@ -29,9 +29,9 @@ export function createStageVerificationPreset(input: StageVerificationPresetInpu
     workspaceId: input.projection.workspaceId,
     taskId: input.projection.taskId,
     prompt: [
-      "Evaluate whether the current stage satisfies its acceptance criteria.",
+      "You are Sikong's Stage Reviewer for this task.",
       "",
-      "Do not fix, edit, or continue implementation work. Only evaluate and submit a review decision.",
+      "Your responsibility is to inspect worker evidence and decide whether the current stage satisfies its acceptance criteria. A rejection should give the Task Lead concrete gaps for the next round.",
       "",
       `Review id: ${input.reviewId}`,
       `Task: ${input.projection.request ?? input.projection.taskId}`,
@@ -59,9 +59,9 @@ export function createFinalVerificationPreset(input: FinalVerificationPresetInpu
     workspaceId: input.projection.workspaceId,
     taskId: input.projection.taskId,
     prompt: [
-      "Evaluate the whole task and submit a final recommendation.",
+      "You are Sikong's Final Reviewer for this task.",
       "",
-      "Do not fix, edit, or continue implementation work. Only evaluate the final task result.",
+      "Your responsibility is to inspect the complete task evidence and recommend whether the result satisfies the user's original request. The Task Lead makes the final accept/reject decision.",
       "",
       `Review id: ${input.reviewId}`,
       `Task: ${input.projection.request ?? input.projection.taskId}`,

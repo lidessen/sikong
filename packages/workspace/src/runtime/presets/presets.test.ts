@@ -84,8 +84,9 @@ describe("worker preset wrappers", () => {
         submit_plan: expect.any(Object),
       },
     });
-    expect(preset.prompt).toContain("Lead requirement spec:");
-    expect(preset.prompt).toContain("Submit the final plan only through");
+    expect(preset.prompt).toContain("You are Sikong's Planner");
+    expect(preset.prompt).toContain("coarse ordered stage roadmap");
+    expect(preset.prompt).toContain("Leave tactical rounds and per-worker work units");
   });
 
   test("stage execution preset uses the current stage and the generic worker task input", () => {
@@ -105,6 +106,8 @@ describe("worker preset wrappers", () => {
         tools: { edit_file: expect.any(Object) },
       },
     });
+    expect(preset.goal).toContain("You are Sikong's Stage Worker");
+    expect(preset.goal).toContain("complete this work unit");
     expect(preset.goal).toContain("Stage: Implement");
     expect(preset.goal).toContain("- Planner preset is a wrapper.");
   });
@@ -120,7 +123,8 @@ describe("worker preset wrappers", () => {
       read_file: expect.any(Object),
       accept_stage_review: expect.any(Object),
     });
-    expect(stagePreset.prompt).toContain("Only evaluate and submit a review decision");
+    expect(stagePreset.prompt).toContain("You are Sikong's Stage Reviewer");
+    expect(stagePreset.prompt).toContain("decide whether the current stage satisfies");
     expect(stagePreset.prompt).toContain("run_1 (completed): Runtime presets implemented.");
 
     const finalPreset = createFinalVerificationPreset({
@@ -133,7 +137,8 @@ describe("worker preset wrappers", () => {
       run_command: expect.any(Object),
       recommend_final_review: expect.any(Object),
     });
-    expect(finalPreset.prompt).toContain("submit a final recommendation");
+    expect(finalPreset.prompt).toContain("You are Sikong's Final Reviewer");
+    expect(finalPreset.prompt).toContain("recommend whether the result satisfies");
   });
 });
 

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { TaskInput, TaskResult as AgentTaskResult } from "agent-loop";
+import {
+  defineTool,
+  mockLoop,
+  type TaskInput,
+  type TaskResult as AgentTaskResult,
+} from "agent-loop";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +17,7 @@ import {
   submitPlan,
   type CommandContext,
 } from "../commands";
-import { runWorkerTask } from "./index";
+import { runWorkerLoop, runWorkerTask } from "./index";
 
 const tmp = () => mkdtemp(join(tmpdir(), "sikong-runtime-"));
 
@@ -33,6 +38,21 @@ const usage = {
 };
 
 describe("worker run task bridge", () => {
+  test("stops loop-backed protocol runs after a successful protocol tool call", async () => {
+    const result = await runWorkerLoop({
+      taskId: "task_1",
+      prompt: "Submit the plan.",
+      loop: mockLoop({ callTool: { name: "submit_plan" } }),
+      tools: {
+        submit_plan: defineTool({
+          execute: async () => ({ ok: true, data: { planId: "plan_1" } }),
+        }),
+      },
+    });
+
+    expect(result.text).toBe("(cancelled)");
+  });
+
   test("records a completed runTask result as a worker terminal event", async () => {
     const dir = await tmp();
     try {

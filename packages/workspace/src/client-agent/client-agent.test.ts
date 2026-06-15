@@ -4,7 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTask, createWorkspace, type CommandContext } from "../commands";
-import { buildClientAgentContext, runClientAgentTurn, type ClientTranscriptSource } from "./index";
+import {
+  buildClientAgentContext,
+  CLIENT_AGENT_SYSTEM_PROMPT,
+  runClientAgentTurn,
+  type ClientTranscriptSource,
+} from "./index";
 
 const tmp = () => mkdtemp(join(tmpdir(), "sikong-client-agent-"));
 
@@ -19,6 +24,17 @@ function ctx(dataDir: string): CommandContext {
 }
 
 describe("client agent context", () => {
+  test("frames the client agent as an operator-facing coordinator", () => {
+    expect(CLIENT_AGENT_SYSTEM_PROMPT).toContain("represent the human operator");
+    expect(CLIENT_AGENT_SYSTEM_PROMPT).toContain(
+      "Development work belongs inside Sikong Work Items",
+    );
+    expect(CLIENT_AGENT_SYSTEM_PROMPT).toContain("Task Lead");
+    expect(CLIENT_AGENT_SYSTEM_PROMPT).toContain("Planner");
+    expect(CLIENT_AGENT_SYSTEM_PROMPT).toContain("Workers");
+    expect(CLIENT_AGENT_SYSTEM_PROMPT).toContain("Reviewers");
+  });
+
   test("builds a bootstrap packet from source stores and recent transcript", async () => {
     const dir = await tmp();
     try {

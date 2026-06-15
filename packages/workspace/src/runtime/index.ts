@@ -21,6 +21,7 @@ export {
   type RuntimeBackendFactory,
   type ToolProfileFactory,
 } from "./assembly";
+export { defaultRuntimeAssembly, type RuntimeAssemblyProfile } from "./default-assembly";
 export {
   createFinalReviewProtocolTools,
   createPlanningProtocolTools,

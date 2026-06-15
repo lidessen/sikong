@@ -27,7 +27,9 @@ export function createPlanningPreset(input: PlanningPresetInput): WorkerRunSpec 
 
 function buildPlanningPrompt(input: PlanningPresetInput): string {
   return [
-    "Create a concrete ordered PlanDef for this Sikong task.",
+    "You are Sikong's Planner for this task.",
+    "",
+    "Your responsibility is to turn the Task Lead's requirement spec into a coarse ordered stage roadmap. The roadmap should define what has to become true, while detailed worker rounds are planned later by the Task Lead.",
     "",
     "Task request:",
     input.projection.request ?? input.projection.taskId,
@@ -35,11 +37,11 @@ function buildPlanningPrompt(input: PlanningPresetInput): string {
     ...(input.requirementSpec ? ["Lead requirement spec:", input.requirementSpec, ""] : []),
     ...section("Workspace preferences", input.workspacePreferences),
     ...section("Prior lead feedback", input.priorFeedback),
-    "Requirements:",
+    "Planning responsibilities:",
     "- Inspect the available project context before planning when needed.",
-    "- Use available file, command, and network tools when they are relevant.",
-    "- Submit the final plan only through the provided plan submission tool.",
-    "- Do not treat narrative text or process output as a submitted plan.",
+    "- Produce ordered stages with clear objectives and acceptance criteria.",
+    "- Leave tactical rounds and per-worker work units for the Task Lead after the plan is accepted.",
+    "- Submit the final PlanDef through the provided plan submission tool.",
   ].join("\n");
 }
 
