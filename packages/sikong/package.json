@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build": "bun run build:cli",
-    "build:cli": "bun build src/cli.ts --compile --outfile dist/sikong",
+    "build:cli": "cd ../.. && go build -o packages/sikong/dist/sikong ./cmd/sikong/",
     "build:platforms": "bun scripts/build-platforms.ts",
     "release": "bun scripts/release.ts",
     "release:dry": "bun scripts/release.ts --dry-run",

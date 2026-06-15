@@ -61,7 +61,8 @@ describe("workspace (CLI wiring)", () => {
   });
 
   test("creds-free: openWorkspace + submit work with no DEEPSEEK key (lazy default loops)", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "");
+    const priorDeepseekKey = process.env["DEEPSEEK_API_KEY"];
+    process.env["DEEPSEEK_API_KEY"] = "";
     const dir = await tmp();
     try {
       // DEFAULT loops (not injected): must not resolve the key until a wake fires.
@@ -72,7 +73,7 @@ describe("workspace (CLI wiring)", () => {
       });
       expect((await ws.projections.get("c1"))?.fields.title).toBe("hi");
     } finally {
-      vi.unstubAllEnvs();
+      process.env["DEEPSEEK_API_KEY"] = priorDeepseekKey;
       await rm(dir, { recursive: true, force: true });
     }
   });

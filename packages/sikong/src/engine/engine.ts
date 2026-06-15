@@ -83,6 +83,8 @@ interface StateEntry {
   stopWake?: (reason: string) => void;
 }
 
+
+
 /**
  * The wake engine (M1): a self-built minimal virtual actor. Each task is a
  * single-writer with a coalescing mailbox — at most one wake runs per task at a
@@ -291,6 +293,11 @@ export class WorkflowEngine {
     this.schedule(taskId);
   }
 
+  /** Check for tasks waiting on scope leases that can now run. Returns task ids to nudge. */
+  scopeWaiters(): Promise<string[]> {
+    return this.scopeScheduler?.checkWaiters() ?? Promise.resolve([]);
+  }
+
   getTask(taskId: string): Promise<Task | null> {
     return this.o.projections.get(taskId);
   }
@@ -318,7 +325,6 @@ export class WorkflowEngine {
     if (st.wakes >= cap) {
       st.pending = false;
       this.o.hooks?.onError?.({ taskId, error: new Error(`wake budget exceeded for ${taskId} (${cap})`) });
-      // Terminally fail it (not just stop) so a parent's childrenDone can resolve.
       void this.chron({ type: "wake.error", taskId, summary: `wake budget exceeded (${cap}); failing the task` });
       void this.failTask(taskId, `wake budget exceeded (${cap})`).catch(() => {});
       return;
@@ -330,8 +336,6 @@ export class WorkflowEngine {
       .catch((err) => {
         const error = err instanceof Error ? err : new Error(String(err));
         this.o.hooks?.onError?.({ taskId, error });
-        // Durably record it too — loadPinned/registry-miss failures throw before
-        // any wake chronicle entry, so without this they'd vanish entirely.
         void this.chron({ type: "wake.error", taskId, summary: error.message });
       })
       .finally(() => {
@@ -393,6 +397,7 @@ export class WorkflowEngine {
         return;
       }
       leasesAcquired = true;
+      this.scopeScheduler?.startRefresh(taskId, wakeId);
     }
     try {
     let project = this.o.projects ? ((await this.o.projects.get(task.projectId)) ?? undefined) : undefined;
@@ -402,18 +407,15 @@ export class WorkflowEngine {
     if (project && task.isolate && this.o.isolateWorkspace) {
       project = await this.o.isolateWorkspace({ task, workflow: wf, stageId: task.stageId, project }, project);
     }
-    // Escalate the model tier once a task has a prior failed wake (circuit
-    // breaker bumped .errors) — the retry runs on the stronger model.
-    const priorErrors = this.state.get(taskId)?.errors ?? 0;
+    // Build wake context with the task, workflow, stage and project.
     const ctx: WakeContext = {
       task,
       workflow: wf,
       stageId: task.stageId,
       ...(project ? { project } : {}),
-      modelTier: priorErrors > 0 ? "strong" : "fast",
     };
     const workerInfo = this.o.describeWorker?.(ctx);
-    const loop = this.o.loop(ctx);
+    const loop = await this.o.loop(ctx);
     if (!loop.supports("tools"))
       throw new Error(
         `task ${taskId}: worker runtime "${loop.id}" lacks the "tools" capability that command tools require (use claude-code or ai-sdk, not codex/cursor)`,
@@ -471,6 +473,7 @@ export class WorkflowEngine {
       team,
       projectMemory: project?.memory,
       effort,
+      model: workerInfo?.model,
     });
     const workerSteerStartedAt = Date.now();
     await this.chron({
@@ -559,6 +562,9 @@ export class WorkflowEngine {
         ...finalizeRunDiagnostics(workerDiagnostics, result, commands),
         stageId: task.stageId,
         stateCommands: commands.length,
+        ...(wakeUsage.cacheReadTokens !== undefined || wakeUsage.cacheCreationTokens !== undefined
+          ? { cache: { readTokens: wakeUsage.cacheReadTokens ?? 0, creationTokens: wakeUsage.cacheCreationTokens ?? 0 } }
+          : {}),
       },
     });
 
@@ -728,6 +734,7 @@ export class WorkflowEngine {
     if (task.stageId !== stageAgentRanOn && !isTerminal(task.status)) this.schedule(taskId);
     } finally {
       if (leasesAcquired) {
+        this.scopeScheduler?.stopRefresh(taskId);
         const waiters = await this.scopeScheduler?.release(taskId, wakeId).catch(() => []);
         for (const id of waiters ?? []) this.schedule(id);
       }
@@ -983,7 +990,24 @@ export class WorkflowEngine {
 
   private async resolveChildren(task: Task): Promise<TaskStatus[]> {
     if (task.childIds.length === 0) return [];
-    const kids = await Promise.all(task.childIds.map((id) => this.o.projections.get(id)));
+    // Re-project from the event log for each child rather than relying on the
+    // cached projection, which may be stale under concurrent writes.
+    const kids = await Promise.all(
+      task.childIds.map(async (id) => {
+        const events = await this.o.events.load(id);
+        if (events.length === 0) return null;
+        const createdPayload = events[0]?.payload as Record<string, unknown> | undefined;
+        const wfId = String(createdPayload?.workflowId ?? "");
+        const wfVer = String(createdPayload?.workflowVersion ?? "");
+        const wf = this.o.registry.get(wfId, wfVer);
+        if (!wf) return null;
+        try {
+          return project(events, wf);
+        } catch {
+          return null;
+        }
+      }),
+    );
     return kids.flatMap((k) => (k ? [k.status] : []));
   }
 

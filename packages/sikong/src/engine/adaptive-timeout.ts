@@ -24,6 +24,8 @@ export interface WakeTimeoutInput {
   team: readonly TeamMember[];
   projectMemory?: string;
   effort?: string;
+  /** Model id, when known — used for model-specific speed multipliers. */
+  model?: string;
 }
 
 const MIN_WAKE_TIMEOUT_MS = 120_000;
@@ -43,6 +45,21 @@ const EFFORT_MULTIPLIERS: Record<string, number> = {
   max: 1.7,
 };
 const DEFAULT_EFFORT_MULTIPLIER = 1;
+
+/**
+ * Model-to-speed multipliers, relative to "claude-sonnet-4-6" (baseline 1.0).
+ * Slower models get a higher multiplier so the timeout reflects real-world
+ * response times. Unknown models default to 1.0.
+ */
+const MODEL_SPEED_MULTIPLIERS: Record<string, number> = {
+  "claude-sonnet-4-6": 1.0,
+  "claude-sonnet-4-": 1.0,
+  "claude-opus-4-": 1.45,
+  "deepseek-": 1.8,
+  "gpt-4": 1.2,
+  "gpt-5": 1.1,
+};
+const DEFAULT_MODEL_SPEED = 1.0;
 
 export function estimateWakeTimeout(input: WakeTimeoutInput): WakeTimeoutEstimate {
   const components: TimeoutComponent[] = [{ name: "agentTurn", ms: AGENT_TURN_BASE_MS }];
@@ -64,8 +81,9 @@ export function estimateWakeTimeout(input: WakeTimeoutInput): WakeTimeoutEstimat
 
   const effort = input.effort ?? input.task.effort ?? input.stage?.effort ?? "medium";
   const multiplier = EFFORT_MULTIPLIERS[effort] ?? DEFAULT_EFFORT_MULTIPLIER;
+  const speedMultiplier = lookupSpeedMultiplier(input.model);
   const baseMs = components.reduce((sum, component) => sum + component.ms, 0);
-  const rawMs = Math.ceil(baseMs * multiplier);
+  const rawMs = Math.ceil(baseMs * multiplier * speedMultiplier);
   const timeoutMs = clamp(rawMs, MIN_WAKE_TIMEOUT_MS, MAX_WAKE_TIMEOUT_MS);
   return { timeoutMs, rawMs, minMs: MIN_WAKE_TIMEOUT_MS, maxMs: MAX_WAKE_TIMEOUT_MS, effort, components };
 }
@@ -130,4 +148,16 @@ function commandMs(command: string): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * Look up the speed multiplier for a model id by substring match.
+ * Returns the baseline (1.0) for unknown models.
+ */
+function lookupSpeedMultiplier(modelId: string | undefined): number {
+  if (!modelId) return DEFAULT_MODEL_SPEED;
+  for (const [key, mult] of Object.entries(MODEL_SPEED_MULTIPLIERS)) {
+    if (modelId.startsWith(key) || modelId.includes(key)) return mult;
+  }
+  return DEFAULT_MODEL_SPEED;
 }

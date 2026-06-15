@@ -29,7 +29,10 @@ The project has two layers:
    instances backed by append-only task timelines. Agents do not mutate task
    state directly; they emit commands through tools, and a deterministic
    reducer plus guard evaluator decides which events are recorded and whether a
-   stage may advance.
+   stage may advance. The Go `cmd/sikong` binary and `internal/*` packages own
+   the CLI, daemon, workspace state layout, and long-running process surfaces.
+   TypeScript remains the agent-loop implementation boundary and migration
+   reference for workflow semantics until those semantics are fully ported.
 
 The intended core is small:
 
@@ -57,18 +60,20 @@ rebuilds, keep it out of the core until the mechanism is clear.
 - an outer `runTask` supervisor for multi-round handoff over tools-capable
   loops.
 
-`sikong` is an early coordination kernel. It has:
+`sikong` is an early coordination kernel. Its active operator surface is the Go
+CLI/daemon. It has:
 
 - serializable workflow definitions;
 - event-sourced task timelines;
 - deterministic command reduction;
 - declarative guard evaluation;
-- in-memory event/projection/registry stores;
-- a minimal wake engine with single-writer, coalescing mailbox semantics.
+- JSONL/YAML stores using the project-scoped workspace layout;
+- a daemon/worker bridge that still needs full reducer/guard parity with the
+  TypeScript workflow engine before it can replace that engine behaviorally.
 
-It is not yet a production durable workspace. Persistence, multi-process write
-coordination, child-status replay, subtask lifecycle closure, and management
-surfaces are still open design/implementation work.
+It is not yet a production durable workspace. Reducer/guard parity in Go,
+multi-process write coordination, child-status replay, subtask lifecycle
+closure, and management surfaces are still open design/implementation work.
 
 ## Core Invariants
 

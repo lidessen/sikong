@@ -27,14 +27,16 @@ export const CLAUDE_CAPS: CapabilityList = [
 ];
 
 export const CODEX_CAPS: CapabilityList = [
+  "tools",
   "mcp",
+  "hooks",
   "steer.live",
   "thinking",
   "usage",
   "interrupt",
 ];
 
-export const CURSOR_CAPS: CapabilityList = ["mcp", "thinking", "usage", "interrupt"];
+export const CURSOR_CAPS: CapabilityList = ["tools", "mcp", "thinking", "usage", "interrupt"];
 
 export const MOCK_CAPS: CapabilityList = [
   "tools",

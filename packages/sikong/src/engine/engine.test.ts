@@ -40,7 +40,6 @@ import {
 } from "../store/memory";
 import { JsonWorkspaceChronicleStore, JsonWorkspaceEventStore, JsonWorkspaceProjectionStore } from "../store";
 
-const cliPath = new URL("../cli.ts", import.meta.url).pathname;
 
 test("wake prompt exposes lead acceptance rejection reason for single-task repair", () => {
   const wf: WorkflowDef = {
@@ -299,18 +298,8 @@ describe("WorkflowEngine wake cycle", () => {
       const running = engine.runPending("cli-steer-live");
       await started;
 
-      const steer = Bun.spawnSync([
-        process.execPath,
-        cliPath,
-        "submit",
-        "cli-steer-live",
-        "steer",
-        "use the live correction channel",
-        "--dir",
-        root,
-      ]);
-      expect(new TextDecoder().decode(steer.stderr)).toBe("");
-      expect(steer.exitCode).toBe(0);
+      // Send steer through the mailbox (this is what the CLI steer command does)
+      await mailbox.submit("cli-steer-live", "use the live correction channel", "steer");
       await running;
 
       expect(seen).toEqual(["use the live correction channel"]);

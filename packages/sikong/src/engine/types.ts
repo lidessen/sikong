@@ -18,16 +18,10 @@ export interface WakeContext {
   stageId: string;
   /** The task's project (for cwd/model/env isolation), when a ProjectStore is wired. */
   project?: Project;
-  /**
-   * Model tier for this wake. "fast" by default; "strong" once a task's prior
-   * wake(s) failed — the worker boundary escalates to a stronger model for the
-   * retry (pro is reserved for where the fast model demonstrably struggles).
-   */
-  modelTier?: "fast" | "strong";
 }
 
 /** Builds the worker loop for a wake. Lets each wake choose runtime/provider. */
-export type LoopFactory = (ctx: WakeContext) => AgentLoop;
+export type LoopFactory = (ctx: WakeContext) => AgentLoop | Promise<AgentLoop>;
 
 /**
  * Resolves the worker's own tools (its "hands") for a wake. This is the worker

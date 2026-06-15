@@ -35,10 +35,11 @@ import type {
  *   workers/<id>.yaml                      — worker definitions
  *   state/chronicle.jsonl                  — append-only activity log
  *
- * CONTRACT: exactly ONE writer process per `dir` (the engine daemon); the CLI is
- * read-only. Appends are serialized + `seq` is derived from the max seen seq, so
- * a single writer is correct and crash-tolerant; two concurrent WRITERS over one
- * dir would still race `seq` (needs a dir lock — future hardening).
+ * CONTRACT: concurrent writers are safe. Per-file directory-based locks
+ * (`withFileLock`) serialize appends to each event file; the `WriteQueue`
+ * provides an additional in-process serialization layer. Projection writes
+ * use atomic `writeFile(tmp) → rename(tmp, target)` so a reader always sees
+ * a consistent file. Chronicle appends are serialized the same way.
  */
 
 /** Filenames are taskId-derived; ids are validated upstream (see assertValidTaskId). */

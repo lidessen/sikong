@@ -49,23 +49,19 @@ export function buildSystem(
   workerToolNames: readonly string[] = [],
   projectMemory = "",
 ): string {
+  // STABLE PREFIX: workflow name + description always come first.
+  // This section is byte-identical across ALL tasks of the same workflow+stage,
+  // so DeepSeek's prefix cache covers it even across different tasks.
   const lines: string[] = [
     `# Workflow: ${wf.name}`,
     wf.description,
-    "",
-    `You are advancing task ${task.id} (depth ${task.depth}${
-      task.parentId ? `, child of ${task.parentId}` : ""
-    }), currently in stage "${task.stageId}"${stage ? ` (${stage.category})` : ""}.`,
   ];
   if (stage?.instructions) lines.push("", "## Stage", stage.instructions);
   if (projectMemory.trim()) lines.push("", "## Project memory", projectMemory.trim());
 
+  // Schema — also stable (schema is defined by the workflow, not per-task)
   const fieldNames = Object.keys(wf.fields);
   if (fieldNames.length) {
-    // Schema only — STABLE across re-wakes so it stays in the cached system
-    // prefix. Current values + the team snapshot are volatile and live in the
-    // per-wake message (buildPrompt) instead, so the system prompt is byte-stable
-    // and DeepSeek's prefix cache covers it across a task's many re-wakes.
     lines.push("", "## Fields (the task's state — schema; current values are in the wake message)");
     for (const name of fieldNames) {
       const def = wf.fields[name];
@@ -73,6 +69,7 @@ export function buildSystem(
     }
   }
 
+  // Tool lists — stable per stage
   const toolNames = stageToolNames(stage);
   lines.push(
     "",
@@ -88,6 +85,12 @@ export function buildSystem(
       "Use them to do the stage's actual work. They do not replace the workflow state tools — record durable progress with the stage tools above.",
     );
   }
+
+  // VOLATILE TAIL: task identity line (changes per wake for different tasks).
+  // Placed at the end so the prefix cache covers the stable sections above
+  // across the widest possible set of wakes.
+  lines.push("", `## Task identity`, `You are advancing task ${task.id} (depth ${task.depth}${task.parentId ? `, child of ${task.parentId}` : ""}), currently in stage "${task.stageId}"${stage ? ` (${stage.category})` : ""}.`);
+
   return lines.join("\n");
 }
 

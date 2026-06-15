@@ -41,5 +41,8 @@ export * from "./worker";
 export * from "./workspace";
 export * from "./workspace-layout";
 
+// ---- Workspace orchestration (multi-workspace coordination) ----------------
+export * from "./orchestrator";
+
 /** Package version marker. */
 export const SIKONG_VERSION = "0.1.6";

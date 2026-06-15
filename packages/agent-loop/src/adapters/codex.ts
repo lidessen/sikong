@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type {
+  AdapterHookBridge,
   BackendAdapter,
   BackendResult,
   BackendRun,
@@ -15,7 +16,7 @@ import type { CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
 import { resolveContextWindow } from "../core/context-window";
 import { estimateTokens, type LoopEvent } from "../core/events";
-import type { EffortLevel, McpServers, PreflightResult } from "../core/types";
+import type { EffortLevel, McpServers, PreflightResult, ToolSet } from "../core/types";
 
 /**
  * Construction-time options for the Codex adapter. Everything here configures
@@ -369,59 +370,7 @@ class JsonRpcStdioClient {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Codex app-server callback responses (ported from codexServerRequestResponse)*/
-/* -------------------------------------------------------------------------- */
-
-function codexServerRequestResponse(
-  request: JsonRpcRequest,
-  fullAuto: boolean,
-): unknown {
-  const allow = fullAuto;
-  switch (request.method) {
-    case "item/commandExecution/requestApproval":
-      return { decision: allow ? "accept" : "decline" };
-    case "item/fileChange/requestApproval":
-      return { decision: allow ? "accept" : "decline" };
-    case "execCommandApproval":
-    case "applyPatchApproval":
-      return { decision: allow ? "approved" : "denied" };
-    case "item/permissions/requestApproval": {
-      const params = request.params as {
-        permissions?: { network?: unknown | null; fileSystem?: unknown | null };
-      };
-      if (!allow) return { permissions: {}, scope: "turn", strictAutoReview: true };
-      const permissions: Record<string, unknown> = {};
-      if (params.permissions?.network) permissions.network = params.permissions.network;
-      if (params.permissions?.fileSystem)
-        permissions.fileSystem = params.permissions.fileSystem;
-      return { permissions, scope: "turn", strictAutoReview: false };
-    }
-    case "mcpServer/elicitation/request": {
-      const params = request.params as {
-        _meta?: { codex_approval_kind?: unknown } | null;
-      };
-      if (allow && params._meta?.codex_approval_kind === "mcp_tool_call") {
-        return { action: "accept", content: {}, _meta: null };
-      }
-      return { action: "decline", content: null, _meta: null };
-    }
-    case "item/tool/requestUserInput":
-      return { answers: {} };
-    case "item/tool/call":
-      return {
-        contentItems: [
-          {
-            type: "inputText",
-            text: "Dynamic tool calls are not available in the agent-loop Codex adapter.",
-          },
-        ],
-        success: false,
-      };
-    default:
-      throw new Error(`Unhandled Codex server request: ${request.method}`);
-  }
-}
+/* Codex app-server callback responses */
 
 /* -------------------------------------------------------------------------- */
 /* Native item -> LoopEvent mapping                                            */
@@ -546,14 +495,29 @@ function codexEffort(level: EffortLevel | undefined): CodexAdapterOptions["effor
  *  - "usage": `thread/tokenUsage/updated` surfaces as runtime `usage` events.
  *  - "interrupt": cancel() sends `turn/interrupt` and closes the client.
  *
- * NOT supported: in-process tools with `execute` (Codex runs its own tools), and
- * therefore no pre-tool "hooks" interception. Codex's own approval RPCs are
- * answered by `codexServerRequestResponse` based on `fullAuto`.
+ * Capabilities:
+ *  - "tools": `req.tools` are registered on turn/start and their calls are
+ *    handled via `item/tool/call` — the adapter executes the tool's `execute`
+ *    function and returns the result. MCP tools still route through the
+ *    `-c mcp_servers.*` path below.
+ *  - "hooks": pre-tool interception via `req.hooks.toolUse()`, for the
+ *    `onToolUse` deny/replace-args lifecycle.
+ *  - "mcp": req.mcp is translated into `-c mcp_servers.*` config overrides.
+ *  - "steer.live": a steer message is injected into the running turn via
+ *    `turn/steer`, applied mid-turn.
+ *  - "thinking": reasoning deltas surface as `thinking` events.
+ *  - "usage": `thread/tokenUsage/updated` surfaces as runtime `usage` events.
+ *  - "interrupt": cancel() sends `turn/interrupt` and closes the client.
+ *
+ * Codex's own approval RPCs are answered by `handleCodexRequest` based on
+ * `fullAuto`.
  */
 export class CodexAdapter implements BackendAdapter {
   readonly id = "codex";
   readonly capabilities: CapabilityList = [
+    "tools",
     "mcp",
+    "hooks",
     "steer.live",
     "thinking",
     "usage",
@@ -746,6 +710,9 @@ export class CodexAdapter implements BackendAdapter {
       }
     };
 
+    const tools = req.tools;
+    const hooksBridge = req.hooks;
+
     const run = async () => {
       ch.push({ type: "step", phase: "start", index: 0 });
 
@@ -768,7 +735,7 @@ export class CodexAdapter implements BackendAdapter {
         cwd: this.opts.cwd,
         env: childEnv,
         handleRequest: (request) =>
-          codexServerRequestResponse(request, this.opts.fullAuto === true),
+          this.handleCodexRequest(request, tools, hooksBridge),
       });
       this.clients.add(client);
       client.start(handleNotification);
@@ -808,7 +775,14 @@ export class CodexAdapter implements BackendAdapter {
       };
       req.signal?.addEventListener("abort", onAbort, { once: true });
 
-      // Start the turn.
+      // Start the turn — pass tool definitions so Codex knows about custom tools.
+      const toolDefs = Object.keys(tools).length > 0
+        ? Object.entries(tools).map(([name, def]) => ({
+            name,
+            description: def.description ?? "",
+            inputSchema: def.inputSchema ?? null,
+          }))
+        : undefined;
       const turnResp = (await client.request("turn/start", {
         threadId,
         input: [{ type: "text", text: req.prompt, text_elements: [] }],
@@ -820,6 +794,7 @@ export class CodexAdapter implements BackendAdapter {
         approvalsReviewer: this.opts.approvalsReviewer ?? undefined,
         sandboxPolicy: o.sandboxPolicy ?? undefined,
         outputSchema: o.outputSchema ?? undefined,
+        ...(toolDefs ? { tools: toolDefs } : {}),
       })) as { turn?: { id?: string } };
       turnId = turnResp.turn?.id;
       if (!turnId) throw new Error("codex app-server returned no turn id");
@@ -863,6 +838,105 @@ export class CodexAdapter implements BackendAdapter {
         resolveDone();
       },
     };
+  }
+
+  /**
+   * Handle a JSON-RPC request from the codex app-server, including approval
+   * callbacks, permission requests, and dynamic tool calls.
+   */
+  private async handleCodexRequest(
+    request: JsonRpcRequest,
+    tools: ToolSet,
+    hooksBridge: AdapterHookBridge,
+  ): Promise<unknown> {
+    const allow = this.opts.fullAuto === true;
+    switch (request.method) {
+      case "item/commandExecution/requestApproval":
+        return { decision: allow ? "accept" : "decline" };
+      case "item/fileChange/requestApproval":
+        return { decision: allow ? "accept" : "decline" };
+      case "execCommandApproval":
+      case "applyPatchApproval":
+        return { decision: allow ? "approved" : "denied" };
+      case "item/permissions/requestApproval": {
+        const params = request.params as {
+          permissions?: { network?: unknown | null; fileSystem?: unknown | null };
+        };
+        if (!allow) return { permissions: {}, scope: "turn", strictAutoReview: true };
+        const permissions: Record<string, unknown> = {};
+        if (params.permissions?.network) permissions.network = params.permissions.network;
+        if (params.permissions?.fileSystem)
+          permissions.fileSystem = params.permissions.fileSystem;
+        return { permissions, scope: "turn", strictAutoReview: false };
+      }
+      case "mcpServer/elicitation/request": {
+        const params = request.params as {
+          _meta?: { codex_approval_kind?: unknown } | null;
+        };
+        if (allow && params._meta?.codex_approval_kind === "mcp_tool_call") {
+          return { action: "accept", content: {}, _meta: null };
+        }
+        return { action: "decline", content: null, _meta: null };
+      }
+      case "item/tool/requestUserInput":
+        return { answers: {} };
+      case "item/tool/call": {
+        const params = (request.params ?? {}) as {
+          tool?: string;
+          arguments?: Record<string, unknown>;
+          id?: string;
+        };
+        const toolName = params.tool;
+        if (!toolName || !tools[toolName]) {
+          return {
+            contentItems: [{
+              type: "inputText",
+              text: `Tool "${toolName ?? "unknown"}" is not registered.`,
+            }],
+            success: false,
+          };
+        }
+        const toolDef = tools[toolName]!;
+
+        // Pre-tool interception hook (onToolUse)
+        if (hooksBridge) {
+          const decision = await hooksBridge.toolUse({
+            name: toolName,
+            callId: params.id ?? toolName,
+            args: params.arguments ?? {},
+          });
+          if (decision.action === "deny") {
+            return {
+              contentItems: [{ type: "inputText", text: decision.reason ?? "Tool call denied by policy." }],
+              success: false,
+            };
+          }
+          if (decision.action === "replaceArgs" && decision.args) {
+            params.arguments = decision.args;
+          }
+        }
+
+        try {
+          const result = await toolDef.execute?.(params.arguments ?? {}, {
+            signal: undefined,
+            callId: params.id,
+          });
+          const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          return {
+            contentItems: [{ type: "inputText", text: resultText }],
+            success: true,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            contentItems: [{ type: "inputText", text: `Tool "${toolName}" failed: ${msg}` }],
+            success: false,
+          };
+        }
+      }
+      default:
+        throw new Error(`Unhandled Codex server request: ${request.method}`);
+    }
   }
 
   private async interrupt(

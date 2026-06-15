@@ -75,7 +75,9 @@ export function resolveWorkerLoop(worker: Worker, opts: { project?: Project } = 
     ...(project?.root ? { cwd: project.root, allowedPaths: [project.root] } : {}),
     ...(project?.env ? { env: project.env } : {}),
     ...(() => {
-      const pm = toClaudePermissionMode(project?.permissionMode ?? worker.permissionMode);
+      // Unified sandbox.permissionMode takes priority over deprecated flat fields.
+      const mode = worker.sandbox?.permissionMode ?? project?.permissionMode ?? worker.permissionMode;
+      const pm = toClaudePermissionMode(mode);
       return pm ? { permissionMode: pm } : {};
     })(),
   });
@@ -180,15 +182,12 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     ...(defaultWorkerId ? { workspaceDefault: defaultWorkerId } : {}),
     ...(ctx.workflow.workerRole ? { workerRole: ctx.workflow.workerRole } : {}),
   });
-  // "strong" tier escalates DeepSeek to its pro model — reserved for retries where
-  // the fast model failed (per public evals, pro's edge is long-horizon/stuck work).
-  // Other providers keep their default model.
-  const escalateModel = (w: Worker, tier?: "fast" | "strong"): string =>
-    tier === "strong" && w.provider === "deepseek" ? "deepseek-v4-pro" : w.model;
+  // Workers keep their configured model regardless of retry history — model
+  // selection is up to the operator when creating the worker, not the engine.
   const defaultLoop: LoopFactory = (ctx) => {
     const w = selectWorker(roster, selectArgs(ctx));
     return resolveWorkerLoop(
-      { ...w, model: escalateModel(w, ctx.modelTier) },
+      { ...w },
       { ...(ctx.project ? { project: ctx.project } : {}) },
     );
   };
@@ -258,7 +257,7 @@ export async function openWorkspace(dir: string, opts: OpenWorkspaceOptions = {}
     describeWorker: (ctx: WakeContext) => {
       try {
         const w = selectWorker(roster, selectArgs(ctx));
-        return { model: escalateModel(w, ctx.modelTier), provider: w.provider, billingMode: "token" as const };
+        return { model: w.model, provider: w.provider, billingMode: "token" as const };
       } catch {
         return undefined;
       }

@@ -155,6 +155,7 @@ export interface StageDef {
    * accept/reject decision. The engine does not execute these checks itself.
    */
   acceptance?: readonly AcceptanceCheck[];
+
 }
 
 export interface WorkflowDef {

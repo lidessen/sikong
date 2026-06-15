@@ -1,3 +1,4 @@
+import { createServer, type Server } from "node:http";
 import {
   Agent,
   Cursor,
@@ -20,7 +21,7 @@ import { createEventChannel } from "../core/channel";
 import { resolveContextWindow } from "../core/context-window";
 import { resolveApiKey } from "../core/credentials";
 import { estimateTokens, type LoopEvent, type TokenUsage } from "../core/events";
-import type { McpServers, PreflightResult } from "../core/types";
+import type { McpServers, PreflightResult, ToolSet } from "../core/types";
 
 /**
  * Adapter-construction options for the Cursor Agent SDK backend.
@@ -69,13 +70,14 @@ export interface CursorRuntimeOptions {
  *
  * Cursor reports no native token usage, so `usage` is emitted with
  * `source:"estimate"` via {@link estimateTokens}. MCP servers are passed
- * through from `req.mcp`. Cursor does not accept custom in-process tools and
- * has no pre-tool interception hook, so neither "tools" nor "hooks" is
- * declared. There is no live mid-turn follow-up, so steer is omitted.
+ * through from `req.mcp`. Custom tools from `req.tools` are exposed as a
+ * local MCP server that Cursor discovers and calls via the MCP protocol.
+ * There is no pre-tool interception hook, so "hooks" is not declared.
  */
 export class CursorAdapter implements BackendAdapter {
   readonly id = "cursor";
   readonly capabilities: CapabilityList = [
+    "tools",
     "mcp",
     "thinking",
     "usage",
@@ -84,6 +86,8 @@ export class CursorAdapter implements BackendAdapter {
 
   private agentPromise: Promise<SDKAgent> | null = null;
   private agent: SDKAgent | null = null;
+  /** Active local MCP tool servers for this adapter (started per-run in start()). */
+  private mcpToolServers = new Set<Server>();
 
   constructor(private readonly opts: CursorAdapterOptions = {}) {}
 
@@ -117,6 +121,8 @@ export class CursorAdapter implements BackendAdapter {
     });
 
     let outputText = "";
+    /** Local MCP tool server, started when req.tools is non-empty. */
+    let toolServer: Server | null = null;
 
     const run = async () => {
       try {
@@ -128,6 +134,19 @@ export class CursorAdapter implements BackendAdapter {
         if (abort.signal.aborted) throw new Error("Cursor run cancelled");
 
         const mcpServers = buildCursorMcpServers(req.mcp);
+
+        // When custom tools are provided, start a local MCP server that exposes
+        // them and add it to the MCP servers list Cursor discovers.
+        if (Object.keys(req.tools).length > 0) {
+          const server = await startMcpToolServer(req.tools);
+          toolServer = server;
+          this.mcpToolServers.add(server);
+          mcpServers["agent-loop-tools"] = {
+            type: "http",
+            url: `http://localhost:${(server.address() as { port: number }).port}`,
+          };
+        }
+
         const sendOptions: SendOptions = {
           ...(model ? { model: { id: model } } : {}),
           ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
@@ -167,6 +186,11 @@ export class CursorAdapter implements BackendAdapter {
         rejectResult(error);
       } finally {
         activeRun = null;
+        if (toolServer) {
+          this.mcpToolServers.delete(toolServer);
+          closeMcpServer(toolServer);
+          toolServer = null;
+        }
       }
     };
 
@@ -180,6 +204,11 @@ export class CursorAdapter implements BackendAdapter {
         cancelled = true;
         abort.abort();
         void activeRun?.cancel();
+        if (toolServer) {
+          this.mcpToolServers.delete(toolServer);
+          closeMcpServer(toolServer);
+          toolServer = null;
+        }
       },
     };
   }
@@ -209,6 +238,9 @@ export class CursorAdapter implements BackendAdapter {
   }
 
   async dispose(): Promise<void> {
+    // Close any lingering MCP tool servers from cancelled runs.
+    for (const s of this.mcpToolServers) closeMcpServer(s);
+    this.mcpToolServers.clear();
     this.agent?.close();
     this.agent = null;
     this.agentPromise = null;
@@ -409,4 +441,98 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((v) => typeof v === "string");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Local MCP tool server — wraps req.tools as an HTTP MCP server for Cursor   */
+/* -------------------------------------------------------------------------- */
+
+interface JsonRpcMessage {
+  jsonrpc: "2.0";
+  id?: number | string;
+  method?: string;
+  params?: unknown;
+  result?: unknown;
+  error?: { code: number; message: string };
+}
+
+/**
+ * Start a local HTTP server that implements the MCP protocol subset for tool
+ * exposure. Supports `tools/list` and `tools/call` methods. The server runs
+ * until the adapter shuts it down.
+ */
+function startMcpToolServer(tools: ToolSet): Promise<Server> {
+  return new Promise((resolve) => {
+    const server = createServer(async (req, res) => {
+      // Only accept POST to /
+      if (req.method !== "POST" || !req.url || req.url !== "/") {
+        res.writeHead(405).end();
+        return;
+      }
+
+      let body = "";
+      req.on("data", (chunk: string) => (body += chunk));
+      req.on("end", () => {
+        let response: JsonRpcMessage;
+        try {
+          const msg = JSON.parse(body) as JsonRpcMessage;
+          response = handleMcpRequest(msg, tools);
+        } catch (err) {
+          response = {
+            jsonrpc: "2.0",
+            id: undefined,
+            error: { code: -32700, message: "Parse error" },
+          };
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(response));
+      });
+    });
+
+    server.listen(0, "127.0.0.1", () => resolve(server));
+  });
+}
+
+function handleMcpRequest(msg: JsonRpcMessage, tools: ToolSet): JsonRpcMessage {
+  const base = { jsonrpc: "2.0" as const, id: msg.id };
+
+  if (msg.method === "tools/list") {
+    const toolList = Object.entries(tools).map(([name, def]) => ({
+      name,
+      description: def.description ?? "",
+      inputSchema: def.inputSchema ?? {},
+    }));
+    return { ...base, result: { tools: toolList } };
+  }
+
+  if (msg.method === "tools/call") {
+    const params = (msg.params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
+    const name = params.name;
+    if (!name || !tools[name]) {
+      return {
+        ...base,
+        error: { code: -32602, message: `Unknown tool: "${name ?? "undefined"}"` },
+      };
+    }
+    const toolDef = tools[name]!;
+    try {
+      const result = toolDef.execute?.(params.arguments ?? {}, {});
+      const content = typeof result === "string" ? result : JSON.stringify(result ?? null);
+      return { ...base, result: { content: [{ type: "text", text: content }] } };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ...base, result: { content: [{ type: "text", text: `Error: ${msg}` }], isError: true } };
+    }
+  }
+
+  return { ...base, error: { code: -32601, message: `Method not found: ${msg.method}` } };
+}
+
+function closeMcpServer(server: Server): void {
+  try {
+    server.close();
+    server.closeAllConnections?.();
+  } catch {
+    // best effort
+  }
 }
