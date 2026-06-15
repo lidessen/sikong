@@ -39,6 +39,17 @@ bun run dev:daemon
 bun --filter agent-loop test
 ```
 
+Client UI shadcn components live under `packages/client/src/components/ui`.
+Add shadcn components with the official CLI from the client workspace:
+
+```bash
+cd packages/client
+bunx --bun shadcn@latest info --json
+bunx --bun shadcn@latest add dialog
+```
+
+Use `--dry-run` or `--diff` before replacing an existing component.
+
 ## Checks
 
 ```bash

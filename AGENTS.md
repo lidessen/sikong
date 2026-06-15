@@ -32,6 +32,22 @@ Format Go files with `gofmt`. Use standard Go package names: short, lowercase, a
 
 TypeScript uses Bun with strict `tsconfig.json` settings and TypeScript Native Preview (`tsgo`) for type checking. Use two-space indentation for JSON and TypeScript. Workspace package names should use the `@sikong/*` scope.
 
+Client UI uses shadcn/ui source components in `packages/client`. Add new shadcn
+components only through the official CLI from that workspace:
+
+```bash
+cd packages/client
+bunx --bun shadcn@latest add <component>
+```
+
+Do not copy component source from the shadcn website, GitHub, or registry JSON
+by hand. Before adding or updating an existing component, inspect the current
+project context with `bunx --bun shadcn@latest info --json`; use
+`bunx --bun shadcn@latest add <component> --dry-run` or `--diff` when a
+component already exists or local customization may be overwritten. The current
+client shadcn config is Vite, Tailwind v4, Radix base, lucide icons, and
+`@/components/ui` for UI imports.
+
 ## Testing Guidelines
 
 Go tests use the standard `go test` framework. Place tests beside implementation files with the `_test.go` suffix.
