@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { worktreeDir } from "../data-dir";
+import { taskRuntimeDir, worktreeDir } from "../data-dir";
 import {
   addWorkspacePreference,
   acceptPlan,
@@ -26,6 +26,7 @@ import {
   recommendFinalReview,
   recordRuntimeProcessFinished,
   recordRuntimeProcessStarted,
+  reconcileTaskRuntime,
   rejectPlan,
   removeWorkspacePreference,
   startStageReview,
@@ -260,6 +261,67 @@ describe("task command handlers", () => {
     }
   });
 
+  test("reconciles timed-out stage worker processes into failed worker runs", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Recover a timed-out worker.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const taskId = created.data.taskId;
+      const submitted = await submitPlan(context, {
+        taskId,
+        stages: [
+          {
+            title: "Implement",
+            objective: "Start worker.",
+            acceptance: ["Worker can be reconciled."],
+          },
+        ],
+      });
+      if (!submitted.ok) throw new Error("plan submit failed");
+      const accepted = await acceptPlan(context, {
+        taskId,
+        planId: submitted.data.plan.id,
+        version: submitted.data.plan.version,
+        report: "Accepted.",
+      });
+      if (!accepted.ok) throw new Error("plan accept failed");
+      const startedWorker = await startWorkerRun(context, { taskId });
+      if (!startedWorker.ok) throw new Error("worker start failed");
+      await recordRuntimeProcessStarted(context, {
+        taskId,
+        processRunId: "process_timeout",
+        actionType: "start_stage_worker",
+      });
+      await recordRuntimeProcessFinished(context, {
+        taskId,
+        processRunId: "process_timeout",
+        processStatus: "timed_out",
+        exitCode: 143,
+      });
+
+      expect(await reconcileTaskRuntime(context, { taskId })).toMatchObject({
+        ok: true,
+        data: { reconciledCount: 1 },
+      });
+      const fresh = await getTask(context, { taskId });
+      if (!fresh.ok) throw new Error("task get failed");
+      expect(fresh.data.projection.workerRuns[startedWorker.data.runId]).toMatchObject({
+        status: "failed",
+        result: {
+          summary: expect.stringContaining("process_timeout"),
+          report: expect.stringContaining("timed_out"),
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("creates a workspace-owned worktree for git runtime context", async () => {
     const dir = await tmp();
     try {
@@ -287,6 +349,34 @@ describe("task command handlers", () => {
       });
       expect(await Bun.file(join(expectedCwd, "README.md")).text()).toBe("hello\n");
       expect(expectedCwd).not.toBe(repo);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("creates a workspace-owned task runtime dir when no runtime context is provided", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+
+      const created = await createTask(context, {
+        request: "Create a standalone artifact.",
+      });
+
+      const expectedCwd = taskRuntimeDir(dir, "sikong", "task_id_1");
+      expect(created).toMatchObject({
+        ok: true,
+        data: {
+          taskId: "task_id_1",
+          projection: {
+            runtime: {
+              cwd: expectedCwd,
+            },
+          },
+        },
+      });
+      await expect(access(expectedCwd)).resolves.toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

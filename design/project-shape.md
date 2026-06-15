@@ -29,9 +29,10 @@ Go CLI/daemon
 `agent-loop` owns a single agent run and the simple `runTask` primitive. It is
 not the multi-worker coordination layer.
 
-The workspace coordination engine owns durable tasks, parent/child task graphs,
-worker assignment, workspace context, event storage, inspection views, and wake
-scheduling.
+The workspace coordination engine owns durable work items, parent/child task
+graphs, worker assignment, workspace context, event storage, inspection views,
+and wake scheduling. In the existing command/model API these durable work items
+are still represented by names such as `TaskProjection` and `taskId`.
 
 The Go layer owns process concerns: CLI entrypoints, daemon lifecycle, local IPC
 or API serving, signal handling, child-process supervision, concurrency limits,
@@ -191,7 +192,7 @@ call shared command handlers, and command handlers should call the workspace
 coordination engine.
 
 The `Client Agent` is not the internal `Task Lead`. The `Task Lead` remains a
-Sikong task role managed by the engine.
+Sikong work-item role managed by the engine.
 
 The client UI is a single long activity stream, not a multi-session chat
 product. Its transcript is presentation state. The client agent turn receives a
@@ -201,6 +202,10 @@ workspace/task summaries.
 Rendered client messages should use typed message parts. If a message needs
 dynamic UI, it should use a restricted Sikong UI catalog rendered by the client,
 not generated JSX/HTML, arbitrary CSS, or direct command actions.
+
+The client visual language should stay close to modern editor shells such as the
+refreshed VS Code default themes: neutral foundations, quiet panels, crisp
+dividers, restrained selection states, and low visual noise.
 
 ## State Layout
 

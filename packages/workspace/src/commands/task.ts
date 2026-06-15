@@ -16,7 +16,12 @@ import {
   type OrchestrationActionSummary,
 } from "../orchestration/summary";
 import { taskProjectionsDir } from "../data-dir";
-import { FileWorkspaceStore, WorkspaceWorktreeError, allocateTaskWorktree } from "../workspace";
+import {
+  FileWorkspaceStore,
+  WorkspaceWorktreeError,
+  allocateTaskRuntimeDir,
+  allocateTaskWorktree,
+} from "../workspace";
 import { nextId } from "./ids";
 import type { CommandContext, CommandResult } from "./types";
 import { commandNow, fail, ok } from "./types";
@@ -109,6 +114,8 @@ export interface RecordRuntimeProcessFinishedInput extends TaskIdInput {
   processStatus: RuntimeProcessStatus;
   exitCode?: number;
 }
+
+export interface ReconcileTaskRuntimeInput extends TaskIdInput {}
 
 export async function createTask(
   ctx: CommandContext,
@@ -598,6 +605,55 @@ export async function recordRuntimeProcessFinished(
   });
 }
 
+export async function reconcileTaskRuntime(
+  ctx: CommandContext,
+  input: ReconcileTaskRuntimeInput,
+): Promise<CommandResult<{ projection: TaskProjection; reconciledCount: number }>> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  const events: TaskEvent[] = [];
+
+  for (const processRun of Object.values(projection.runtimeProcessRuns ?? {})) {
+    if (
+      processRun.status !== "finished" ||
+      processRun.processStatus === undefined ||
+      processRun.processStatus === "succeeded"
+    ) {
+      continue;
+    }
+    if (processRun.actionType !== "start_stage_worker") continue;
+
+    const workerRun = latestRunningWorkerForCurrentStage(projection);
+    if (!workerRun) continue;
+    events.push({
+      id: nextId("event", ctx.id),
+      type: "worker_run.failed",
+      taskId: projection.taskId,
+      workspaceId: projection.workspaceId,
+      createdAt: commandNow(ctx),
+      runId: workerRun.runId,
+      stageId: workerRun.stageId,
+      result: {
+        summary: `Runtime process ${processRun.processRunId} ended with ${processRun.processStatus}.`,
+        report: [
+          `Runtime process ${processRun.processRunId} ended with ${processRun.processStatus}.`,
+          processRun.exitCode === undefined ? undefined : `Exit code: ${processRun.exitCode}.`,
+          "The active worker run was reconciled from runtime process state.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      },
+    });
+    break;
+  }
+
+  if (events.length === 0) return ok({ projection, reconciledCount: 0 });
+  const updated = await appendAndProject(ctx, events);
+  if (!updated.ok) return updated;
+  return ok({ projection: updated.data.projection, reconciledCount: events.length });
+}
+
 export async function inspectTaskEvents(
   ctx: CommandContext,
   input: TaskIdInput,
@@ -797,6 +853,18 @@ function latestWorkerRun(
   )[0];
 }
 
+function latestRunningWorkerForCurrentStage(
+  projection: TaskProjection,
+): TaskProjection["workerRuns"][string] | undefined {
+  const stageId = projection.currentStageId;
+  if (!stageId) return undefined;
+  return Object.values(projection.workerRuns)
+    .filter((run) => run.status === "running" && run.stageId === stageId)
+    .sort((a, b) =>
+      String(b.startedAt ?? b.runId).localeCompare(String(a.startedAt ?? a.runId)),
+    )[0];
+}
+
 function latestRuntimeProcessRun(
   projection: TaskProjection,
 ): NonNullable<TaskProjection["runtimeProcessRuns"]>[string] | undefined {
@@ -862,6 +930,7 @@ async function resolveRuntimeInput(
     } catch {
       return fail("runtime_cwd_not_found", "Runtime cwd does not exist.", { cwd: input.cwd });
     }
+    return ok({ cwd: input.cwd });
   }
 
   if (input.repoPath) {
@@ -893,8 +962,13 @@ async function resolveRuntimeInput(
     }
   }
 
-  if (!input.cwd) return ok(undefined);
-  return ok({ cwd: input.cwd });
+  return ok(
+    await allocateTaskRuntimeDir({
+      dataDir: ctx.dataDir,
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+    }),
+  );
 }
 
 async function loadTaskProjection(

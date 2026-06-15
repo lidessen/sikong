@@ -41,6 +41,10 @@ export function preferencesFile(dataDir: string, workspaceId: string): string {
   return join(workspaceDir(dataDir, workspaceId), "preferences.yaml");
 }
 
+export function configFile(dataDir: string): string {
+  return join(dataDir, "config.yaml");
+}
+
 export function taskEventsDir(dataDir: string, workspaceId: string): string {
   return join(workspaceDir(dataDir, workspaceId), "state", "events");
 }
@@ -67,6 +71,14 @@ export function worktreesDir(dataDir: string, workspaceId: string): string {
 
 export function worktreeDir(dataDir: string, workspaceId: string, taskId: string): string {
   return join(worktreesDir(dataDir, workspaceId), safeWorkspaceSegment(taskId));
+}
+
+export function taskRuntimeDirs(dataDir: string, workspaceId: string): string {
+  return join(workspaceDir(dataDir, workspaceId), "tasks");
+}
+
+export function taskRuntimeDir(dataDir: string, workspaceId: string, taskId: string): string {
+  return join(taskRuntimeDirs(dataDir, workspaceId), safeWorkspaceSegment(taskId));
 }
 
 export async function ensureDataDirLayout(dataDir: string): Promise<void> {

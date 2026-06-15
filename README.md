@@ -21,6 +21,16 @@ Sikong is initialized as a Go CLI and daemon project with a Bun workspace monore
 bun install
 ```
 
+## Beta Install
+
+```bash
+curl -fsSL https://sikong.dev/install.sh | sh
+sikong start
+```
+
+The beta installer currently supports macOS arm64. `sikong start` launches the
+local daemon and web UI by default; `sikong stop` stops them.
+
 ## Development
 
 ```bash
@@ -42,6 +52,7 @@ bun run fmt:check
 
 ```bash
 bun run build
+bun run release:darwin-arm64
 ```
 
 ## Design

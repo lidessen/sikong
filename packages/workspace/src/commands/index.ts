@@ -18,6 +18,8 @@ export {
   type RemoveWorkspacePreferenceInput,
 } from "./preference";
 
+export { driveTask, type DriveTaskInput } from "./drive";
+
 export {
   acceptPlan,
   acceptStageReview,
@@ -36,6 +38,7 @@ export {
   recommendFinalReview,
   recordRuntimeProcessFinished,
   recordRuntimeProcessStarted,
+  reconcileTaskRuntime,
   rejectPlan,
   rejectStageReview,
   rejectTask,
@@ -51,6 +54,7 @@ export {
   type RecommendFinalReviewInput,
   type RecordRuntimeProcessFinishedInput,
   type RecordRuntimeProcessStartedInput,
+  type ReconcileTaskRuntimeInput,
   type RejectPlanInput,
   type StageReviewInput,
   type StartWorkerRunInput,

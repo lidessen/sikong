@@ -8,6 +8,7 @@
   "scripts": {
     "build": "bun run build:go",
     "build:go": "go build -o dist/sikong ./cmd/sikong && go build -o dist/sikongd ./cmd/sikongd",
+    "release:darwin-arm64": "bash scripts/build-release-darwin-arm64.sh",
     "check": "bun run check:go && bun run typecheck && bun run lint && bun run fmt:check && bun run check:js",
     "check:go": "go test ./...",
     "check:js": "bun --filter agent-loop test && bun --filter @sikong/workspace test && bun --filter @sikong/client build",

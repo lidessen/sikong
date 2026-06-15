@@ -21,6 +21,13 @@ export function createTextMessage(role: ClientMessageRole, text: string): Client
   });
 }
 
+export function createPendingMessage(): ClientMessage {
+  return {
+    ...createTextMessage("assistant", "Sikong is working..."),
+    pending: true,
+  };
+}
+
 export function messageFromTurnResponse(response: TurnResponse): ClientMessage {
   if (response.message) return response.message;
   return createTextMessage(

@@ -45,6 +45,27 @@ describe("runtime assembly registry", () => {
     expect(result.usage.totalTokens).toBeGreaterThan(0);
   });
 
+  test("creates provider-backed runtimes from assembly options", async () => {
+    const previous = process.env.DEEPSEEK_API_KEY;
+    process.env.DEEPSEEK_API_KEY = "test-key";
+    try {
+      const runtime = await createRuntimeAssembly({
+        backend: {
+          name: "claude-code",
+          options: { provider: "deepseek", model: "deepseek-v4-flash" },
+        },
+      });
+
+      expect(runtime.loop?.id).toBe("claude-code");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.DEEPSEEK_API_KEY;
+      } else {
+        process.env.DEEPSEEK_API_KEY = previous;
+      }
+    }
+  });
+
   test("hydrates loop and task actions with named tool profiles", async () => {
     const registry = createDefaultRuntimeAssemblyRegistry()
       .registerToolProfile("inspection", () => tool("read_file"))

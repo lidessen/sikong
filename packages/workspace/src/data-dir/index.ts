@@ -1,4 +1,5 @@
 export {
+  configFile,
   defaultDataDir,
   ensureDataDirLayout,
   preferencesFile,
@@ -8,6 +9,8 @@ export {
   taskEventsLockFile,
   taskProjectionFile,
   taskProjectionsDir,
+  taskRuntimeDir,
+  taskRuntimeDirs,
   workspaceDir,
   workspaceFile,
   worktreeDir,

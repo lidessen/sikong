@@ -17,7 +17,10 @@ and runtime artifacts. It replaces the earlier `project` term.
   from the workspace directory.
 - Worktree: a git worktree under the workspace directory, used as an agent cwd
   when a git runtime context needs isolated parallel work.
-- Task: a durable coordination process that belongs to one workspace.
+- Work item: the user-facing name for a durable coordination process that
+  belongs to one workspace. The command/model layer may still use `Task` names
+  for this object.
+- Worker run: one concrete worker execution inside a work item.
 - Worker: a data-dir-level hireable agent configuration.
 - Workspace preferences: lead-maintained project preferences and conventions,
   separate from task progress.
@@ -33,6 +36,7 @@ Default file-backed layout:
 ~/.sikong/
   state/
     chronicle.jsonl
+  config.yaml
   workspaces/
     <workspaceId>/
       workspace.yaml
@@ -49,6 +53,52 @@ Default file-backed layout:
 The data dir owns global locks, global chronicle state, workspace registry, worker
 registry, and isolation artifacts. It does not own task semantics.
 
+## Sikong Settings
+
+`config.yaml` stores operator-level defaults for runtime selection. It is
+data-dir scoped because it applies across workspaces unless a later explicit
+runtime request overrides it.
+
+The first settings shape is intentionally small:
+
+```ts
+type SikongSettings = {
+  version: 1;
+  defaults: {
+    clientAgent: { backend: string; provider?: string; model?: string };
+    lead: { backend: string; provider?: string; model?: string };
+    worker: { backend: string; provider?: string; model?: string };
+  };
+};
+```
+
+Field rationale:
+
+| Field                  | Required | Why it exists                                                        |
+| ---------------------- | -------- | -------------------------------------------------------------------- |
+| `version`              | yes      | Gives the YAML file a stable migration anchor.                       |
+| `defaults.clientAgent` | yes      | Selects the UI caller agent's default runtime.                       |
+| `defaults.lead`        | yes      | Selects the task lead's default runtime when orchestration uses one. |
+| `defaults.worker`      | yes      | Selects default planner/stage/review worker runtime execution.       |
+| `backend`              | yes      | Names an `agent-loop` backend or adapter profile.                    |
+| `provider`             | no       | Optional provider id, such as `deepseek`, injected into the backend. |
+| `model`                | no       | Optional model id passed to backends that support model selection.   |
+
+The user-facing settings surface should expose real runtime backends such as
+`codex`, `claude-code`, `cursor`, and `ai-sdk`. `mock` is a test backend and
+must not appear as a configurable option or persisted settings value.
+
+Do not put these defaults in `WorkspaceDef`. Workspace definitions identify
+project namespaces only. Runtime defaults are host/operator policy and can be
+changed without modifying any workspace or task history.
+
+Do not use this settings file as a worker registry, provider-secret store,
+sandbox policy, tool-profile definition, or task-state override. Those remain
+separate runtime/adapter concerns.
+
+`task drive` reads `defaults.worker` when no explicit runtime assembly or
+backend is supplied. Explicit CLI/runtime inputs still win over settings.
+
 ## Workspace Directory vs Agent Cwd
 
 The workspace directory is a Sikong state namespace. It is not a source checkout
@@ -59,16 +109,23 @@ Workspace dir = ~/.sikong/workspaces/<workspaceId>/
 Agent cwd     = runtime-provided execution/materialized work area
 ```
 
-Agent runs must receive an explicit runtime cwd from their run context or
-runtime adapter. For git work, the cwd should be a workspace-owned worktree,
-such as:
+Agent runs must receive a workspace-owned runtime cwd from their run context or
+runtime adapter. By default, a task gets a directory derived from its workspace:
+
+```text
+~/.sikong/workspaces/<workspaceId>/tasks/<taskId>/
+```
+
+For git work, the cwd should instead be a workspace-owned worktree, such as:
 
 ```text
 ~/.sikong/workspaces/<workspaceId>/worktrees/<taskId>/
 ```
 
-If no valid agent cwd can be resolved, the run should fail and ask for clearer
-runtime context. It should not silently use the workspace directory.
+The UI process directory and daemon process directory are never fallback agent
+cwd values. If Sikong cannot create the workspace-owned task cwd, the run should
+fail and ask for clearer runtime context. It should not silently use the
+workspace directory or process cwd.
 
 ## Workspace Definition
 
@@ -130,13 +187,15 @@ parallel feature-development or repair efforts for the same repo without
 clobbering one checkout.
 
 Git capability is inferred from the run context, not stored in `WorkspaceDef`.
-When a run context points at a git repository, runtime may create a worktree
-under the workspace directory and use that worktree as the agent cwd.
+Every task has a workspace-owned runtime directory. When a run context points at
+a git repository, runtime may create a worktree under the workspace directory
+and use that worktree as the agent cwd.
 
 Runtime cwd policy:
 
 - the resolved git repository is for user/manual operation and worktree creation
   only;
+- every agent run receives a workspace-derived cwd;
 - every git-touching agent run receives a worktree cwd;
 - worktrees are owned by the workspace under
   `workspaces/<workspaceId>/worktrees/`;
@@ -149,11 +208,14 @@ The first implementation can keep the allocation policy simple:
 workspaces/<workspaceId>/worktrees/<taskId>/
 ```
 
-This task-level policy is implemented for `task create --repo`: Sikong resolves
-the git repository root, creates a detached workspace-owned worktree at the task
-path, and stores that worktree as `runtime.cwd` on the created task. The source
-repository remains a reference for worktree creation and is not used as the
-agent cwd.
+This task-level policy is implemented in two paths:
+
+- `task create` without an explicit runtime context creates
+  `workspaces/<workspaceId>/tasks/<taskId>/` and stores it as `runtime.cwd`.
+- `task create --repo` resolves the git repository root, creates a detached
+  workspace-owned worktree at the task path, and stores that worktree as
+  `runtime.cwd` on the created task. The source repository remains a reference
+  for worktree creation and is not used as the agent cwd.
 
 If later stages need multiple concurrent writable workers for the same task, the
 runtime can allocate run-scoped worktrees beneath that task:
@@ -162,9 +224,10 @@ runtime can allocate run-scoped worktrees beneath that task:
 workspaces/<workspaceId>/worktrees/<taskId>/<runId>/
 ```
 
-The key invariant is stable: when runtime resolves a git repository, agent
-execution does not use that repository as cwd for git work. If no git
-repository is identified in the run context, runtime should not create a
+The key invariant is stable: agent execution uses a workspace-derived cwd. When
+runtime resolves a git repository, agent execution does not use that repository
+as cwd for git work. If no git repository is identified in the run context,
+runtime should use the workspace-owned task runtime directory, not create a
 worktree.
 
 ## Workspace Preferences

@@ -21,3 +21,9 @@ export {
   type TaskWorktreeAllocation,
   type TaskWorktreeInput,
 } from "./worktree";
+
+export {
+  allocateTaskRuntimeDir,
+  type TaskRuntimeDirAllocation,
+  type TaskRuntimeDirInput,
+} from "./task-dir";

@@ -5,6 +5,8 @@ node_modules
 out
 dist
 *.tgz
+internal/runtimebundle/assets/bin
+internal/runtimebundle/assets/client-dist
 
 # code coverage
 coverage

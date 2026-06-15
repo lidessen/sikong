@@ -4,13 +4,17 @@ import {
   codexLoop,
   createAiSdkTools,
   cursorLoop,
+  anthropic,
+  deepseek,
   mockLoop,
+  openai,
   type AgentLoop,
   type AiSdkLoopOptions,
   type AiSdkToolOptions,
   type ClaudeLoopOptions,
   type CodexLoopOptions,
   type CursorLoopOptions,
+  type ModelProvider,
   type TaskInput,
   type TaskResult,
   type ToolSet,
@@ -230,9 +234,15 @@ async function runtimeBackendOptions(
   options: unknown,
   context: RuntimeAssemblyContext,
 ): Promise<Record<string, unknown>> {
-  const base = backendOptions(options);
+  const base = runtimeProviderOptions(backendOptions(options));
   const cwd = await resolveRuntimeCwd(context);
-  if (!cwd || Object.hasOwn(base, "cwd")) return base;
+  if (!cwd) {
+    if (requiresTaskRuntimeCwd(backend, context)) {
+      throw new Error(`${backend} task runtime requires an explicit task runtime cwd.`);
+    }
+    return base;
+  }
+  if (Object.hasOwn(base, "cwd")) return base;
 
   if (backend === "claude-code") {
     return {
@@ -260,6 +270,43 @@ async function runtimeBackendOptions(
   }
 
   return base;
+}
+
+function requiresTaskRuntimeCwd(backend: string, context: RuntimeAssemblyContext): boolean {
+  const actionType = context.request?.action.type;
+  return (
+    (backend === "claude-code" || backend === "codex" || backend === "cursor") &&
+    (actionType === "start_planning_worker" ||
+      actionType === "start_stage_worker" ||
+      actionType === "start_stage_verification_worker" ||
+      actionType === "start_final_verification_worker")
+  );
+}
+
+function runtimeProviderOptions(options: Record<string, unknown>): Record<string, unknown> {
+  const providerName = typeof options.provider === "string" ? options.provider.trim() : "";
+  if (!providerName) return options;
+
+  const { provider: _providerName, ...rest } = options;
+  const model =
+    typeof options.model === "string" && options.model.trim() ? options.model : undefined;
+  return {
+    ...rest,
+    provider: createRuntimeProvider(providerName, model),
+  };
+}
+
+function createRuntimeProvider(providerName: string, model?: string): ModelProvider {
+  switch (providerName) {
+    case "deepseek":
+      return deepseek(model ? { model } : {});
+    case "anthropic":
+      return anthropic(model ? { model } : {});
+    case "openai":
+      return openai(model ? { model } : {});
+    default:
+      throw new Error(`Unknown runtime provider: ${providerName}`);
+  }
 }
 
 async function createAiSdkLocalInspectionTools(context: RuntimeAssemblyContext): Promise<ToolSet> {

@@ -551,6 +551,114 @@ describe("orchestration process executor", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("marks active stage worker failed when its process times out", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Execute stage through process client.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const submitted = await submitPlan(context, {
+        taskId: created.data.taskId,
+        stages: [
+          {
+            title: "Implement",
+            objective: "Start then time out.",
+            acceptance: ["The worker failure is durable."],
+          },
+        ],
+      });
+      if (!submitted.ok) throw new Error("plan submit failed");
+      const accepted = await acceptPlan(context, {
+        taskId: created.data.taskId,
+        planId: submitted.data.plan.id,
+        version: submitted.data.plan.version,
+        report: "Accepted.",
+      });
+      if (!accepted.ok) throw new Error("plan accept failed");
+
+      const action = next(accepted.data.projection);
+      if (action.type !== "start_stage_worker") throw new Error("expected stage worker action");
+      let specSnapshot: unknown;
+      let workerRunId = "";
+      const result = await executeOrchestrationActionProcess({
+        ctx: context,
+        action,
+        runId: "run_process_timeout",
+        packageCwd: join(import.meta.dir, "../.."),
+        runtimeAssembly: { backend: "mock" },
+        client: {
+          async startProcess(spec) {
+            specSnapshot = spec;
+            return {
+              runId: spec.runId,
+              workspaceId: spec.workspaceId,
+              taskId: spec.taskId,
+              state: "running",
+              spec,
+              startedAt: "2026-06-14T00:00:00Z",
+            };
+          },
+          async waitProcessRun(runId) {
+            const started = await startWorkerRun(context, {
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              stageId: action.input.stageId,
+            });
+            if (!started.ok) throw new Error("worker start failed");
+            workerRunId = started.data.runId;
+            return {
+              runId,
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              state: "finished",
+              spec: specSnapshot as never,
+              startedAt: "2026-06-14T00:00:00Z",
+              finishedAt: "2026-06-14T00:02:00Z",
+              result: {
+                runId,
+                workspaceId: "sikong",
+                taskId: created.data.taskId,
+                status: "timed_out",
+                command: "bun",
+                args: [],
+                stdout: "",
+                stderr: "",
+                exitCode: 143,
+                startedAt: "2026-06-14T00:00:00Z",
+                finishedAt: "2026-06-14T00:02:00Z",
+                durationMs: 120_000,
+                timedOut: true,
+              },
+            };
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "internal_error" },
+      });
+      const fresh = await getTask(context, { taskId: created.data.taskId });
+      if (!fresh.ok) throw new Error("task get failed");
+      expect(fresh.data.projection.workerRuns[workerRunId]).toMatchObject({
+        status: "failed",
+        result: { report: expect.stringContaining("timed_out") },
+      });
+      expect(fresh.data.projection.runtimeProcessRuns).toMatchObject({
+        run_process_timeout: {
+          processStatus: "timed_out",
+          exitCode: 143,
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("orchestration driver", () => {

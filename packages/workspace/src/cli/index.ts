@@ -21,11 +21,13 @@ import {
   inspectTaskTrace,
   listWorkspacePreferences,
   listWorkspaces,
+  ok,
   recommendFinalReview,
   rejectPlan,
   rejectStageReview,
   rejectTask,
   recordRuntimeProcessFinished,
+  reconcileTaskRuntime,
   removeWorkspacePreference,
   startStageReview,
   startWorkerRun,
@@ -39,6 +41,7 @@ import {
 import { resolveDataDir } from "../data-dir";
 import type { TaskProjection } from "../coordination";
 import { DaemonProcessClient, DaemonProcessClientError, type DaemonProcessFetch } from "../process";
+import { FileSettingsStore, type DefaultAgentRuntime } from "../settings";
 import {
   executeOrchestrationAction,
   executeOrchestrationActionProcess,
@@ -58,6 +61,7 @@ export interface CliRunResult {
 export interface CliRunOptions {
   processClient?: OrchestrationProcessExecutionClient;
   daemonFetch?: DaemonProcessFetch;
+  webFetch?: DaemonProcessFetch;
   daemonSpawner?: DaemonSpawner;
   packageCwd?: string;
 }
@@ -278,6 +282,9 @@ async function dispatch(
     if (action === "cancel") {
       return cancelTaskRuntimeProcesses(ctx, parsed, arg, env, options);
     }
+    if (action === "reconcile") {
+      return reconcileTaskRuntime(ctx, taskInput(parsed, arg));
+    }
   }
 
   if (resource === "inspect") {
@@ -326,20 +333,43 @@ async function daemonStart(
     baseUrl,
     ...(options.daemonFetch ? { fetch: options.daemonFetch } : {}),
   });
+  const packageCwd =
+    value(parsed, "package-cwd") ?? options.packageCwd ?? join(import.meta.dir, "../../../..");
+  const spawn = options.daemonSpawner ?? spawnDaemon;
+  const webRequested = flag(parsed, "ui") || flag(parsed, "web");
+  const waitOptions = {
+    timeoutMs:
+      optionalNonNegativeNumber(
+        value(parsed, "timeout-ms"),
+        "--timeout-ms must be a non-negative integer.",
+      ) ?? 2000,
+    intervalMs:
+      optionalNumber(value(parsed, "interval-ms"), "--interval-ms must be a positive integer.") ??
+      50,
+  };
+  let webResult: Record<string, unknown> | undefined;
   const existingHealth = await tryDaemonHealth(client);
   if (existingHealth.ok) {
+    if (webRequested) {
+      const web = await ensureWebUI(parsed, env, options, packageCwd, spawn, waitOptions);
+      if (!web.ok) return web;
+      webResult = web.data;
+    }
     return {
       ok: true,
-      data: { baseUrl, started: false, alreadyRunning: true, health: existingHealth.health },
+      data: {
+        baseUrl,
+        started: false,
+        alreadyRunning: true,
+        health: existingHealth.health,
+        ...(webResult ? { web: webResult } : {}),
+      },
     };
   }
 
-  const packageCwd =
-    value(parsed, "package-cwd") ?? options.packageCwd ?? join(import.meta.dir, "../../../..");
   let spawned: DaemonSpawnResult;
   try {
     const spawnSpec = await daemonSpawnSpec(packageCwd, daemonAddr(rawAddr));
-    const spawn = options.daemonSpawner ?? spawnDaemon;
     spawned = await spawn(spawnSpec);
   } catch (err) {
     return {
@@ -352,14 +382,8 @@ async function daemonStart(
     };
   }
   const waited = await waitForDaemonHealth(client, {
-    timeoutMs:
-      optionalNonNegativeNumber(
-        value(parsed, "timeout-ms"),
-        "--timeout-ms must be a non-negative integer.",
-      ) ?? 2000,
-    intervalMs:
-      optionalNumber(value(parsed, "interval-ms"), "--interval-ms must be a positive integer.") ??
-      50,
+    timeoutMs: waitOptions.timeoutMs,
+    intervalMs: waitOptions.intervalMs,
   });
   if (!waited.ok) {
     return {
@@ -371,6 +395,11 @@ async function daemonStart(
       },
     };
   }
+  if (webRequested) {
+    const web = await ensureWebUI(parsed, env, options, packageCwd, spawn, waitOptions);
+    if (!web.ok) return web;
+    webResult = web.data;
+  }
   return {
     ok: true,
     data: {
@@ -379,6 +408,7 @@ async function daemonStart(
       alreadyRunning: false,
       ...(spawned.pid !== undefined ? { pid: spawned.pid } : {}),
       health: waited.health,
+      ...(webResult ? { web: webResult } : {}),
     },
   };
 }
@@ -495,14 +525,19 @@ async function driveTask(
   options: CliRunOptions,
 ): Promise<CommandResult<CliCommandData>> {
   const taskId = required(taskIdArg, "task id is required.");
-  const runtimeAssembly = parseRuntimeAssembly(parsed);
+  const settings = await new FileSettingsStore(ctx.dataDir).read();
+  const runtimeAssembly = parseRuntimeAssembly(parsed, settings.defaults.worker);
   const client =
     options.processClient ??
     new DaemonProcessClient({
       baseUrl: daemonBaseUrl(value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR),
     });
   const packageCwd =
-    value(parsed, "package-cwd") ?? options.packageCwd ?? join(import.meta.dir, "../..");
+    value(parsed, "package-cwd") ??
+    env.SIKONG_PACKAGE_CWD ??
+    options.packageCwd ??
+    join(import.meta.dir, "../..");
+  const runnerCommand = value(parsed, "command") ?? env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
   const driven = await runOrchestrationUntilWait({
     ctx,
     taskId,
@@ -522,7 +557,7 @@ async function driveTask(
         action,
         runtimeAssembly,
         packageCwd,
-        command: value(parsed, "command"),
+        command: runnerCommand,
         timeoutMs: optionalNumber(
           value(parsed, "process-timeout-ms"),
           "--process-timeout-ms must be a positive integer.",
@@ -607,7 +642,10 @@ function optionalNonNegativeNumber(value: string | undefined, message: string): 
   return parsed;
 }
 
-function parseRuntimeAssembly(parsed: ParsedArgs): RuntimeAssemblyConfig {
+function parseRuntimeAssembly(
+  parsed: ParsedArgs,
+  defaultRuntime: DefaultAgentRuntime = { backend: "mock" },
+): RuntimeAssemblyConfig {
   const raw = value(parsed, "runtime-assembly-json");
   if (raw)
     return parseJson(
@@ -615,13 +653,24 @@ function parseRuntimeAssembly(parsed: ParsedArgs): RuntimeAssemblyConfig {
       "--runtime-assembly-json must be a JSON object.",
     ) as RuntimeAssemblyConfig;
 
-  const backend = value(parsed, "backend") ?? "mock";
+  const explicitBackend = value(parsed, "backend");
+  const backend = explicitBackend ?? defaultRuntime.backend;
   const backendOptions = value(parsed, "backend-options-json");
+  const defaultBackendOptions =
+    !explicitBackend && (defaultRuntime.provider || defaultRuntime.model)
+      ? {
+          ...(defaultRuntime.provider ? { provider: defaultRuntime.provider } : {}),
+          ...(defaultRuntime.model ? { model: defaultRuntime.model } : {}),
+        }
+      : undefined;
+  const options = backendOptions
+    ? parseJson(backendOptions, "--backend-options-json must be a JSON object.")
+    : defaultBackendOptions;
   return {
-    backend: backendOptions
+    backend: options
       ? {
           name: backend,
-          options: parseJson(backendOptions, "--backend-options-json must be a JSON object."),
+          options,
         }
       : backend,
     toolProfiles: {
@@ -675,6 +724,84 @@ async function daemonSpawnSpec(packageCwd: string, addr: string): Promise<Daemon
   };
 }
 
+function webUISpawnSpec(packageCwd: string, port: string): DaemonSpawnSpec {
+  return {
+    command: "go",
+    args: ["run", "./cmd/sikong", "ui", "--no-build", "--port", port],
+    cwd: packageCwd,
+    env: { SIKONG_CLIENT_API_PORT: port },
+  };
+}
+
+async function ensureWebUI(
+  parsed: ParsedArgs,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
+  packageCwd: string,
+  spawn: DaemonSpawner,
+  waitOptions: { timeoutMs: number; intervalMs: number },
+): Promise<CommandResult<Record<string, unknown>>> {
+  const port = webUIPort(parsed, env);
+  const baseUrl = webUIBaseUrl(port);
+  const webFetch = options.webFetch ?? fetch;
+  const existing = await tryWebHealth(baseUrl, webFetch);
+  if (existing.ok) {
+    return ok(webResultFields(port, undefined, existing.health, true));
+  }
+
+  let spawned: DaemonSpawnResult;
+  try {
+    spawned = await spawn(webUISpawnSpec(packageCwd, port));
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: "daemon_error",
+        message: err instanceof Error ? err.message : String(err),
+        details: { webUrl: baseUrl },
+      },
+    };
+  }
+  const waited = await waitForWebHealth(baseUrl, webFetch, waitOptions);
+  if (!waited.ok) {
+    return {
+      ok: false,
+      error: {
+        code: "daemon_error",
+        message: "Web UI did not become healthy before timeout.",
+        details: { webUrl: baseUrl, ...(spawned.pid !== undefined ? { pid: spawned.pid } : {}) },
+      },
+    };
+  }
+  return ok(webResultFields(port, spawned, waited.health, false));
+}
+
+function webUIPort(parsed: ParsedArgs, env: NodeJS.ProcessEnv): string {
+  return (
+    value(parsed, "ui-port") ?? value(parsed, "web-port") ?? env.SIKONG_CLIENT_API_PORT ?? "8776"
+  );
+}
+
+function webUIBaseUrl(port: string): string {
+  return `http://127.0.0.1:${port}`;
+}
+
+function webResultFields(
+  port: string,
+  spawned: DaemonSpawnResult | undefined,
+  health: { ok: boolean },
+  alreadyRunning: boolean,
+): Record<string, unknown> {
+  return {
+    started: !alreadyRunning,
+    alreadyRunning,
+    port,
+    url: webUIBaseUrl(port),
+    health,
+    ...(spawned?.pid !== undefined ? { pid: spawned.pid } : {}),
+  };
+}
+
 async function buildDaemonBinary(packageCwd: string, outputPath: string): Promise<void> {
   await mkdir(join(packageCwd, "dist"), { recursive: true });
   const proc = Bun.spawn(["go", "build", "-o", outputPath, "./cmd/sikongd"], {
@@ -724,6 +851,20 @@ async function tryDaemonHealth(
   }
 }
 
+async function tryWebHealth(
+  baseUrl: string,
+  fetcher: DaemonProcessFetch,
+): Promise<{ ok: true; health: { ok: boolean } } | { ok: false }> {
+  try {
+    const response = await fetcher(`${baseUrl}/api/health`);
+    if (!response.ok) return { ok: false };
+    const health = (await response.json()) as { ok?: boolean };
+    return health.ok === true ? { ok: true, health: { ok: true } } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
+}
+
 async function waitForDaemonHealth(
   client: DaemonProcessClient,
   options: { timeoutMs: number; intervalMs: number },
@@ -731,6 +872,21 @@ async function waitForDaemonHealth(
   const deadline = Date.now() + options.timeoutMs;
   do {
     const health = await tryDaemonHealth(client);
+    if (health.ok) return health;
+    if (options.timeoutMs === 0) break;
+    await sleep(Math.min(options.intervalMs, Math.max(1, deadline - Date.now())));
+  } while (Date.now() <= deadline);
+  return { ok: false };
+}
+
+async function waitForWebHealth(
+  baseUrl: string,
+  fetcher: DaemonProcessFetch,
+  options: { timeoutMs: number; intervalMs: number },
+): Promise<{ ok: true; health: { ok: boolean } } | { ok: false }> {
+  const deadline = Date.now() + options.timeoutMs;
+  do {
+    const health = await tryWebHealth(baseUrl, fetcher);
     if (health.ok) return health;
     if (options.timeoutMs === 0) break;
     await sleep(Math.min(options.intervalMs, Math.max(1, deadline - Date.now())));
@@ -902,7 +1058,8 @@ Usage:
   sikong task accept <taskId> --workspace <workspaceId> --report <text>
   sikong task reject <taskId> --workspace <workspaceId> --report <text>
   sikong task cancel <taskId> --workspace <workspaceId> [--daemon <url>]
-  sikong daemon start [--daemon <url>]
+  sikong task reconcile <taskId> --workspace <workspaceId>
+  sikong daemon start [--daemon <url>] [--ui|--web] [--ui-port <port>]
   sikong daemon status [--daemon <url>]
   sikong daemon stop [--daemon <url>]
   sikong inspect summary <taskId> --workspace <workspaceId>

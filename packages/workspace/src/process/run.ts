@@ -17,13 +17,7 @@ export async function runProcess(
   const controller = new AbortController();
   let timedOut = false;
   let timeout: ReturnType<typeof setTimeout> | undefined;
-
-  if (spec.timeoutMs !== undefined) {
-    timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, spec.timeoutMs);
-  }
+  let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
 
   const proc = Bun.spawn([spec.command, ...(spec.args ?? [])], {
     cwd: spec.cwd,
@@ -34,8 +28,18 @@ export async function runProcess(
     stdin: spec.stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    detached: true,
     signal: controller.signal,
   });
+
+  if (spec.timeoutMs !== undefined) {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      terminateProcessGroup(proc.pid, "SIGTERM");
+      controller.abort();
+      forceKillTimeout = setTimeout(() => terminateProcessGroup(proc.pid, "SIGKILL"), 1_500);
+    }, spec.timeoutMs);
+  }
 
   if (spec.stdin !== undefined && proc.stdin) {
     await proc.stdin.write(spec.stdin);
@@ -51,6 +55,7 @@ export async function runProcess(
     if (!timedOut) throw err;
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (forceKillTimeout) clearTimeout(forceKillTimeout);
   }
 
   const finishedAt = now().toISOString();
@@ -81,6 +86,21 @@ export function validateProcessRunSpec(spec: ProcessRunSpec): void {
   if (!spec.command.trim()) throw new Error("process command must be non-empty");
   if (spec.timeoutMs !== undefined && spec.timeoutMs <= 0) {
     throw new Error("process timeoutMs must be positive");
+  }
+}
+
+function terminateProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
+  if (!pid) return;
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch {
+    // Fall back to the direct child when the platform does not expose the process group.
+  }
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // The process may have exited between timeout scheduling and termination.
   }
 }
 

@@ -1,4 +1,4 @@
-import type { ClientState, TurnResponse } from "./types";
+import type { ClientMessage, ClientState, SikongSettings, TurnResponse } from "./types";
 
 const API_BASE = import.meta.env.VITE_SIKONG_API_BASE_URL ?? "";
 
@@ -24,6 +24,37 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export async function getClientState(workspaceId?: string): Promise<ClientState> {
   const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
   return await request<ClientState>(`/api/state${query}`);
+}
+
+export async function updateSettings(settings: SikongSettings): Promise<SikongSettings> {
+  return await request<SikongSettings>("/api/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function getTranscript(): Promise<ClientMessage[]> {
+  return await request<ClientMessage[]>("/api/transcript");
+}
+
+export async function submitPlanDecision(input: {
+  workspaceId: string;
+  taskId: string;
+  planId: string;
+  version: number;
+  decision: "accept" | "reject";
+}): Promise<unknown> {
+  return await request<unknown>("/api/tasks/plan-decision", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function driveTask(input: { workspaceId: string; taskId: string }): Promise<unknown> {
+  return await request<unknown>("/api/tasks/drive", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function runTurn(input: {

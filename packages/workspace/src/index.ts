@@ -7,3 +7,4 @@ export * from "./runtime";
 export * from "./orchestration";
 export * from "./tools";
 export * from "./client-agent";
+export * from "./settings";

@@ -74,6 +74,21 @@ export interface ClientState {
   taskCards: TaskCard[];
   preferences: WorkspacePreference[];
   workLog: ClientWorkLogEntry[];
+  transcript?: ClientMessage[];
+  settings: SikongSettings;
+}
+
+export type DefaultAgentRuntimeKey = "clientAgent" | "lead" | "worker";
+
+export interface DefaultAgentRuntime {
+  backend: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface SikongSettings {
+  version: 1;
+  defaults: Record<DefaultAgentRuntimeKey, DefaultAgentRuntime>;
 }
 
 export type ClientMessageRole = "user" | "assistant" | "system";
@@ -82,6 +97,7 @@ export interface ClientMessage {
   id: string;
   role: ClientMessageRole;
   createdAt: string;
+  pending?: boolean;
   parts: MessagePart[];
 }
 

@@ -4,6 +4,7 @@ export {
   type DaemonProcessClientOptions,
   type DaemonProcessFetch,
 } from "./client";
+export { LocalProcessExecutionClient } from "./local-client";
 export { runProcess, validateProcessRunSpec, type RunProcessOptions } from "./run";
 export type {
   ProcessRunResult,

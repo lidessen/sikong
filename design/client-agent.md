@@ -21,6 +21,20 @@ Human
 The CLI is for external agents. The UI-embedded `Client Agent` should use typed
 tools instead of shelling out to the CLI.
 
+The client UI exposes Settings as a secondary context view for data-dir-level
+runtime defaults:
+
+- Client Agent backend/provider/model;
+- Task Lead backend/provider/model;
+- Worker backend/provider/model.
+
+These settings are operator defaults, not chat memory and not workspace
+preferences. Updating them writes `config.yaml` under the Sikong data dir.
+The settings entry stays out of the main chat surface and out of the Context
+inspector. On desktop, expose it as a low-priority sidebar footer action that
+opens a dedicated settings dialog. Context remains for workspace/task/log
+inspection only, so the continuous conversation remains the primary UI.
+
 ## Role Names
 
 Use these names consistently:
@@ -34,6 +48,19 @@ Use these names consistently:
 | `Worker`         | Sikong's internal stage execution worker.                    |
 | `Reviewer`       | Sikong's internal stage or final review worker.              |
 | `Human Operator` | A person supervising, debugging, or steering through the UI. |
+
+## Task Naming
+
+Use `Work Item` in user-facing client UI for the durable coordination object
+created inside a workspace. It is the thing the user asks Sikong to complete.
+
+Use `Worker Run` for one concrete execution by a worker through
+`agent-loop.runTask`.
+
+The TypeScript command/model layer may keep established names such as
+`createTask`, `TaskProjection`, `TaskCompactView`, and `taskId` until a broader
+API migration is intentional. Do not introduce a second low-level model name
+only for presentation copy.
 
 ## Client Interaction Model
 
@@ -68,7 +95,7 @@ type ClientMessage = {
 
 type MessagePart =
   | { type: "text"; text: string }
-  | { type: "task-card"; taskId: string }
+  | { type: "task-card"; taskId: string } // rendered as a Work Item card
   | { type: "work-log-summary"; entries: ClientWorkLogEntry[] }
   | { type: "ui"; spec: SikongUISpec };
 ```
@@ -181,11 +208,34 @@ transcript into memory.
 
 ### Task Event Log
 
-The task event log is detailed Sikong task telemetry. It is used for inspect
-views, task cards, reviews, summaries, and debugging.
+The task event log is detailed Sikong work-item telemetry. It is used for
+inspect views, work-item cards, reviews, summaries, and debugging.
 
 It does not automatically become `Client Agent` context. Summaries may be
 written to the client work log after terminal or action-required task states.
+
+## Visual Direction
+
+The client UI should feel like an operating surface for agent work, closer to a
+modern editor shell than a marketing product or a generic chat app.
+
+Use the refreshed VS Code default themes as a reference point: neutral light and
+dark foundations, low visual noise, subtle panels, crisp dividers, restrained
+selection states, and enough contrast to keep long-running work readable. The
+intent is not to clone VS Code, but to borrow the editor-like discipline: dense
+when useful, calm by default, and predictable under repeated use.
+
+Practical implications:
+
+- the chat/activity surface stays primary on mobile and desktop;
+- sidebars and inspectors should be quiet secondary surfaces, not competing
+  dashboards;
+- hierarchy should come from spacing, typography, and subtle contrast rather
+  than saturated color;
+- use cards only for real grouped artifacts, repeated task items, details, or
+  generated UI parts;
+- avoid decorative gradients, oversized hero treatments, and marketing-style
+  composition.
 
 ## Workspace Preferences
 
@@ -262,19 +312,19 @@ cancel semantics should stay separate from final task acceptance/rejection.
 
 ### Monitor
 
-The current client-agent loop ends or moves on. The UI keeps task cards updated,
-and terminal summaries may be proposed for the client work log.
+The current client-agent loop ends or moves on. The UI keeps work-item cards
+updated, and terminal summaries may be proposed for the client work log.
 
 Use this when the task can continue in the background.
 
 ## Boundaries
 
-The `Client Agent` may create and steer Sikong tasks, but it should not mutate
-low-level task events, manually advance stages, or write worker-run terminal
-records.
+The `Client Agent` may create and steer Sikong work items, but it should not
+mutate low-level task events, manually advance stages, or write worker-run
+terminal records.
 
 Sikong owns the internal `Task Lead`, planner, worker, reviewer, event reducer,
 and runtime execution.
 
 The client owns transcript rendering, client work-log curation, workspace
-switching UX, and mapping tool results into visible task cards.
+switching UX, and mapping tool results into visible work-item cards.

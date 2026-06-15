@@ -6,6 +6,7 @@ import { worktreeDir } from "../data-dir";
 import { runCli } from "./index";
 import { getTask, recordRuntimeProcessStarted, submitPlan, type CommandContext } from "../commands";
 import type { OrchestrationProcessExecutionClient } from "../orchestration";
+import { FileSettingsStore } from "../settings";
 
 const tmp = () => mkdtemp(join(tmpdir(), "sikong-cli-"));
 
@@ -503,6 +504,71 @@ describe("workspace cli adapter", () => {
     }
   });
 
+  test("uses settings worker runtime defaults for task drive", async () => {
+    const dir = await tmp();
+    try {
+      await runCli([
+        "--data-dir",
+        dir,
+        "workspace",
+        "create",
+        "--id",
+        "sikong",
+        "--name",
+        "Sikong",
+      ]);
+      await new FileSettingsStore(dir).write({
+        version: 1,
+        defaults: {
+          clientAgent: { backend: "codex" },
+          lead: { backend: "codex" },
+          worker: { backend: "codex", provider: "openai", model: "gpt-5.1-codex" },
+        },
+      });
+      const task = json(
+        (
+          await runCli([
+            "--data-dir",
+            dir,
+            "--workspace",
+            "sikong",
+            "task",
+            "create",
+            "Drive with settings runtime.",
+          ])
+        ).stdout,
+      ) as { data: { taskId: string } };
+      const client = planningProcessClient();
+
+      await runCli(
+        [
+          "--data-dir",
+          dir,
+          "--workspace",
+          "sikong",
+          "task",
+          "drive",
+          task.data.taskId,
+          "--max-actions",
+          "1",
+        ],
+        process.env,
+        { processClient: client, packageCwd: join(import.meta.dir, "../..") },
+      );
+
+      expect(client.requestJson).toMatchObject({
+        runtimeAssembly: {
+          backend: {
+            name: "codex",
+            options: { provider: "openai", model: "gpt-5.1-codex" },
+          },
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("checks daemon status through the health endpoint", async () => {
     const requests: string[] = [];
     const result = await runCli(["daemon", "status", "--daemon", "127.0.0.1:9876"], process.env, {
@@ -596,6 +662,99 @@ describe("workspace cli adapter", () => {
     }
   });
 
+  test("starts daemon with a web UI process when requested", async () => {
+    const dir = await tmp();
+    try {
+      const spawned: unknown[] = [];
+      let healthCalls = 0;
+      let webHealthCalls = 0;
+
+      const result = await runCli(
+        [
+          "daemon",
+          "start",
+          "--daemon",
+          "127.0.0.1:9876",
+          "--package-cwd",
+          dir,
+          "--timeout-ms",
+          "200",
+          "--interval-ms",
+          "1",
+          "--ui",
+          "--ui-port",
+          "8788",
+        ],
+        process.env,
+        {
+          daemonFetch: async (input) => {
+            if (input.endsWith("/health")) {
+              healthCalls += 1;
+              return healthCalls === 1
+                ? Response.json(
+                    { error: { code: "not_running", message: "not running" } },
+                    { status: 503 },
+                  )
+                : Response.json({ ok: true });
+            }
+            return Response.json(
+              { error: { code: "not_found", message: "not found" } },
+              { status: 404 },
+            );
+          },
+          daemonSpawner: async (spec) => {
+            spawned.push(spec);
+            return { pid: spawned.length === 1 ? 12345 : 12346 };
+          },
+          webFetch: async (input) => {
+            expect(input).toBe("http://127.0.0.1:8788/api/health");
+            webHealthCalls += 1;
+            return webHealthCalls === 1
+              ? Response.json(
+                  { error: { code: "not_running", message: "not running" } },
+                  { status: 503 },
+                )
+              : Response.json({ ok: true });
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(json(result.stdout)).toMatchObject({
+        ok: true,
+        data: {
+          baseUrl: "http://127.0.0.1:9876",
+          started: true,
+          pid: 12345,
+          web: {
+            started: true,
+            alreadyRunning: false,
+            port: "8788",
+            url: "http://127.0.0.1:8788",
+            pid: 12346,
+            health: { ok: true },
+          },
+        },
+      });
+      expect(spawned).toEqual([
+        {
+          command: "go",
+          args: ["run", "./cmd/sikongd"],
+          cwd: dir,
+          env: { SIKONG_DAEMON_ADDR: "127.0.0.1:9876" },
+        },
+        {
+          command: "go",
+          args: ["run", "./cmd/sikong", "ui", "--no-build", "--port", "8788"],
+          cwd: dir,
+          env: { SIKONG_CLIENT_API_PORT: "8788" },
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("does not spawn daemon when it is already healthy", async () => {
     const spawned: unknown[] = [];
     const result = await runCli(["daemon", "start", "--daemon", "127.0.0.1:9876"], process.env, {
@@ -620,6 +779,75 @@ describe("workspace cli adapter", () => {
       },
     });
     expect(spawned).toEqual([]);
+  });
+
+  test("starts web UI without respawning daemon when daemon is already healthy", async () => {
+    const dir = await tmp();
+    try {
+      const spawned: unknown[] = [];
+      let webHealthCalls = 0;
+      const result = await runCli(
+        [
+          "daemon",
+          "start",
+          "--daemon",
+          "127.0.0.1:9876",
+          "--package-cwd",
+          dir,
+          "--web",
+          "--web-port",
+          "8789",
+        ],
+        process.env,
+        {
+          daemonFetch: async (input) => {
+            expect(input).toBe("http://127.0.0.1:9876/health");
+            return Response.json({ ok: true });
+          },
+          daemonSpawner: async (spec) => {
+            spawned.push(spec);
+            return { pid: 22334 };
+          },
+          webFetch: async (input) => {
+            expect(input).toBe("http://127.0.0.1:8789/api/health");
+            webHealthCalls += 1;
+            return webHealthCalls === 1
+              ? Response.json(
+                  { error: { code: "not_running", message: "not running" } },
+                  { status: 503 },
+                )
+              : Response.json({ ok: true });
+          },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(json(result.stdout)).toMatchObject({
+        ok: true,
+        data: {
+          started: false,
+          alreadyRunning: true,
+          web: {
+            started: true,
+            alreadyRunning: false,
+            port: "8789",
+            url: "http://127.0.0.1:8789",
+            pid: 22334,
+            health: { ok: true },
+          },
+        },
+      });
+      expect(spawned).toEqual([
+        {
+          command: "go",
+          args: ["run", "./cmd/sikong", "ui", "--no-build", "--port", "8789"],
+          cwd: dir,
+          env: { SIKONG_CLIENT_API_PORT: "8789" },
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("stops daemon through the shutdown endpoint", async () => {

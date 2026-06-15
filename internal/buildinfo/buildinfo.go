@@ -1,6 +1,10 @@
 package buildinfo
 
-const version = "dev"
+var version = "dev"
+
+func Version() string {
+	return version
+}
 
 func VersionString(name string) string {
 	return name + " " + version

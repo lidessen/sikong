@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
+  failWorkerRun,
   fail,
+  getTask,
   ok,
   recordRuntimeProcessFinished,
   recordRuntimeProcessStarted,
@@ -39,12 +41,16 @@ export interface OrchestrationProcessSpecInput {
 export function createOrchestrationProcessSpec(
   input: OrchestrationProcessSpecInput,
 ): ProcessRunSpec {
+  const command = input.command ?? "bun";
+  const args = input.command
+    ? ["--spec", input.requestPath]
+    : ["./src/orchestration/runner.ts", "--spec", input.requestPath];
   return {
     runId: input.runId,
     workspaceId: input.workspaceId,
     ...(input.taskId ? { taskId: input.taskId } : {}),
-    command: input.command ?? "bun",
-    args: ["./src/orchestration/runner.ts", "--spec", input.requestPath],
+    command,
+    args,
     ...(input.cwd ? { cwd: input.cwd } : {}),
     ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     ...(input.env ? { env: input.env } : {}),
@@ -129,6 +135,17 @@ export async function executeOrchestrationActionProcess(
         ...(finished.result.exitCode !== undefined ? { exitCode: finished.result.exitCode } : {}),
       });
       if (!recorded.ok) return recorded;
+      if (finished.result.status !== "succeeded") {
+        const marked = await recordProcessActionFailure(input, {
+          workspaceId,
+          taskId,
+          runId,
+          status: finished.result.status,
+          exitCode: finished.result.exitCode,
+          stderr: finished.result.stderr,
+        });
+        if (!marked.ok) return marked;
+      }
     }
 
     if (finished.state !== "finished" || !finished.result) {
@@ -147,6 +164,48 @@ export async function executeOrchestrationActionProcess(
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+async function recordProcessActionFailure(
+  input: ExecuteOrchestrationActionProcessInput,
+  result: {
+    workspaceId: string;
+    taskId: string;
+    runId: string;
+    status: string;
+    exitCode?: number;
+    stderr?: string;
+  },
+): Promise<CommandResult<unknown>> {
+  if (input.action.type !== "start_stage_worker") return ok({});
+
+  const task = await getTask(input.ctx, {
+    workspaceId: result.workspaceId,
+    taskId: result.taskId,
+  });
+  if (!task.ok) return task;
+
+  const stageId = input.action.input.stageId ?? task.data.projection.currentStageId;
+  const run = Object.values(task.data.projection.workerRuns)
+    .filter((candidate) => candidate.status === "running" && candidate.stageId === stageId)
+    .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0];
+  if (!run) return ok({});
+
+  const detail = [
+    `Orchestration process ${result.runId} ended with ${result.status}.`,
+    result.exitCode === undefined ? undefined : `Exit code: ${result.exitCode}.`,
+    result.stderr?.trim() ? `stderr: ${result.stderr.trim()}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return await failWorkerRun(input.ctx, {
+    workspaceId: result.workspaceId,
+    taskId: result.taskId,
+    runId: run.runId,
+    summary: detail,
+    report: detail,
+  });
 }
 
 function parseRunnerOutput(

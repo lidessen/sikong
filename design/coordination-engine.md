@@ -19,10 +19,12 @@ bounded worker run through `runTask`. Sikong coordinates many such runs over
 durable task state.
 
 Workspace directories are Sikong state namespaces, not agent execution
-directories. Runtime must provide an agent cwd for each run. For git work, that
-cwd should be a workspace-owned worktree, not the resolved source repository.
-The initial task-level allocation is `workspaces/<workspaceId>/worktrees/<taskId>/`
-when a task is created with a git `repoPath`.
+directories. Runtime must provide a workspace-derived agent cwd for each run.
+The default task-level allocation is `workspaces/<workspaceId>/tasks/<taskId>/`.
+For git work, that cwd should instead be a workspace-owned worktree, not the
+resolved source repository. The git task-level allocation is
+`workspaces/<workspaceId>/worktrees/<taskId>/` when a task is created with a git
+`repoPath`.
 Runtime assembly resolves default adapter cwd and permissions from that task
 runtime cwd. AI SDK uses explicit local inspection/execution tool profiles;
 Claude Code, Codex, and Cursor should use their adapter-native sandbox and

@@ -42,6 +42,7 @@ describe("client agent tools", () => {
       "text",
     ]);
     expect(schemaRequired(requireTool(tools, "createTask").inputSchema)).toEqual(["request"]);
+    expect(tools.driveTask).toBeUndefined();
     expect(schemaRequired(requireTool(tools, "inspectTaskCompact").inputSchema)).toEqual([
       "taskId",
     ]);
