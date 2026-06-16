@@ -24,6 +24,10 @@ export interface OrchestrationProcessClient {
   startProcess(spec: ProcessRunSpec): Promise<ProcessRunSnapshot>;
 }
 
+export const DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+export const DEFAULT_ORCHESTRATION_WAIT_TIMEOUT_MS =
+  DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS + 60 * 1000;
+
 export interface OrchestrationProcessExecutionClient extends OrchestrationProcessClient {
   getProcessRun?(runId: string): Promise<ProcessRunSnapshot>;
   waitProcessRun(runId: string, options?: { timeoutMs?: number }): Promise<ProcessRunSnapshot>;

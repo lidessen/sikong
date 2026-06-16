@@ -15,6 +15,9 @@ import {
   type ClientTurnOutcomeSink,
 } from "./outcome";
 
+const DEFAULT_CLIENT_AGENT_PASS_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_CLIENT_AGENT_SETTLEMENT_TIMEOUT_MS = 2 * 60 * 1000;
+
 export interface RunClientAgentTurnInput {
   ctx: CommandContext;
   loop: AgentLoop;
@@ -96,7 +99,7 @@ export async function runClientAgentTurn(
     transcript: input.transcript,
     mode: "work",
     metadata: { surface: "sikong.client_agent", phase: "work" },
-    timeoutMs: input.passTimeoutMs ?? 60_000,
+    timeoutMs: input.passTimeoutMs ?? DEFAULT_CLIENT_AGENT_PASS_TIMEOUT_MS,
     ...(input.maxSteps !== undefined ? { maxSteps: input.maxSteps } : {}),
   });
   if (work.outcome) {
@@ -127,7 +130,7 @@ export async function runClientAgentTurn(
     transcript: input.transcript,
     mode: "settlement",
     maxSteps: input.settlementMaxSteps ?? 2,
-    timeoutMs: input.settlementPassTimeoutMs ?? 20_000,
+    timeoutMs: input.settlementPassTimeoutMs ?? DEFAULT_CLIENT_AGENT_SETTLEMENT_TIMEOUT_MS,
     metadata: { surface: "sikong.client_agent", phase: "settlement" },
   });
   const outcome = settlement.outcome ?? fallbackOutcome(work.run, settlement.run);

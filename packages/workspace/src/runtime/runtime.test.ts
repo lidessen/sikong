@@ -122,7 +122,6 @@ describe("worker run task bridge", () => {
                 result: {
                   summary: "Worker completed through runTask.",
                   report: expect.stringContaining("Gate accepted."),
-                  observationRef: { runId: result.ok ? result.data.runId : "missing", count: 5 },
                 },
               },
             },

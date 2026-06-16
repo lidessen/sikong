@@ -29,6 +29,7 @@ import {
   recommendFinalReview,
   recordRuntimeProcessFinished,
   recordRuntimeProcessStarted,
+  recordWorkerRunObservations,
   reconcileTaskRuntime,
   rejectPlan,
   removeWorkspacePreference,
@@ -86,6 +87,36 @@ async function submitSpec(context: CommandContext, taskId: string) {
     summary: "Implement the requested work.",
   });
   if (!submitted.ok) throw new Error("requirement spec submit failed");
+}
+
+async function createAcceptedTaskWithPlan(context: CommandContext): Promise<string> {
+  await createWorkspace(context, { id: "sikong", name: "Sikong" });
+  const created = await createTask(context, {
+    request: "Implement live worker activity.",
+    cwd: context.dataDir,
+  });
+  if (!created.ok) throw new Error("task create failed");
+  const taskId = created.data.taskId;
+  await submitSpec(context, taskId);
+  const submitted = await submitPlan(context, {
+    taskId,
+    stages: [
+      {
+        title: "Implement",
+        objective: "Complete the implementation.",
+        acceptance: ["Worker activity is visible."],
+      },
+    ],
+  });
+  if (!submitted.ok) throw new Error("plan submit failed");
+  const accepted = await acceptPlan(context, {
+    taskId,
+    planId: submitted.data.plan.id,
+    version: submitted.data.plan.version,
+    report: "Accepted.",
+  });
+  if (!accepted.ok) throw new Error("plan accept failed");
+  return taskId;
 }
 
 describe("workspace command handlers", () => {
@@ -881,6 +912,66 @@ describe("task command handlers", () => {
             expect.objectContaining({
               kind: "thinking",
             }),
+          ],
+        }),
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("exposes worker observations while the worker is still running", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      const taskId = await createAcceptedTaskWithPlan(context);
+      const workTarget = await planSingleWorkUnitRound(context, taskId);
+      const started = await startWorkerRun(context, {
+        taskId,
+        workerId: "worker-live",
+        ...workTarget,
+      });
+      if (!started.ok) throw new Error("worker start failed");
+
+      expect(
+        await recordWorkerRunObservations(context, {
+          taskId,
+          runId: started.data.runId,
+          observations: [
+            {
+              id: "obs_live_1",
+              kind: "thinking",
+              round: 1,
+              mode: "work",
+              at: "2026-06-14T00:00:00.000Z",
+              summary:
+                "Inspecting the active work unit and choosing the first implementation step.",
+            },
+            {
+              id: "obs_live_2",
+              kind: "tool_call",
+              round: 1,
+              mode: "work",
+              at: "2026-06-14T00:00:01.000Z",
+              summary: "read_file started.",
+              toolName: "read_file",
+              status: "started",
+              argsSummary: '{"path":"src/app.ts"}',
+            },
+          ],
+        }),
+      ).toMatchObject({ ok: true, data: { count: 2 } });
+
+      const detail = await inspectTaskDetail(context, { taskId });
+      expect(detail).toMatchObject({ ok: true });
+      if (!detail.ok) throw new Error("task detail failed");
+      expect(detail.data.detail.projection.workerRuns[started.data.runId]?.status).toBe("running");
+      expect(detail.data.detail.observations).toEqual([
+        expect.objectContaining({
+          runId: started.data.runId,
+          observations: [
+            expect.objectContaining({ kind: "thinking" }),
+            expect.objectContaining({ kind: "tool_call", toolName: "read_file" }),
           ],
         }),
       ]);

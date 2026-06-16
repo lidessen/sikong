@@ -15,7 +15,7 @@ import {
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { DetailSection, EmptyInline, FactRow, Metric } from "./task-detail-primitives";
-import { ObservationRow, RoundDetail, RuntimeRunRow, WorkerRunRow } from "./task-detail-rows";
+import { AgentActivityGroup, RoundDetail, RuntimeRunRow, WorkerRunRow } from "./task-detail-rows";
 import { formatTime, stageBadgeVariant, stageLabel, taskStageSummary } from "./task-detail-utils";
 import {
   currentOperatorLabel,
@@ -46,9 +46,11 @@ export function TaskDetailMain(props: {
   const processRunSnapshots = new Map(
     (props.detail?.processRuns ?? []).map((run) => [run.runId, run] as const),
   );
-  const observations = props.detail?.observations.flatMap((group) =>
-    group.observations.map((observation) => ({ ...observation, runId: group.runId })),
-  );
+  const observationGroups = [...(props.detail?.observations ?? [])].sort((a, b) => {
+    const lastA = a.observations.at(-1)?.at ?? "";
+    const lastB = b.observations.at(-1)?.at ?? "";
+    return lastB.localeCompare(lastA);
+  });
   const round = props.task.activeRound;
   const roundPercent = round
     ? Math.round((round.completedWorkUnits / Math.max(round.workUnits, 1)) * 100)
@@ -93,7 +95,7 @@ export function TaskDetailMain(props: {
           </Button>
         </div>
 
-        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+        <dl className="mt-3 grid grid-cols-2 gap-2 text-xs lg:grid-cols-4">
           <Metric icon={<Bot />} label="Owner" value={currentOperatorLabel(props.task)} />
           <Metric
             icon={<Clock3 />}
@@ -152,6 +154,23 @@ export function TaskDetailMain(props: {
 
       <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-3">
+          <DetailSection title="Agent activity" icon={<Wrench />} count={observationGroups.length}>
+            {observationGroups.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                {observationGroups.map((group) => (
+                  <AgentActivityGroup
+                    key={group.runId}
+                    group={group}
+                    worker={workers.find((worker) => worker.runId === group.runId)}
+                    rounds={rounds}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyInline text="No live thinking, text, or tool activity has been recorded yet." />
+            )}
+          </DetailSection>
+
           <DetailSection title="Plan" icon={<FileText />} count={stages.length}>
             {stages.length > 0 ? (
               <div className="flex flex-col divide-y divide-divider">
@@ -210,37 +229,31 @@ export function TaskDetailMain(props: {
         </div>
 
         <div className="flex min-w-0 flex-col gap-3">
-          <DetailSection title="Observations" icon={<Wrench />} count={observations?.length ?? 0}>
-            {observations && observations.length > 0 ? (
-              <div className="flex max-h-[520px] flex-col gap-1.5 overflow-auto pr-1">
-                {observations.map((observation) => (
-                  <ObservationRow
-                    key={`${observation.runId}-${observation.id}`}
-                    observation={observation}
-                  />
-                ))}
-              </div>
-            ) : (
-              <EmptyInline text="No persisted thinking or tool-call observations yet." />
-            )}
-          </DetailSection>
-
-          <DetailSection title="Runtime" icon={<PlayCircle />} count={runtimeRuns.length}>
+          <DetailSection
+            title="Runtime diagnostics"
+            icon={<PlayCircle />}
+            count={runtimeRuns.length}
+          >
             {props.detail?.processRunError ? (
               <p className="mb-2 rounded-[var(--radius-md)] border border-err/30 bg-err/10 p-2 text-[12px] text-err">
                 {props.detail.processRunError}
               </p>
             ) : null}
             {runtimeRuns.length > 0 ? (
-              <div className="flex flex-col gap-1.5">
-                {runtimeRuns.map((processRun) => (
-                  <RuntimeRunRow
-                    key={processRun.processRunId}
-                    processRun={processRun}
-                    snapshot={processRunSnapshots.get(processRun.processRunId)}
-                  />
-                ))}
-              </div>
+              <details className="group">
+                <summary className="cursor-pointer rounded-[var(--radius-md)] border bg-background px-2.5 py-2 text-[12px] text-muted-foreground marker:text-muted-foreground hover:text-foreground">
+                  Show process snapshots, commands, stdout/stderr, and timeout diagnostics
+                </summary>
+                <div className="mt-2 flex flex-col gap-1.5">
+                  {runtimeRuns.map((processRun) => (
+                    <RuntimeRunRow
+                      key={processRun.processRunId}
+                      processRun={processRun}
+                      snapshot={processRunSnapshots.get(processRun.processRunId)}
+                    />
+                  ))}
+                </div>
+              </details>
             ) : (
               <EmptyInline text="No runtime process records." />
             )}

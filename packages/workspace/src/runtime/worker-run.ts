@@ -13,6 +13,7 @@ import {
   completeWorkerRun,
   exceedWorkerRunBudget,
   failWorkerRun,
+  recordWorkerRunObservations,
   startWorkerRun,
   type CommandContext,
   type CommandResult,
@@ -75,6 +76,24 @@ export async function runWorkerTask(
 
   let taskResult: AgentTaskResult;
   const observations = new WorkerObservationCollector();
+  let observationWrite = Promise.resolve();
+  const flushObservations = () => {
+    const pending = observations.drain();
+    if (pending.length === 0) return;
+    observationWrite = observationWrite
+      .then(() =>
+        recordWorkerRunObservations(ctx, {
+          workspaceId: input.workspaceId,
+          taskId: input.taskId,
+          runId,
+          observations: pending,
+        }),
+      )
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+  };
   const existingHooks = input.taskInput.hooks;
   try {
     taskResult = await input.runTask({
@@ -86,14 +105,17 @@ export async function runWorkerTask(
         ...existingHooks,
         async onRoundStart(round, prompt, mode) {
           observations.roundStart(round, mode, prompt);
+          flushObservations();
           await existingHooks?.onRoundStart?.(round, prompt, mode);
         },
         onEvent(ev, round, mode) {
           observations.event(ev, round, mode);
+          flushObservations();
           existingHooks?.onEvent?.(ev, round, mode);
         },
         async onRoundEnd(round, end) {
           observations.roundEnd(round, end.mode, end.report);
+          flushObservations();
           await existingHooks?.onRoundEnd?.(round, end);
         },
       },
@@ -125,9 +147,10 @@ export async function runWorkerTask(
       projection: failed.data.projection,
     });
   }
+  flushObservations();
+  await observationWrite;
 
   const terminal = terminalInput(input, runId, taskResult);
-  if (observations.items.length > 0) terminal.observations = observations.items;
   const recorded =
     taskResult.status === "completed"
       ? await completeWorkerRun(ctx, terminal)
@@ -293,6 +316,7 @@ function terminalInput(
 class WorkerObservationCollector {
   readonly items: WorkerRunObservation[] = [];
   private sequence = 0;
+  private flushed = 0;
 
   roundStart(round: number, mode: TaskRoundMode, prompt: string): void {
     this.push({
@@ -418,6 +442,12 @@ class WorkerObservationCollector {
       at: new Date().toISOString(),
       ...compactObservation(input),
     });
+  }
+
+  drain(): WorkerRunObservation[] {
+    const pending = this.items.slice(this.flushed);
+    this.flushed = this.items.length;
+    return pending;
   }
 }
 

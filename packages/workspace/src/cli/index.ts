@@ -46,6 +46,8 @@ import type { TaskProjection } from "../coordination";
 import { DaemonProcessClient, DaemonProcessClientError, type DaemonProcessFetch } from "../process";
 import { FileSettingsStore, type DefaultAgentRuntime } from "../settings";
 import {
+  DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS,
+  DEFAULT_ORCHESTRATION_WAIT_TIMEOUT_MS,
   executeOrchestrationAction,
   executeOrchestrationActionProcess,
   runOrchestrationUntilWait,
@@ -575,6 +577,16 @@ async function driveTask(
     options.packageCwd ??
     join(import.meta.dir, "../..");
   const runnerCommand = value(parsed, "command") ?? env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
+  const processTimeoutMs =
+    optionalNumber(
+      value(parsed, "process-timeout-ms"),
+      "--process-timeout-ms must be a positive integer.",
+    ) ?? DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS;
+  const waitTimeoutMs =
+    optionalNumber(
+      value(parsed, "wait-timeout-ms"),
+      "--wait-timeout-ms must be a positive integer.",
+    ) ?? DEFAULT_ORCHESTRATION_WAIT_TIMEOUT_MS;
   const driven = await runOrchestrationUntilWait({
     ctx,
     taskId,
@@ -600,14 +612,8 @@ async function driveTask(
         }),
         packageCwd,
         command: runnerCommand,
-        timeoutMs: optionalNumber(
-          value(parsed, "process-timeout-ms"),
-          "--process-timeout-ms must be a positive integer.",
-        ),
-        waitTimeoutMs: optionalNumber(
-          value(parsed, "wait-timeout-ms"),
-          "--wait-timeout-ms must be a positive integer.",
-        ),
+        timeoutMs: processTimeoutMs,
+        waitTimeoutMs,
       });
     },
   });
@@ -633,20 +639,24 @@ async function tickTaskCommand(
     options.packageCwd ??
     join(import.meta.dir, "../..");
   const runnerCommand = value(parsed, "command") ?? env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
+  const processTimeoutMs =
+    optionalNumber(
+      value(parsed, "process-timeout-ms"),
+      "--process-timeout-ms must be a positive integer.",
+    ) ?? DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS;
+  const waitTimeoutMs =
+    optionalNumber(
+      value(parsed, "wait-timeout-ms"),
+      "--wait-timeout-ms must be a positive integer.",
+    ) ?? DEFAULT_ORCHESTRATION_WAIT_TIMEOUT_MS;
   return (await tickTask(ctx, {
     taskId,
     workspaceId: value(parsed, "workspace"),
     processClient: client,
     packageCwd,
     command: runnerCommand,
-    processTimeoutMs: optionalNumber(
-      value(parsed, "process-timeout-ms"),
-      "--process-timeout-ms must be a positive integer.",
-    ),
-    waitTimeoutMs: optionalNumber(
-      value(parsed, "wait-timeout-ms"),
-      "--wait-timeout-ms must be a positive integer.",
-    ),
+    processTimeoutMs,
+    waitTimeoutMs,
   })) as CommandResult<CliCommandData>;
 }
 

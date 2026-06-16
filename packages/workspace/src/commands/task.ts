@@ -152,6 +152,11 @@ export interface RecordRuntimeProcessFinishedInput extends TaskIdInput {
   exitCode?: number;
 }
 
+export interface RecordWorkerRunObservationsInput extends TaskIdInput {
+  runId: string;
+  observations: NonNullable<TaskRunResult["observations"]>;
+}
+
 export interface ReconcileTaskRuntimeInput extends TaskIdInput {
   processSnapshots?: ProcessRunSnapshot[];
 }
@@ -1012,11 +1017,13 @@ async function collectWorkerObservations(
   for (const run of Object.values(projection.workerRuns).sort((a, b) =>
     String(a.startedAt ?? a.runId).localeCompare(String(b.startedAt ?? b.runId)),
   )) {
-    const observations =
-      run.result?.observations ??
-      (run.result?.observationRef
-        ? await readWorkerObservations(ctx, projection.workspaceId, projection.taskId, run.runId)
-        : []);
+    const persisted = await readWorkerObservations(
+      ctx,
+      projection.workspaceId,
+      projection.taskId,
+      run.runId,
+    );
+    const observations = run.result?.observations ?? persisted;
     if (observations.length === 0) continue;
     groups.push({
       runId: run.runId,
@@ -1397,6 +1404,33 @@ async function finishWorkerRun(
     stageId: run.stageId,
     result: resultWithRef,
   });
+}
+
+export async function recordWorkerRunObservations(
+  ctx: CommandContext,
+  input: RecordWorkerRunObservationsInput,
+): Promise<CommandResult<{ count: number }>> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  const run = projection.workerRuns[input.runId];
+  if (!run) {
+    return fail("invalid_state", "Worker run does not exist.", {
+      taskId: input.taskId,
+      runId: input.runId,
+    });
+  }
+
+  const observations = normalizeWorkerObservations(input.observations);
+  if (observations.length === 0) return ok({ count: 0 });
+  await writeWorkerObservations(
+    ctx,
+    projection.workspaceId,
+    projection.taskId,
+    input.runId,
+    observations,
+  );
+  return ok({ count: observations.length });
 }
 
 function normalizeTaskRunResult(

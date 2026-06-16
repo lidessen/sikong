@@ -6,6 +6,8 @@ import { LocalProcessExecutionClient, type ProcessRunSnapshot } from "../process
 import { defaultRuntimeAssembly, type RuntimeAssemblyConfig } from "../runtime";
 import { reconcileTaskRuntime } from "./task";
 import {
+  DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS,
+  DEFAULT_ORCHESTRATION_WAIT_TIMEOUT_MS,
   executeOrchestrationAction,
   executeOrchestrationActionProcess,
   planNextOrchestrationAction,
@@ -65,6 +67,8 @@ export async function driveTask(
   const packageCwd =
     input.packageCwd ?? process.env.SIKONG_PACKAGE_CWD ?? join(import.meta.dir, "../..");
   const command = input.command ?? process.env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
+  const processTimeoutMs = input.processTimeoutMs ?? DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS;
+  const waitTimeoutMs = input.waitTimeoutMs ?? DEFAULT_ORCHESTRATION_WAIT_TIMEOUT_MS;
 
   try {
     const reconciled = await reconcileWithProcessSnapshots(ctx, {
@@ -95,8 +99,8 @@ export async function driveTask(
           }),
           packageCwd,
           command,
-          timeoutMs: input.processTimeoutMs,
-          waitTimeoutMs: input.waitTimeoutMs,
+          timeoutMs: processTimeoutMs,
+          waitTimeoutMs,
         });
       },
     });
@@ -123,6 +127,8 @@ export async function tickTask(
   const packageCwd =
     input.packageCwd ?? process.env.SIKONG_PACKAGE_CWD ?? join(import.meta.dir, "../..");
   const command = input.command ?? process.env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
+  const processTimeoutMs = input.processTimeoutMs ?? DEFAULT_ORCHESTRATION_PROCESS_TIMEOUT_MS;
+  const waitTimeoutMs = input.waitTimeoutMs ?? DEFAULT_ORCHESTRATION_WAIT_TIMEOUT_MS;
 
   try {
     const reconciled = await reconcileWithProcessSnapshots(ctx, {
@@ -147,8 +153,8 @@ export async function tickTask(
           }),
           packageCwd,
           command,
-          timeoutMs: input.processTimeoutMs,
-          waitTimeoutMs: input.waitTimeoutMs,
+          timeoutMs: processTimeoutMs,
+          waitTimeoutMs,
         });
     if (!executed.ok) return executed;
     const latest = await reconcileWithProcessSnapshots(ctx, {

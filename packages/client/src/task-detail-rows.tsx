@@ -14,10 +14,13 @@ import {
 import type {
   ProcessRunSnapshotView,
   RuntimeProcessRunView,
+  TaskDetailView,
   TaskStageRoundView,
   WorkerRunObservation,
   WorkerRunView,
 } from "./types";
+
+type ObservationGroup = TaskDetailView["observations"][number];
 
 export function RoundDetail(props: { round: TaskStageRoundView; workers: WorkerRunView[] }) {
   const workers = props.workers.filter((worker) => worker.roundId === props.round.id);
@@ -130,6 +133,83 @@ export function ObservationRow(props: { observation: WorkerRunObservation & { ru
           result {props.observation.resultSummary}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+export function AgentActivityGroup(props: {
+  group: ObservationGroup;
+  worker?: WorkerRunView;
+  rounds: TaskStageRoundView[];
+}) {
+  const round = props.rounds.find((item) => item.id === props.group.roundId);
+  const workUnit = round?.workUnits.find((item) => item.id === props.group.workUnitId);
+  const recent = [...props.group.observations]
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+    .slice(0, 8);
+  const last = recent[0];
+
+  return (
+    <div className="rounded-[var(--radius-md)] border bg-background p-2.5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="mb-1 flex flex-wrap items-center gap-1.5">
+            <Badge variant={props.worker ? workerStatusVariant(props.worker.status) : "outline"}>
+              {props.worker?.status ?? "observed"}
+            </Badge>
+            {last ? (
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {formatTime(last.at)}
+              </span>
+            ) : null}
+          </div>
+          <p className="truncate text-[13px] font-medium">
+            {workUnit?.title ?? props.worker?.objective ?? "Worker activity"}
+          </p>
+          <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+            {workUnit?.objective ?? props.worker?.objective ?? props.group.runId}
+          </p>
+        </div>
+        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+          {props.group.runId.slice(0, 18)}
+        </span>
+      </div>
+
+      <div className="mt-2.5 flex flex-col gap-1.5">
+        {recent.map((observation) => (
+          <div
+            key={observation.id}
+            className="rounded-[var(--radius-sm)] border border-border-soft bg-surface px-2 py-1.5"
+          >
+            <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Badge variant={observationVariant(observation)}>
+                  {observationLabel(observation)}
+                </Badge>
+                {observation.toolName ? (
+                  <span className="truncate font-mono text-[11px] text-muted-foreground">
+                    {observation.toolName}
+                  </span>
+                ) : null}
+              </div>
+              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                {formatTime(observation.at)}
+              </span>
+            </div>
+            <p className="text-[12px] leading-5 text-foreground/90">{observation.summary}</p>
+            {observation.argsSummary ? (
+              <p className="mt-1 line-clamp-2 font-mono text-[11px] leading-4 text-muted-foreground">
+                args {observation.argsSummary}
+              </p>
+            ) : null}
+            {observation.resultSummary ? (
+              <p className="mt-1 line-clamp-2 font-mono text-[11px] leading-4 text-muted-foreground">
+                result {observation.resultSummary}
+              </p>
+            ) : null}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
