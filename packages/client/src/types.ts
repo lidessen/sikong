@@ -447,6 +447,8 @@ export interface RuntimeBackendOption {
   label: string;
   supportsProvider: boolean;
   defaultProviderLabel: string;
+  requiresProvider?: boolean;
+  requiresModel?: boolean;
 }
 
 export interface RuntimeProviderOption {
@@ -455,9 +457,23 @@ export interface RuntimeProviderOption {
   supportedBackends: string[];
 }
 
+export interface RuntimeModelOption {
+  backend: string;
+  id: string;
+  label: string;
+  aliases?: string[];
+}
+
+export interface RuntimeModelDiscoveryError {
+  backend: string;
+  message: string;
+}
+
 export interface SikongSettingsOptions {
   backends: RuntimeBackendOption[];
   providers: RuntimeProviderOption[];
+  models?: RuntimeModelOption[];
+  modelDiscoveryErrors?: RuntimeModelDiscoveryError[];
 }
 
 export type ClientMessageRole = "user" | "assistant" | "system";

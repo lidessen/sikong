@@ -53,6 +53,12 @@ export async function getTranscript(): Promise<ClientMessage[]> {
   return await request<ClientMessage[]>("/api/transcript");
 }
 
+export async function deleteTranscriptMessage(messageId: string): Promise<ClientMessage[]> {
+  return await request<ClientMessage[]>(`/api/transcript/${encodeURIComponent(messageId)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function runTurn(input: {
   message: string;
   workspaceId?: string;

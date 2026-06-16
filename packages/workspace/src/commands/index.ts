@@ -71,18 +71,21 @@ export {
   type RecordRuntimeProcessStartedInput,
   type ReconcileTaskRuntimeInput,
   type RejectPlanInput,
-  type RunnableTaskView,
   type StageReviewInput,
   type StartWorkerRunInput,
   type CreateTaskInput,
   type InspectTaskTraceInput,
   type SubmitPlanInput,
   type SubmitRequirementSpecInput,
-  type TaskCompactNextAction,
-  type TaskCompactView,
-  type TaskDetailView,
   type TaskIdInput,
-  type TaskSummary,
-  type TaskTraceEntry,
   type WaitTaskInput,
 } from "./task";
+
+export type {
+  RunnableTaskView,
+  TaskCompactNextAction,
+  TaskCompactView,
+  TaskDetailView,
+  TaskSummary,
+  TaskTraceEntry,
+} from "./task-view";

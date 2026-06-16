@@ -33,7 +33,7 @@ import type { McpServers, PreflightResult, ToolSet } from "../core/types";
 export interface CursorAdapterOptions {
   /** Cursor API key. Falls back to `process.env.CURSOR_API_KEY`. */
   apiKey?: string;
-  /** Model id, e.g. "composer-2". Defaults to "composer-2". */
+  /** Model id. When omitted, Sikong asks Cursor to use its `default` model. */
   model?: string;
   /** Override the model's context-window size (tokens) for usage.usedRatio. */
   contextWindow?: number;
@@ -53,6 +53,12 @@ export interface CursorAdapterOptions {
   instructions?: string;
   /** When true, `preflight()` performs an online `Cursor.me` check. */
   preflightOnline?: boolean;
+}
+
+export interface CursorModelOption {
+  id: string;
+  label: string;
+  aliases?: string[];
 }
 
 /**
@@ -86,9 +92,7 @@ export class CursorAdapter implements BackendAdapter {
   private agent: SDKAgent | null = null;
   private localStore: LocalAgentStore | null = null;
 
-  constructor(private readonly opts: CursorAdapterOptions = {}) {
-    installCursorTransportErrorSuppressor();
-  }
+  constructor(private readonly opts: CursorAdapterOptions = {}) {}
 
   start(req: ResolvedRequest): BackendRun {
     const o = (req.runtimeOptions ?? {}) as CursorRuntimeOptions;
@@ -106,7 +110,7 @@ export class CursorAdapter implements BackendAdapter {
       .filter((part): part is string => Boolean(part?.trim()))
       .join("\n\n");
     const prompt = buildPrompt(req.system, req.prompt, instructions);
-    const model = o.model ?? this.opts.model;
+    const model = resolveCursorModelId(o.model ?? this.opts.model);
     const contextWindow = resolveContextWindow(model, this.opts.contextWindow);
 
     let activeRun: Run | null = null;
@@ -149,7 +153,7 @@ export class CursorAdapter implements BackendAdapter {
               }
             : {}),
           onStep: () => {
-            if (stopRequested) void activeRun?.cancel();
+            if (stopRequested) void cancelCursorRun(activeRun);
           },
         };
 
@@ -207,7 +211,7 @@ export class CursorAdapter implements BackendAdapter {
       cancel: (_reason?: string) => {
         cancelled = true;
         abort.abort();
-        void activeRun?.cancel();
+        void cancelCursorRun(activeRun);
       },
     };
   }
@@ -220,6 +224,25 @@ export class CursorAdapter implements BackendAdapter {
         reason: "Cursor SDK requires CURSOR_API_KEY.",
         missingEnv: ["CURSOR_API_KEY"],
       };
+    }
+
+    const explicitModel = this.opts.model?.trim();
+    const modelToValidate = explicitModel ? resolveCursorModelId(explicitModel) : undefined;
+    if (modelToValidate) {
+      try {
+        const models = await Cursor.models.list({ apiKey });
+        if (!cursorModelListIncludes(models, modelToValidate)) {
+          return {
+            ok: false,
+            reason: `Cursor model "${explicitModel}" is not available. Clear the model field to use Cursor default, or choose one from Cursor.models.list().`,
+          };
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
 
     if (this.opts.preflightOnline) {
@@ -277,7 +300,7 @@ export class CursorAdapter implements BackendAdapter {
 
     return {
       ...(apiKey ? { apiKey } : {}),
-      model: { id: this.opts.model ?? "composer-2" },
+      model: { id: resolveCursorModelId(this.opts.model) },
       local: {
         ...(cwd ? { cwd } : {}),
         store: this.resolveLocalStore(),
@@ -591,29 +614,45 @@ async function closeCursorAgent(agent: SDKAgent | null): Promise<void> {
   }
 }
 
-let cursorTransportSuppressorInstalled = false;
-
-function installCursorTransportErrorSuppressor(): void {
-  if (cursorTransportSuppressorInstalled) return;
-  cursorTransportSuppressorInstalled = true;
-  process.on("uncaughtException", (err) => {
-    if (isCursorTransportShutdownError(err) || isCursorExpectedCancellationError(err)) return;
-    throw err;
-  });
-  process.on("unhandledRejection", (reason) => {
-    if (isCursorTransportShutdownError(reason) || isCursorExpectedCancellationError(reason)) return;
-    throw reason;
-  });
+async function cancelCursorRun(run: Run | null): Promise<void> {
+  try {
+    await run?.cancel();
+  } catch {
+    // Cancellation is best-effort; the main run loop observes the abort signal.
+  }
 }
 
 function isCursorExpectedCancellationError(value: unknown): boolean {
   return value instanceof Error && value.message === "Cursor run cancelled";
 }
 
-function isCursorTransportShutdownError(value: unknown): boolean {
-  if (!(value instanceof Error)) return false;
-  return (
-    value.message.includes("NGHTTP2_FRAME_SIZE_ERROR") ||
-    ("code" in value && value.code === "ERR_HTTP2_STREAM_ERROR")
-  );
+export function resolveCursorModelId(model: string | undefined): string {
+  const trimmed = model?.trim();
+  if (!trimmed || trimmed === "auto") return "default";
+  return trimmed;
+}
+
+export async function discoverCursorModels(
+  options: { apiKey?: string } = {},
+): Promise<CursorModelOption[]> {
+  const apiKey = resolveApiKey({
+    providerId: "cursor",
+    explicit: options.apiKey,
+    envVars: ["CURSOR_API_KEY"],
+    required: false,
+  });
+  if (!apiKey) return [];
+  const models = await Cursor.models.list({ apiKey });
+  return models.map((model) => ({
+    id: model.id,
+    label: model.displayName || model.id,
+    ...(model.aliases?.length ? { aliases: model.aliases } : {}),
+  }));
+}
+
+function cursorModelListIncludes(
+  models: Array<{ id: string; aliases?: string[] }>,
+  modelId: string,
+): boolean {
+  return models.some((model) => model.id === modelId || model.aliases?.includes(modelId));
 }

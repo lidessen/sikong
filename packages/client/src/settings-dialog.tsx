@@ -10,6 +10,7 @@ import type {
   DefaultAgentRuntime,
   DefaultAgentRuntimeKey,
   RuntimeBackendOption,
+  RuntimeModelOption,
   RuntimeProviderOption,
   SikongSettings,
   SikongSettingsOptions,
@@ -62,6 +63,8 @@ const fallbackSettingsOptions: SikongSettingsOptions = {
       label: "AI SDK",
       supportsProvider: true,
       defaultProviderLabel: "Backend default",
+      requiresProvider: true,
+      requiresModel: true,
     },
   ],
   providers: [
@@ -215,7 +218,11 @@ function AgentDefaultFields(props: {
 }) {
   const backend = backendOption(props.options.backends, props.value.backend);
   const providerDisabled = !backend.supportsProvider;
+  const providerRequired = Boolean(backend.requiresProvider);
+  const modelRequired = Boolean(backend.requiresModel);
   const providerOptions = providersForBackend(props.options.providers, props.value.backend);
+  const modelOptions = modelsForBackend(props.options.models, props.value.backend);
+  const modelListId = `${props.role.key}-${props.value.backend}-models`;
   return (
     <div className="rounded-[var(--radius-lg)] border border-border bg-card p-3">
       <div className="grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)] lg:items-start">
@@ -264,6 +271,7 @@ function AgentDefaultFields(props: {
               className={settingsSelectClassName}
               value={providerDisabled ? "" : (props.value.provider ?? "")}
               disabled={providerDisabled}
+              required={providerRequired}
               onChange={(event) =>
                 props.onChange({ ...props.value, provider: event.currentTarget.value })
               }
@@ -281,11 +289,22 @@ function AgentDefaultFields(props: {
           <RuntimeField label="Model">
             <Input
               value={props.value.model ?? ""}
-              placeholder="default"
+              placeholder={modelRequired ? "required" : "default"}
+              required={modelRequired}
+              list={modelOptions.length > 0 ? modelListId : undefined}
               onChange={(event) =>
                 props.onChange({ ...props.value, model: event.currentTarget.value })
               }
             />
+            {modelOptions.length > 0 ? (
+              <datalist id={modelListId}>
+                {modelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.label}
+                  </option>
+                ))}
+              </datalist>
+            ) : null}
           </RuntimeField>
         </div>
       </div>
@@ -319,12 +338,19 @@ function normalizeDraftDefault(
   const provider = backendOption(options.backends, backend).supportsProvider
     ? value.provider?.trim()
     : "";
-  const model = value.model?.trim();
+  const model = normalizeModel(backend, value.model);
   return {
     backend,
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
   };
+}
+
+function normalizeModel(backend: string, model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  if (!trimmed) return undefined;
+  if (backend === "cursor" && trimmed === "auto") return "default";
+  return trimmed;
 }
 
 function backendOption(
@@ -346,4 +372,11 @@ function providersForBackend(
   backend: string,
 ): Array<RuntimeProviderOption | ""> {
   return ["", ...providers.filter((provider) => provider.supportedBackends.includes(backend))];
+}
+
+function modelsForBackend(
+  models: readonly RuntimeModelOption[] | undefined,
+  backend: string,
+): RuntimeModelOption[] {
+  return (models ?? []).filter((model) => model.backend === backend);
 }

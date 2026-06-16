@@ -5,9 +5,11 @@ import {
   CircleDot,
   CircleUserRound,
   Loader2,
+  Trash2,
 } from "lucide-react";
 import type React from "react";
 import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { MarkdownMessage } from "./markdown-message";
 import type {
@@ -41,18 +43,37 @@ export interface MessageRenderContext {
   onAction?: (action: SikongUIAction) => void;
 }
 
-export function MessageView(props: { message: ClientMessage; context: MessageRenderContext }) {
+export function MessageView(props: {
+  message: ClientMessage;
+  context: MessageRenderContext;
+  onDelete?: (messageId: string) => void;
+}) {
   return (
     <article className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
       <MessageAvatar message={props.message} />
       <div className="min-w-0">
-        <div className="mb-1.5 flex items-center gap-2">
-          <p className="text-[13px] font-medium tracking-[-0.01em]">
-            {messageLabel(props.message)}
-          </p>
-          <p className="font-mono text-[11px] text-muted-foreground tabular-nums">
-            {new Date(props.message.createdAt).toLocaleTimeString()}
-          </p>
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-[13px] font-medium tracking-[-0.01em]">
+              {messageLabel(props.message)}
+            </p>
+            <p className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
+              {new Date(props.message.createdAt).toLocaleTimeString()}
+            </p>
+          </div>
+          {props.onDelete && !props.message.pending ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-[22px] shrink-0 text-muted-foreground hover:text-destructive"
+              aria-label="Delete message"
+              title="Delete message"
+              onClick={() => props.onDelete?.(props.message.id)}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          ) : null}
         </div>
         <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] border bg-card/92 px-3 py-2.5 text-[13px] leading-5">
           {props.message.parts.map((part, index) => (

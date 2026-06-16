@@ -149,5 +149,6 @@ export type { LazyBackend } from "./executor/run-handle";
 export type { AiSdkAdapterOptions, AiSdkRuntimeOptions } from "./adapters/ai-sdk";
 export type { ClaudeAdapterOptions } from "./adapters/claude";
 export type { CodexAdapterOptions } from "./adapters/codex";
-export type { CursorAdapterOptions } from "./adapters/cursor";
+export { discoverCursorModels, resolveCursorModelId } from "./adapters/cursor";
+export type { CursorAdapterOptions, CursorModelOption } from "./adapters/cursor";
 export type { MockAdapterOptions } from "./adapters/mock";

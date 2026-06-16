@@ -322,13 +322,18 @@ function runtimeProviderOptions(
   options: Record<string, unknown>,
 ): Record<string, unknown> {
   const providerName = typeof options.provider === "string" ? options.provider.trim() : "";
+  const model =
+    typeof options.model === "string" && options.model.trim() ? options.model.trim() : undefined;
+  if (backend === "ai-sdk") {
+    if (!providerName || !model) {
+      throw new Error("ai-sdk runtime requires both provider and model.");
+    }
+  }
   if (!providerName) return options;
 
   const { provider: _providerName, ...rest } = options;
   if (backend === "cursor") return rest;
 
-  const model =
-    typeof options.model === "string" && options.model.trim() ? options.model : undefined;
   return {
     ...rest,
     provider: createRuntimeProvider(providerName, model),

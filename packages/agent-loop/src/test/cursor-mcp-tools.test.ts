@@ -1,8 +1,15 @@
 import { describe, expect, test } from "vitest";
 import { defineTool } from "../core/types";
-import { buildCursorCustomTools, handleMcpRequest } from "../adapters/cursor";
+import { buildCursorCustomTools, handleMcpRequest, resolveCursorModelId } from "../adapters/cursor";
 
 describe("cursor MCP tool bridge", () => {
+  test("normalizes empty and auto cursor model selections to default", () => {
+    expect(resolveCursorModelId(undefined)).toBe("default");
+    expect(resolveCursorModelId("")).toBe("default");
+    expect(resolveCursorModelId("auto")).toBe("default");
+    expect(resolveCursorModelId("composer-2")).toBe("composer-2");
+  });
+
   test("maps loop tools to Cursor custom tools", async () => {
     let stopReason: string | undefined;
     const customTools = buildCursorCustomTools(

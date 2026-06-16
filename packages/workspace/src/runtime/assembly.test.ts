@@ -90,7 +90,7 @@ describe("runtime assembly registry", () => {
       const module = registry.createRuntimeModule({
         backend: {
           name: "cursor",
-          options: { provider: "deepseek", model: "composer-2" },
+          options: { provider: "deepseek" },
         },
       });
 
@@ -109,7 +109,6 @@ describe("runtime assembly registry", () => {
       } satisfies OrchestrationRunnerRequest);
 
       expect(capturedOptions).toEqual({
-        model: "composer-2",
         cwd: dir,
         sandboxEnabled: false,
       });
@@ -167,6 +166,20 @@ describe("runtime assembly registry", () => {
       type: "start_stage_worker",
       input: { taskInput: { tools: { edit_file: expect.any(Object) } } },
     });
+  });
+
+  test("requires ai-sdk runtime provider and model", async () => {
+    expect(() =>
+      createDefaultRuntimeAssemblyRegistry().createRuntimeModule({
+        backend: { name: "ai-sdk", options: { provider: "deepseek" } },
+      }),
+    ).not.toThrow();
+
+    await expect(
+      createDefaultRuntimeAssemblyRegistry().createExecutionRuntime({
+        backend: { name: "ai-sdk", options: { provider: "deepseek" } },
+      }),
+    ).rejects.toThrow("ai-sdk runtime requires both provider and model.");
   });
 
   test("default protocol profiles submit durable task decisions", async () => {

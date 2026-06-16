@@ -83,11 +83,24 @@ function normalizeDefaultAgentRuntime(
   const record = raw as Record<string, unknown>;
   const backend = typeof record.backend === "string" ? record.backend.trim() : "";
   if (!backend || backend === "mock") return fallback;
-  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
-  const model = typeof record.model === "string" ? record.model.trim() : "";
+  const provider =
+    backendSupportsProvider(backend) && typeof record.provider === "string"
+      ? record.provider.trim()
+      : "";
+  const model = normalizeModel(backend, record.model);
   return {
     backend,
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
   };
+}
+
+function backendSupportsProvider(backend: string): boolean {
+  return backend !== "cursor";
+}
+
+function normalizeModel(backend: string, raw: unknown): string {
+  const model = typeof raw === "string" ? raw.trim() : "";
+  if (backend === "cursor" && model === "auto") return "default";
+  return model;
 }

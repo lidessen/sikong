@@ -1,6 +1,7 @@
 import {
   createDefaultRuntimeAssemblyRegistry,
   DaemonProcessClient,
+  discoverRuntimeSettingsOptions,
   FileClientWorkLog,
   FileSettingsStore,
   inspectTaskDetail,
@@ -9,7 +10,6 @@ import {
   listWorkspaces,
   resolveDataDir,
   runClientAgentTurn,
-  runtimeSettingsOptions,
   taskProjectionsDir,
   type ClientWorkLogEntryKind,
   type ClientTranscriptSource,
@@ -92,14 +92,21 @@ Bun.serve({
         });
       }
       if (request.method === "GET" && url.pathname === "/api/settings") {
-        return json(settingsResponse(await settingsStore.read()));
+        return json(await settingsResponse(await settingsStore.read()));
       }
       if (request.method === "GET" && url.pathname === "/api/transcript") {
         return json(await readTranscript());
       }
+      if (request.method === "DELETE" && url.pathname.startsWith("/api/transcript/")) {
+        const messageId = decodeURIComponent(url.pathname.slice("/api/transcript/".length));
+        if (!messageId) return json({ message: "messageId is required" }, 400);
+        return json(await deleteTranscriptMessage(messageId));
+      }
       if (request.method === "PUT" && url.pathname === "/api/settings") {
         return json(
-          settingsResponse(await settingsStore.write((await request.json()) as SikongSettings)),
+          await settingsResponse(
+            await settingsStore.write((await request.json()) as SikongSettings),
+          ),
         );
       }
       if (request.method === "POST" && url.pathname === "/api/work-log") {
@@ -186,6 +193,7 @@ async function runTurnWorkflow(
     },
   });
   if (!runtime.loop) throw new Error("client agent backend did not create an agent loop");
+  await assertRuntimePreflight(runtime.loop);
 
   await progress({
     phaseId: "agent",
@@ -235,6 +243,20 @@ async function runTurnWorkflow(
     message: assistantMessage,
     schedulerWake,
   };
+}
+
+async function assertRuntimePreflight(loop: {
+  id: string;
+  preflight: () => Promise<{ ok: boolean; reason?: string; missingEnv?: string[] }>;
+}): Promise<void> {
+  const preflight = await loop.preflight();
+  if (preflight.ok) return;
+  const missing = preflight.missingEnv?.length
+    ? ` Missing env: ${preflight.missingEnv.join(", ")}.`
+    : "";
+  throw new Error(
+    `Client agent backend "${loop.id}" is not ready: ${preflight.reason ?? "preflight failed"}.${missing}`,
+  );
 }
 
 function daemonProcessBaseUrl(): string {
@@ -375,7 +397,7 @@ async function clientState(workspaceId?: string) {
       workLog,
       transcript,
       settings,
-      settingsOptions: runtimeSettingsOptions(),
+      settingsOptions: await discoverRuntimeSettingsOptions(),
       scheduler,
     };
   }
@@ -392,15 +414,15 @@ async function clientState(workspaceId?: string) {
     workLog,
     transcript,
     settings,
-    settingsOptions: runtimeSettingsOptions(),
+    settingsOptions: await discoverRuntimeSettingsOptions(),
     scheduler,
   };
 }
 
-function settingsResponse(settings: SikongSettings) {
+async function settingsResponse(settings: SikongSettings) {
   return {
     ...settings,
-    options: runtimeSettingsOptions(),
+    options: await discoverRuntimeSettingsOptions(),
   };
 }
 
@@ -489,6 +511,17 @@ async function readTranscript(): Promise<ClientMessage[]> {
 async function appendTranscript(message: ClientMessage): Promise<void> {
   const transcript = await readTranscript();
   transcript.push(message);
+  await writeTranscript(transcript);
+}
+
+async function deleteTranscriptMessage(messageId: string): Promise<ClientMessage[]> {
+  const transcript = await readTranscript();
+  const next = transcript.filter((message) => message.id !== messageId);
+  await writeTranscript(next);
+  return next;
+}
+
+async function writeTranscript(transcript: ClientMessage[]): Promise<void> {
   await mkdir(dirname(transcriptPath), { recursive: true });
   const tmp = `${transcriptPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(transcript.slice(-200), null, 2));

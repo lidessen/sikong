@@ -1,7 +1,13 @@
 import { ArrowLeft, CircleDot, Layers3, Loader2, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { getClientState, getTaskDetail, runTurnStream, updateSettings } from "./api";
+import {
+  deleteTranscriptMessage,
+  getClientState,
+  getTaskDetail,
+  runTurnStream,
+  updateSettings,
+} from "./api";
 import { ActivityStream, Composer } from "./chat-panel";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -207,6 +213,23 @@ export function App() {
     }
   }
 
+  async function deleteMessage(messageId: string) {
+    const target = messages.find((item) => item.id === messageId);
+    if (!target || target.pending) return;
+    if (!window.confirm("Delete this message from history?")) return;
+
+    const previous = messages;
+    setError(null);
+    setMessages((items) => items.filter((item) => item.id !== messageId));
+    try {
+      const next = await deleteTranscriptMessage(messageId);
+      setMessages(next);
+    } catch (err) {
+      setMessages(previous);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function saveSettings(settings: SikongSettings) {
     try {
       setError(null);
@@ -340,6 +363,9 @@ export function App() {
                 <ActivityStream
                   messages={messages}
                   state={state}
+                  onDeleteMessage={(messageId) => {
+                    void deleteMessage(messageId);
+                  }}
                   onOpenTask={(taskId) => {
                     setSelectedTaskId(taskId);
                     setMainView("task");

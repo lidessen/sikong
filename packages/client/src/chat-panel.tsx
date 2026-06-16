@@ -10,6 +10,7 @@ export function ActivityStream(props: {
   messages: ClientMessage[];
   state: ClientState;
   onOpenTask: (taskId: string) => void;
+  onDeleteMessage: (messageId: string) => void;
 }) {
   if (props.messages.length === 0) {
     return (
@@ -30,6 +31,7 @@ export function ActivityStream(props: {
         <MessageView
           key={item.id}
           message={item}
+          onDelete={props.onDeleteMessage}
           context={{
             state: props.state,
             onAction: (action) => {

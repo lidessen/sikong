@@ -1,8 +1,12 @@
+import { discoverCursorModels } from "agent-loop";
+
 export interface RuntimeBackendOption {
   id: string;
   label: string;
   supportsProvider: boolean;
   defaultProviderLabel: string;
+  requiresProvider?: boolean;
+  requiresModel?: boolean;
 }
 
 export interface RuntimeProviderOption {
@@ -11,9 +15,23 @@ export interface RuntimeProviderOption {
   supportedBackends: string[];
 }
 
+export interface RuntimeModelOption {
+  backend: string;
+  id: string;
+  label: string;
+  aliases?: string[];
+}
+
+export interface RuntimeModelDiscoveryError {
+  backend: string;
+  message: string;
+}
+
 export interface SikongSettingsOptions {
   backends: RuntimeBackendOption[];
   providers: RuntimeProviderOption[];
+  models?: RuntimeModelOption[];
+  modelDiscoveryErrors?: RuntimeModelDiscoveryError[];
 }
 
 export function runtimeSettingsOptions(): SikongSettingsOptions {
@@ -42,6 +60,8 @@ export function runtimeSettingsOptions(): SikongSettingsOptions {
         label: "AI SDK",
         supportsProvider: true,
         defaultProviderLabel: "Backend default",
+        requiresProvider: true,
+        requiresModel: true,
       },
     ],
     providers: [
@@ -62,4 +82,30 @@ export function runtimeSettingsOptions(): SikongSettingsOptions {
       },
     ],
   };
+}
+
+export async function discoverRuntimeSettingsOptions(): Promise<SikongSettingsOptions> {
+  const base = runtimeSettingsOptions();
+  try {
+    const cursorModels = await discoverCursorModels();
+    return {
+      ...base,
+      models: cursorModels.map((model) => ({
+        backend: "cursor",
+        id: model.id,
+        label: model.label,
+        ...(model.aliases?.length ? { aliases: model.aliases } : {}),
+      })),
+    };
+  } catch (err) {
+    return {
+      ...base,
+      modelDiscoveryErrors: [
+        {
+          backend: "cursor",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      ],
+    };
+  }
 }
