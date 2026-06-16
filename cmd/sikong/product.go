@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -29,6 +30,14 @@ type productOptions struct {
 	noOpen     bool
 	json       bool
 	timeout    time.Duration
+}
+
+type logsOptions struct {
+	includeDaemon bool
+	includeUI     bool
+	lines         int
+	follow        bool
+	json          bool
 }
 
 type managedRuntime struct {
@@ -189,6 +198,35 @@ func runStatus(args []string) error {
 	return nil
 }
 
+func runLogs(args []string) error {
+	opts, err := parseLogsOptions(args)
+	if err != nil {
+		return err
+	}
+	state, _ := readState()
+	paths, err := resolveLogPaths(state, opts)
+	if err != nil {
+		return err
+	}
+	if opts.json {
+		payload := map[string]any{"ok": true, "data": map[string]any{"logs": paths}}
+		return printJSON(payload)
+	}
+	for index, log := range paths {
+		if index > 0 {
+			fmt.Println()
+		}
+		fmt.Printf("==> %s (%s) <==\n", log.Name, log.Path)
+		if err := printLogTail(log.Path, opts.lines); err != nil {
+			fmt.Fprintf(os.Stderr, "could not read %s log: %v\n", log.Name, err)
+		}
+	}
+	if opts.follow {
+		return followLogs(paths)
+	}
+	return nil
+}
+
 func parseProductOptions(args []string) (productOptions, error) {
 	opts := productOptions{daemonAddr: defaultDaemonAddr, uiPort: defaultUIPort, timeout: 10 * time.Second}
 	for i := 0; i < len(args); i++ {
@@ -237,6 +275,64 @@ func parseProductOptions(args []string) (productOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func parseLogsOptions(args []string) (logsOptions, error) {
+	opts := logsOptions{includeDaemon: true, includeUI: true, lines: 200}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--daemon":
+			opts.includeDaemon = true
+			opts.includeUI = false
+		case arg == "--ui" || arg == "--web":
+			opts.includeDaemon = false
+			opts.includeUI = true
+		case arg == "--all":
+			opts.includeDaemon = true
+			opts.includeUI = true
+		case arg == "--follow" || arg == "-f":
+			opts.follow = true
+		case arg == "--json":
+			opts.json = true
+		case arg == "--lines" || arg == "-n":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("%s requires a value", arg)
+			}
+			i++
+			lines, err := parseLogLines(args[i])
+			if err != nil {
+				return opts, err
+			}
+			opts.lines = lines
+		case strings.HasPrefix(arg, "--lines="):
+			lines, err := parseLogLines(strings.TrimPrefix(arg, "--lines="))
+			if err != nil {
+				return opts, err
+			}
+			opts.lines = lines
+		case strings.HasPrefix(arg, "-n="):
+			lines, err := parseLogLines(strings.TrimPrefix(arg, "-n="))
+			if err != nil {
+				return opts, err
+			}
+			opts.lines = lines
+		default:
+			return opts, fmt.Errorf("unknown logs option %q", arg)
+		}
+	}
+	if !opts.includeDaemon && !opts.includeUI {
+		return opts, fmt.Errorf("at least one log target is required")
+	}
+	return opts, nil
+}
+
+func parseLogLines(value string) (int, error) {
+	lines, err := strconv.Atoi(value)
+	if err != nil || lines < 0 {
+		return 0, fmt.Errorf("--lines must be a non-negative integer")
+	}
+	return lines, nil
 }
 
 func formatStartText(daemonURL string, uiURL string) string {
@@ -453,6 +549,141 @@ func runLogPath(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, name+".log"), nil
+}
+
+type namedLogPath struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+func resolveLogPaths(state sikongState, opts logsOptions) ([]namedLogPath, error) {
+	paths := []namedLogPath{}
+	if opts.includeDaemon {
+		path := state.Daemon.LogPath
+		if path == "" {
+			var err error
+			path, err = runLogPath("daemon")
+			if err != nil {
+				return nil, err
+			}
+		}
+		paths = append(paths, namedLogPath{Name: "daemon", Path: path})
+	}
+	if opts.includeUI {
+		path := state.UI.LogPath
+		if path == "" {
+			var err error
+			path, err = runLogPath("ui")
+			if err != nil {
+				return nil, err
+			}
+		}
+		paths = append(paths, namedLogPath{Name: "ui", Path: path})
+	}
+	return paths, nil
+}
+
+func printLogTail(path string, lines int) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if lines > 0 {
+		data = tailLines(data, lines)
+	} else {
+		data = nil
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	_, err = os.Stdout.Write(data)
+	if err == nil && data[len(data)-1] != '\n' {
+		fmt.Println()
+	}
+	return err
+}
+
+func tailLines(data []byte, lines int) []byte {
+	if lines <= 0 || len(data) == 0 {
+		return nil
+	}
+	seen := 0
+	for index := len(data) - 1; index >= 0; index-- {
+		if data[index] == '\n' {
+			if index == len(data)-1 {
+				continue
+			}
+			seen++
+			if seen == lines {
+				return data[index+1:]
+			}
+		}
+	}
+	return data
+}
+
+func followLogs(paths []namedLogPath) error {
+	positions := map[string]int64{}
+	for _, log := range paths {
+		info, err := os.Stat(log.Path)
+		if err == nil {
+			positions[log.Path] = info.Size()
+		}
+	}
+	for {
+		for _, log := range paths {
+			pos := positions[log.Path]
+			next, err := copyLogFrom(log, pos)
+			if err != nil {
+				continue
+			}
+			positions[log.Path] = next
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func copyLogFrom(log namedLogPath, offset int64) (int64, error) {
+	file, err := os.Open(log.Path)
+	if err != nil {
+		return offset, err
+	}
+	defer file.Close()
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return offset, err
+	}
+	wrapped := &prefixedWriter{prefix: []byte("[" + log.Name + "] "), atLineStart: true}
+	if _, err := io.Copy(wrapped, file); err != nil {
+		return offset, err
+	}
+	pos, err := file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return offset, err
+	}
+	return pos, nil
+}
+
+type prefixedWriter struct {
+	prefix      []byte
+	atLineStart bool
+}
+
+func (w *prefixedWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if w.atLineStart {
+			if _, err := os.Stdout.Write(w.prefix); err != nil {
+				return 0, err
+			}
+			w.atLineStart = false
+		}
+		if _, err := os.Stdout.Write([]byte{b}); err != nil {
+			return 0, err
+		}
+		if b == '\n' {
+			w.atLineStart = true
+		}
+	}
+	return len(p), nil
 }
 
 func readState() (sikongState, error) {

@@ -37,6 +37,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "logs":
+			if err := runLogs(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
 		case "ui":
 			if err := runClientUI(os.Args[2:]); err != nil {
 				fmt.Fprintln(os.Stderr, err)
@@ -65,6 +71,7 @@ Usage:
   sikong start [--daemon <addr>] [--ui-port <port>] [--no-open] [--json]
   sikong stop [--daemon <addr>] [--json]
   sikong status [--daemon <addr>] [--ui-port <port>] [--json]
+  sikong logs [--daemon|--ui] [--lines <n>] [--follow]
   sikong workspace ...
   sikong preference ...
   sikong task ...

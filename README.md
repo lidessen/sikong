@@ -31,6 +31,13 @@ sikong start
 The beta installer currently supports macOS arm64. `sikong start` launches the
 local daemon and web UI by default; `sikong stop` stops them.
 
+If the UI reports a network error, collect the local daemon/UI logs with:
+
+```bash
+sikong logs --lines 200
+sikong logs --ui --follow
+```
+
 ## Development
 
 ```bash
