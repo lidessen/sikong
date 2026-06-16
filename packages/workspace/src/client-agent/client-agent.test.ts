@@ -223,6 +223,34 @@ describe("client agent context", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("returns a fallback outcome when client-agent passes time out", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+
+      const result = await runClientAgentTurn({
+        ctx: context,
+        loop: hangingLoop(),
+        message: "Show current Sikong work.",
+        focus: { workspaceId: "sikong" },
+        passTimeoutMs: 5,
+        settlementPassTimeoutMs: 5,
+      });
+
+      expect(result.settlement).toEqual({ used: false, fallbackUsed: true });
+      expect(result.outcome.kind).toBe("report");
+      if (result.outcome.kind !== "report") throw new Error("expected report outcome");
+      expect(result.outcome.summary).toContain("client agent pass timed out");
+      expect(result.outcome.facts).toContainEqual({
+        label: "work pass",
+        value: "error",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 function fixedTranscript(
@@ -305,6 +333,46 @@ function errorLoop(message: string): AgentLoop {
     runTask: async () => ({
       status: "failed",
       report: message,
+      timeline: [],
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+      rounds: 0,
+    }),
+    preflight: async () => ({ ok: true }),
+    dispose: async () => {},
+  };
+}
+
+function hangingLoop(): AgentLoop {
+  return {
+    id: "hanging-mock",
+    capabilities: ["tools", "mcp", "usage"],
+    supports: (cap: Capability) => cap === "tools" || cap === "mcp" || cap === "usage",
+    run: () => ({
+      async *[Symbol.asyncIterator]() {
+        await new Promise(() => {});
+        yield { type: "step" as const, phase: "start" as const, index: 0 };
+      },
+      textStream: {
+        async *[Symbol.asyncIterator]() {},
+      },
+      result: new Promise(() => {}),
+      text: new Promise(() => {}),
+      usage: new Promise(() => {}),
+      steer: async () => ({ mode: "rejected" as const }),
+      cancel: () => {},
+      cleanup: async () => ({
+        status: "unsettled" as const,
+        elapsedMs: 0,
+        hardKill: false,
+      }),
+    }),
+    runTask: async () => ({
+      status: "failed",
+      report: "hung",
       timeline: [],
       usage: {
         inputTokens: 0,

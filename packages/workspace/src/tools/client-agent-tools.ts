@@ -196,10 +196,11 @@ export function createClientAgentTools(options: ClientAgentToolsOptions): ToolSe
       description:
         "Finish this client-agent turn with a structured report, question, or user request.",
       inputSchema: clientTurnOutcomeSchema,
-      execute: async (args) => {
+      execute: async (args, toolCtx) => {
         const parsed = parseClientTurnOutcome(args);
         if (!parsed.ok) return parsed;
         options.outcome!.outcome ??= parsed.data;
+        toolCtx.requestStop?.("client-agent turn outcome submitted");
         options.onFinish?.();
         return { ok: true, data: { outcome: options.outcome!.outcome } };
       },
@@ -320,49 +321,71 @@ const taskIdSchema = objectSchema(
   ["taskId"],
 );
 
-const clientTurnOutcomeSchema = objectSchema(
-  {
-    kind: enumSchema(["report", "question", "request"]),
-    title: stringSchema(),
-    summary: stringSchema(),
-    question: stringSchema(),
-    context: stringSchema(),
-    options: arraySchema(stringSchema()),
-    requestType: enumSchema([
-      "plan_decision",
-      "final_decision",
-      "permission",
-      "clarification",
-      "other",
-    ]),
-    body: stringSchema(),
-    facts: arraySchema(
-      objectSchema(
-        {
-          label: stringSchema(),
-          value: stringSchema(),
-        },
-        ["label", "value"],
-      ),
-    ),
-    refs: arraySchema(
-      objectSchema(
-        {
-          type: enumSchema(["workspace", "task", "transcript", "other"]),
-          id: stringSchema(),
-        },
-        ["type", "id"],
-      ),
-    ),
-    target: objectSchema({
-      workspaceId: stringSchema(),
-      taskId: stringSchema(),
-      planId: stringSchema(),
-      version: numberSchema(),
-    }),
-  },
-  ["kind"],
+const clientTurnRefsSchema = arraySchema(
+  objectSchema(
+    {
+      type: enumSchema(["workspace", "task", "transcript", "other"]),
+      id: stringSchema(),
+    },
+    ["type", "id"],
+  ),
 );
+
+const clientTurnOutcomeSchema: Record<string, unknown> = {
+  type: "object",
+  oneOf: [
+    objectSchema(
+      {
+        kind: constSchema("report"),
+        title: stringSchema("Short report title."),
+        summary: stringSchema("User-visible Markdown summary."),
+        facts: arraySchema(
+          objectSchema(
+            {
+              label: stringSchema(),
+              value: stringSchema(),
+            },
+            ["label", "value"],
+          ),
+        ),
+        refs: clientTurnRefsSchema,
+      },
+      ["kind", "title", "summary"],
+    ),
+    objectSchema(
+      {
+        kind: constSchema("question"),
+        question: stringSchema("The question that needs the user's answer."),
+        context: stringSchema("Brief factual context for why the question is needed."),
+        options: arraySchema(stringSchema()),
+        refs: clientTurnRefsSchema,
+      },
+      ["kind", "question"],
+    ),
+    objectSchema(
+      {
+        kind: constSchema("request"),
+        requestType: enumSchema([
+          "plan_decision",
+          "final_decision",
+          "permission",
+          "clarification",
+          "other",
+        ]),
+        title: stringSchema("Short request title."),
+        body: stringSchema("User-visible Markdown request body."),
+        target: objectSchema({
+          workspaceId: stringSchema(),
+          taskId: stringSchema(),
+          planId: stringSchema(),
+          version: numberSchema(),
+        }),
+        refs: clientTurnRefsSchema,
+      },
+      ["kind", "requestType", "title", "body"],
+    ),
+  ],
+};
 
 function taskInput(
   args: Record<string, unknown>,
@@ -411,8 +434,8 @@ function objectSchema(
   };
 }
 
-function stringSchema(): Record<string, unknown> {
-  return { type: "string" };
+function stringSchema(description?: string): Record<string, unknown> {
+  return { type: "string", ...(description ? { description } : {}) };
 }
 
 function booleanSchema(): Record<string, unknown> {
@@ -425,6 +448,10 @@ function numberSchema(): Record<string, unknown> {
 
 function enumSchema(values: string[]): Record<string, unknown> {
   return { type: "string", enum: values };
+}
+
+function constSchema(value: string): Record<string, unknown> {
+  return { type: "string", const: value };
 }
 
 function arraySchema(items: Record<string, unknown>): Record<string, unknown> {

@@ -1,8 +1,13 @@
-import { createServer, type Server } from "node:http";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   Agent,
   Cursor,
+  JsonlLocalAgentStore,
   type AgentOptions,
+  type LocalAgentStore,
+  type SDKCustomTool,
+  type SDKJsonValue,
   type McpServerConfig as CursorMcpServerConfig,
   type Run,
   type SDKAgent,
@@ -34,8 +39,12 @@ export interface CursorAdapterOptions {
   contextWindow?: number;
   /** Resume / target a specific Cursor agent id. */
   agentId?: string;
-  /** Cursor local setting sources. Defaults to ["project"]. */
+  /** Cursor local setting sources. Omitted by default for packaged runtimes. */
   settingSources?: SettingSource[];
+  /** Cursor local agent store. Defaults to a JSONL store under SIKONG_DATA_DIR. */
+  store?: LocalAgentStore;
+  /** Directory for the default JSONL Cursor local agent store. */
+  storeDir?: string;
   /** Working directory (single path or multiple allowed paths). */
   cwd?: string | string[];
   /** Toggle the Cursor local sandbox. */
@@ -65,9 +74,9 @@ export interface CursorRuntimeOptions {
  *
  * Cursor reports no native token usage, so `usage` is emitted with
  * `source:"estimate"` via {@link estimateTokens}. MCP servers are passed
- * through from `req.mcp`. Custom tools from `req.tools` are exposed as a
- * local MCP server that Cursor discovers and calls via the MCP protocol.
- * There is no pre-tool interception hook, so "hooks" is not declared.
+ * through from `req.mcp`. Custom tools from `req.tools` are passed through
+ * Cursor's native `local.customTools` support. There is no pre-tool
+ * interception hook, so "hooks" is not declared.
  */
 export class CursorAdapter implements BackendAdapter {
   readonly id = "cursor";
@@ -75,8 +84,7 @@ export class CursorAdapter implements BackendAdapter {
 
   private agentPromise: Promise<SDKAgent> | null = null;
   private agent: SDKAgent | null = null;
-  /** Active local MCP tool servers for this adapter (started per-run in start()). */
-  private mcpToolServers = new Set<Server>();
+  private localStore: LocalAgentStore | null = null;
 
   constructor(private readonly opts: CursorAdapterOptions = {}) {
     installCursorTransportErrorSuppressor();
@@ -102,6 +110,8 @@ export class CursorAdapter implements BackendAdapter {
     const contextWindow = resolveContextWindow(model, this.opts.contextWindow);
 
     let activeRun: Run | null = null;
+    let ownedAgent: SDKAgent | null = null;
+    let stopRequested = false;
     let cancelled = false;
 
     let resolveResult!: (r: BackendResult) => void;
@@ -112,35 +122,35 @@ export class CursorAdapter implements BackendAdapter {
     });
 
     let outputText = "";
-    /** Local MCP tool server, started when req.tools is non-empty. */
-    let toolServer: Server | null = null;
-
     const run = async () => {
       try {
         if (abort.signal.aborted) throw new Error("Cursor run cancelled");
 
         ch.push({ type: "step", phase: "start", index: 0 });
 
-        const agent = await this.getAgent(req.mcp, o.agentId);
+        const acquired = await this.acquireAgent(req.mcp, o.agentId);
+        const agent = acquired.agent;
+        ownedAgent = acquired.closeAfterRun ? agent : null;
         if (abort.signal.aborted) throw new Error("Cursor run cancelled");
 
         const mcpServers = buildCursorMcpServers(req.mcp);
-
-        // When custom tools are provided, start a local MCP server that exposes
-        // them and add it to the MCP servers list Cursor discovers.
-        if (Object.keys(req.tools).length > 0) {
-          const server = await startMcpToolServer(req.tools);
-          toolServer = server;
-          this.mcpToolServers.add(server);
-          mcpServers["agent-loop-tools"] = {
-            type: "http",
-            url: `http://localhost:${(server.address() as { port: number }).port}`,
-          };
-        }
+        const requestStop = () => {
+          stopRequested = true;
+        };
 
         const sendOptions: SendOptions = {
           ...(model ? { model: { id: model } } : {}),
           ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
+          ...(Object.keys(req.tools).length > 0
+            ? {
+                local: {
+                  customTools: buildCursorCustomTools(req.tools, abort.signal, requestStop),
+                },
+              }
+            : {}),
+          onStep: () => {
+            if (stopRequested) void activeRun?.cancel();
+          },
         };
 
         const cursorRun = await agent.send(prompt, sendOptions);
@@ -172,16 +182,19 @@ export class CursorAdapter implements BackendAdapter {
         resolveResult({ usage, durationMs: Date.now() - startedAt });
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        if (cancelled || isCursorExpectedCancellationError(error)) {
+          const usage = estimateUsage(prompt, outputText);
+          ch.push({ type: "usage", ...usage, source: "estimate" });
+          ch.end();
+          resolveResult({ usage, durationMs: Date.now() - startedAt });
+          return;
+        }
         if (!cancelled) ch.push({ type: "error", error });
         ch.fail(error);
         rejectResult(error);
       } finally {
+        if (ownedAgent) await closeCursorAgent(ownedAgent);
         activeRun = null;
-        if (toolServer) {
-          this.mcpToolServers.delete(toolServer);
-          closeMcpServer(toolServer);
-          toolServer = null;
-        }
       }
     };
 
@@ -195,11 +208,6 @@ export class CursorAdapter implements BackendAdapter {
         cancelled = true;
         abort.abort();
         void activeRun?.cancel();
-        if (toolServer) {
-          this.mcpToolServers.delete(toolServer);
-          closeMcpServer(toolServer);
-          toolServer = null;
-        }
       },
     };
   }
@@ -229,28 +237,37 @@ export class CursorAdapter implements BackendAdapter {
   }
 
   async dispose(): Promise<void> {
-    // Close any lingering MCP tool servers from cancelled runs.
-    for (const s of this.mcpToolServers) closeMcpServer(s);
-    this.mcpToolServers.clear();
     await closeCursorAgent(this.agent);
     this.agent = null;
     this.agentPromise = null;
   }
 
-  private getAgent(mcp: McpServers, agentId?: string): Promise<SDKAgent> {
-    // A per-run agentId override forces a fresh agent so it is honored.
-    if (agentId && this.agent && this.agent.agentId !== agentId) {
+  private async acquireAgent(
+    mcp: McpServers,
+    agentId?: string,
+  ): Promise<{ agent: SDKAgent; closeAfterRun: boolean }> {
+    const persistentAgentId = agentId ?? this.opts.agentId;
+    if (!persistentAgentId) {
+      return {
+        agent: await Agent.create(this.buildAgentOptions(mcp)),
+        closeAfterRun: true,
+      };
+    }
+
+    if (this.agent && this.agent.agentId !== persistentAgentId) {
       void closeCursorAgent(this.agent);
       this.agent = null;
       this.agentPromise = null;
     }
     if (!this.agentPromise) {
-      this.agentPromise = Agent.create(this.buildAgentOptions(mcp, agentId)).then((agent) => {
-        this.agent = agent;
-        return agent;
-      });
+      this.agentPromise = Agent.create(this.buildAgentOptions(mcp, persistentAgentId)).then(
+        (agent) => {
+          this.agent = agent;
+          return agent;
+        },
+      );
     }
-    return this.agentPromise;
+    return { agent: await this.agentPromise, closeAfterRun: false };
   }
 
   private buildAgentOptions(mcp: McpServers, agentId?: string): AgentOptions {
@@ -263,7 +280,10 @@ export class CursorAdapter implements BackendAdapter {
       model: { id: this.opts.model ?? "composer-2" },
       local: {
         ...(cwd ? { cwd } : {}),
-        settingSources: this.opts.settingSources ?? ["project"],
+        store: this.resolveLocalStore(),
+        ...(this.opts.settingSources !== undefined
+          ? { settingSources: this.opts.settingSources }
+          : {}),
         ...(this.opts.sandboxEnabled !== undefined
           ? { sandboxOptions: { enabled: this.opts.sandboxEnabled } }
           : {}),
@@ -273,6 +293,14 @@ export class CursorAdapter implements BackendAdapter {
         ? { agentId: (agentId ?? this.opts.agentId) as string }
         : {}),
     };
+  }
+
+  private resolveLocalStore(): LocalAgentStore {
+    if (this.opts.store) return this.opts.store;
+    this.localStore ??= new JsonlLocalAgentStore(
+      this.opts.storeDir ?? defaultCursorLocalStoreDir(),
+    );
+    return this.localStore;
   }
 
   // Explicit key wins; else auto-discover CURSOR_API_KEY, gated by the same
@@ -286,6 +314,11 @@ export class CursorAdapter implements BackendAdapter {
       required: false,
     });
   }
+}
+
+function defaultCursorLocalStoreDir(): string {
+  const dataDir = process.env.SIKONG_DATA_DIR?.trim() || join(homedir(), ".sikong");
+  return join(dataDir, "state", "cursor-agent-store");
 }
 
 /**
@@ -422,8 +455,58 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((v) => typeof v === "string");
 }
 
+export function buildCursorCustomTools(
+  tools: ToolSet,
+  signal?: AbortSignal,
+  requestStop?: (reason?: string) => void,
+): Record<string, SDKCustomTool> {
+  const converted: Record<string, SDKCustomTool> = {};
+  for (const [name, def] of Object.entries(tools)) {
+    converted[name] = {
+      description: def.description ?? "",
+      inputSchema: toCursorInputSchema(def.inputSchema),
+      execute: async (args, ctx) => {
+        const result = await def.execute?.(args, {
+          signal,
+          callId: ctx.toolCallId,
+          requestStop,
+        });
+        return toCursorToolResult(result);
+      },
+    };
+  }
+  return converted;
+}
+
+function toCursorInputSchema(value: unknown): Record<string, SDKJsonValue> {
+  if (!isRecord(value)) return {};
+  try {
+    const cloned = JSON.parse(JSON.stringify(value)) as unknown;
+    return isRecord(cloned) && isSdkJsonValue(cloned)
+      ? (cloned as Record<string, SDKJsonValue>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function toCursorToolResult(value: unknown): SDKJsonValue {
+  if (value === undefined) return null;
+  if (isSdkJsonValue(value)) return value;
+  return JSON.parse(JSON.stringify(value)) as SDKJsonValue;
+}
+
+function isSdkJsonValue(value: unknown): value is SDKJsonValue {
+  if (value === null) return true;
+  if (["string", "number", "boolean"].includes(typeof value)) return true;
+  if (Array.isArray(value)) return value.every(isSdkJsonValue);
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(isSdkJsonValue);
+}
+
 /* -------------------------------------------------------------------------- */
-/* Local MCP tool server — wraps req.tools as an HTTP MCP server for Cursor   */
+/* Legacy MCP request helper retained for adapter-level protocol tests.        */
+/* Runtime tool delivery uses Cursor native local.customTools above.           */
 /* -------------------------------------------------------------------------- */
 
 export interface JsonRpcMessage {
@@ -433,47 +516,6 @@ export interface JsonRpcMessage {
   params?: unknown;
   result?: unknown;
   error?: { code: number; message: string };
-}
-
-/**
- * Start a local HTTP server that implements the MCP protocol subset for tool
- * exposure. Supports `tools/list` and `tools/call` methods. The server runs
- * until the adapter shuts it down.
- */
-function startMcpToolServer(tools: ToolSet): Promise<Server> {
-  return new Promise((resolve) => {
-    const server = createServer(async (req, res) => {
-      // Only accept POST to /
-      if (req.method !== "POST" || !req.url || req.url !== "/") {
-        res.writeHead(405).end();
-        return;
-      }
-
-      let body = "";
-      req.on("data", (chunk: string) => (body += chunk));
-      req.on("end", async () => {
-        let response: JsonRpcMessage | undefined;
-        try {
-          const msg = JSON.parse(body) as JsonRpcMessage;
-          response = await handleMcpRequest(msg, tools);
-        } catch {
-          response = {
-            jsonrpc: "2.0",
-            id: undefined,
-            error: { code: -32700, message: "Parse error" },
-          };
-        }
-        if (!response) {
-          res.writeHead(204).end();
-          return;
-        }
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(response));
-      });
-    });
-
-    server.listen(0, "127.0.0.1", () => resolve(server));
-  });
 }
 
 export async function handleMcpRequest(
@@ -541,15 +583,6 @@ export async function handleMcpRequest(
   return { ...base, error: { code: -32601, message: `Method not found: ${msg.method}` } };
 }
 
-function closeMcpServer(server: Server): void {
-  try {
-    server.close();
-    server.closeAllConnections?.();
-  } catch {
-    // best effort
-  }
-}
-
 async function closeCursorAgent(agent: SDKAgent | null): Promise<void> {
   try {
     await Promise.resolve(agent?.close());
@@ -564,13 +597,17 @@ function installCursorTransportErrorSuppressor(): void {
   if (cursorTransportSuppressorInstalled) return;
   cursorTransportSuppressorInstalled = true;
   process.on("uncaughtException", (err) => {
-    if (isCursorTransportShutdownError(err)) return;
+    if (isCursorTransportShutdownError(err) || isCursorExpectedCancellationError(err)) return;
     throw err;
   });
   process.on("unhandledRejection", (reason) => {
-    if (isCursorTransportShutdownError(reason)) return;
+    if (isCursorTransportShutdownError(reason) || isCursorExpectedCancellationError(reason)) return;
     throw reason;
   });
+}
+
+function isCursorExpectedCancellationError(value: unknown): boolean {
+  return value instanceof Error && value.message === "Cursor run cancelled";
 }
 
 function isCursorTransportShutdownError(value: unknown): boolean {

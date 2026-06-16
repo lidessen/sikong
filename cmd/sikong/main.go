@@ -62,9 +62,9 @@ func printUsage() {
 
 Usage:
   sikong [--version]
-  sikong start [--daemon <addr>] [--ui-port <port>] [--no-open]
-  sikong stop [--daemon <addr>]
-  sikong status [--daemon <addr>] [--ui-port <port>]
+  sikong start [--daemon <addr>] [--ui-port <port>] [--no-open] [--json]
+  sikong stop [--daemon <addr>] [--json]
+  sikong status [--daemon <addr>] [--ui-port <port>] [--json]
   sikong workspace ...
   sikong preference ...
   sikong task ...

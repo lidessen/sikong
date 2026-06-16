@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { defineTool, mockLoop } from "../index";
+import { codexLoop, defineTool, mockLoop } from "../index";
 
 describe("run handle ergonomics", () => {
   test("textStream yields assistant text only", async () => {
@@ -46,6 +46,13 @@ describe("loop.supports", () => {
     expect(loop.supports("tools")).toBe(true);
     expect(loop.supports("hooks")).toBe(true);
     expect(loop.supports("steer.live")).toBe(false);
+  });
+
+  test("codex does not claim typed tool support without a registration protocol", () => {
+    const loop = codexLoop();
+    expect(loop.supports("tools")).toBe(false);
+    expect(loop.supports("hooks")).toBe(false);
+    expect(loop.supports("steer.live")).toBe(true);
   });
 });
 

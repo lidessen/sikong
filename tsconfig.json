@@ -8,6 +8,9 @@
     "jsx": "react-jsx",
     "allowJs": true,
     "types": ["bun"],
+    "paths": {
+      "sqlite3": ["./scripts/stubs/sqlite3.ts"]
+    },
 
     // Bundler mode
     "moduleResolution": "bundler",

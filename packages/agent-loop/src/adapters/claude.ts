@@ -3,6 +3,7 @@ import type {
   HookJSONOutput,
   McpServerConfig as SdkMcpServerConfig,
   Options as ClaudeAgentOptions,
+  PostToolBatchHookInput,
   PreToolUseHookInput,
   Query,
   SDKMessage,
@@ -177,7 +178,17 @@ export class ClaudeAdapter implements BackendAdapter {
 
     // ---- tools -> in-process SDK MCP server.
     const sdkServers: Record<string, SdkMcpServerConfig> = {};
-    const inProcessTool = buildInProcessToolServer(req.tools, req.signal);
+    const emittedToolResults = new Set<string>();
+    let stopRequested = false;
+    const requestStop = () => {
+      stopRequested = true;
+    };
+
+    const inProcessTool = buildInProcessToolServer(req.tools, req.signal, requestStop, (event) => {
+      const callId = event.callId ?? event.name;
+      if (callId) emittedToolResults.add(callId);
+      ch.push({ type: "tool_call_end", ...event, callId });
+    });
     if (inProcessTool) {
       sdkServers[inProcessTool.name] = inProcessTool.config;
     }
@@ -190,7 +201,7 @@ export class ClaudeAdapter implements BackendAdapter {
     };
 
     // ---- hooks -> PreToolUse interception via the bridge.
-    const preToolUse = makePreToolUseHook(req);
+    const claudeHooks = makeClaudeHooks(req, () => stopRequested);
 
     let activeQuery: Query | null = null;
     let started = Date.now();
@@ -230,7 +241,7 @@ export class ClaudeAdapter implements BackendAdapter {
             opts: this.opts,
             o,
             mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
-            preToolUse,
+            hooks: claudeHooks,
             abortController,
           }),
         });
@@ -246,7 +257,7 @@ export class ClaudeAdapter implements BackendAdapter {
             }
           }
 
-          const mapped = mapClaudeMessage(message, toolNames, streamState);
+          const mapped = mapClaudeMessage(message, toolNames, streamState, emittedToolResults);
 
           if (mapped.usage) {
             usage = mapped.usage;
@@ -356,10 +367,10 @@ function buildOptions(args: {
   opts: ClaudeAdapterOptions;
   o: ClaudeRuntimeOptions;
   mcpServers?: Record<string, SdkMcpServerConfig>;
-  preToolUse: ClaudeAgentOptions["hooks"];
+  hooks: ClaudeAgentOptions["hooks"];
   abortController: AbortController;
 }): ClaudeAgentOptions {
-  const { req, opts, o, mcpServers, preToolUse, abortController } = args;
+  const { req, opts, o, mcpServers, hooks, abortController } = args;
 
   const permissionMode = o.permissionMode ?? opts.permissionMode;
   const append = req.system || opts.instructions;
@@ -411,7 +422,7 @@ function buildOptions(args: {
     resume: o.resume,
     continue: o.continue,
     mcpServers,
-    hooks: preToolUse,
+    hooks,
     settingSources: ["project"],
     systemPrompt: {
       type: "preset",
@@ -546,11 +557,15 @@ function convertMcpServer(server: McpServerConfig): SdkMcpServerConfig | undefin
 function buildInProcessToolServer(
   tools: ToolSet,
   signal?: AbortSignal,
+  requestStop?: (reason?: string) => void,
+  onToolEnd?: (event: { name: string; callId?: string; result?: unknown; error?: string }) => void,
 ): { name: string; config: SdkMcpServerConfig } | undefined {
   const names = Object.keys(tools);
   if (names.length === 0) return undefined;
 
-  const sdkTools = names.map((name) => buildSdkTool(name, tools[name] as ToolDefinition, signal));
+  const sdkTools = names.map((name) =>
+    buildSdkTool(name, tools[name] as ToolDefinition, signal, requestStop, onToolEnd),
+  );
 
   const serverName = "agent_loop_tools";
   const instance = createSdkMcpServer({
@@ -565,20 +580,34 @@ function inProcessToolAllowedNames(tools: ToolSet): string[] {
   return Object.keys(tools).flatMap((name) => [name, `mcp__agent_loop_tools__${name}`]);
 }
 
-function buildSdkTool(name: string, def: ToolDefinition, signal?: AbortSignal) {
+function buildSdkTool(
+  name: string,
+  def: ToolDefinition,
+  signal?: AbortSignal,
+  requestStop?: (reason?: string) => void,
+  onToolEnd?: (event: { name: string; callId?: string; result?: unknown; error?: string }) => void,
+) {
   const shape = jsonSchemaToZodRawShape(def.inputSchema);
-  return tool(name, def.description ?? name, shape, async (args: Record<string, unknown>) => {
+  return tool(name, def.description ?? name, shape, async (args: Record<string, unknown>, meta) => {
+    const toolUseBlock = (meta as { toolUseBlock?: { id?: unknown; name?: unknown } } | undefined)
+      ?.toolUseBlock;
+    const callId = typeof toolUseBlock?.id === "string" ? toolUseBlock.id : undefined;
+    const eventName =
+      typeof toolUseBlock?.name === "string" ? toolUseBlock.name : `mcp__agent_loop_tools__${name}`;
     if (!def.execute) {
+      onToolEnd?.({ name: eventName, callId, error: `Tool "${name}" has no executor.` });
       return {
         content: [{ type: "text", text: `Tool "${name}" has no executor.` }],
         isError: true,
       };
     }
     try {
-      const out = await def.execute(args ?? {}, { signal });
+      const out = await def.execute(args ?? {}, { signal, requestStop });
+      onToolEnd?.({ name: eventName, callId, result: out });
       return { content: [{ type: "text", text: stringifyResult(out) }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      onToolEnd?.({ name: eventName, callId, error: msg });
       return {
         content: [{ type: "text", text: msg }],
         isError: true,
@@ -732,11 +761,14 @@ function stringifyResult(out: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// PreToolUse hook -> req.hooks.toolUse bridge
+// SDK hooks -> req.hooks bridge + terminal-tool stop boundary
 // ---------------------------------------------------------------------------
 
-function makePreToolUseHook(req: ResolvedRequest): ClaudeAgentOptions["hooks"] {
-  const callback = async (
+function makeClaudeHooks(
+  req: ResolvedRequest,
+  shouldStop: () => boolean,
+): ClaudeAgentOptions["hooks"] {
+  const preToolUse = async (
     input: PreToolUseHookInput | Record<string, unknown>,
     toolUseID: string | undefined,
   ): Promise<HookJSONOutput> => {
@@ -787,8 +819,19 @@ function makePreToolUseHook(req: ResolvedRequest): ClaudeAgentOptions["hooks"] {
     return {};
   };
 
+  const postToolBatch = async (
+    _input: PostToolBatchHookInput | Record<string, unknown>,
+  ): Promise<HookJSONOutput> => {
+    if (!shouldStop()) return {};
+    return {
+      continue: false,
+      reason: "Terminal tool requested stop.",
+    };
+  };
+
   return {
-    PreToolUse: [{ hooks: [callback] }],
+    PreToolUse: [{ hooks: [preToolUse] }],
+    PostToolBatch: [{ hooks: [postToolBatch] }],
   };
 }
 
@@ -813,6 +856,7 @@ export function mapClaudeMessage(
   message: SDKMessage,
   toolNames: Map<string, string>,
   streamState: { streamedText: string; streamedThinking: string },
+  emittedToolResults?: Set<string>,
 ): {
   events: LoopEvent[];
   usage?: {
@@ -868,6 +912,8 @@ export function mapClaudeMessage(
       tool_use_result?: unknown;
     };
     if (m.parent_tool_use_id && m.tool_use_result !== undefined) {
+      if (emittedToolResults?.has(m.parent_tool_use_id)) return { events };
+      emittedToolResults?.add(m.parent_tool_use_id);
       events.push({
         type: "tool_call_end",
         name: toolNames.get(m.parent_tool_use_id) ?? "unknown",

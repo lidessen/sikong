@@ -158,7 +158,12 @@ export class AiSdkAdapter implements BackendAdapter {
     };
 
     const stepBudget = o.maxSteps ?? req.maxSteps ?? this.options.maxSteps;
-    const tools = this.buildTools(req, ac.signal);
+    let stopRequested = false;
+    const requestStop = () => {
+      stopRequested = true;
+    };
+    const tools = this.buildTools(req, ac.signal, requestStop);
+    const stopWhen = [stepCountIs(stepBudget ?? 20), () => stopRequested];
 
     const prepareStep = async () => {
       if (pendingSteers.length === 0) return {};
@@ -196,7 +201,7 @@ export class AiSdkAdapter implements BackendAdapter {
           ...(Object.keys(providerOptions).length > 0
             ? { providerOptions: providerOptions as never }
             : {}),
-          ...(stepBudget ? { stopWhen: stepCountIs(stepBudget) } : {}),
+          stopWhen,
           prepareStep,
         });
 
@@ -328,16 +333,26 @@ export class AiSdkAdapter implements BackendAdapter {
    * so the caller's pre-tool hook can deny or replace args BEFORE the real tool
    * runs. This is what makes the "hooks" capability genuine.
    */
-  private buildTools(req: ResolvedRequest, signal: AbortSignal): AiToolSet {
+  private buildTools(
+    req: ResolvedRequest,
+    signal: AbortSignal,
+    requestStop: (reason?: string) => void,
+  ): AiToolSet {
     const out: AiToolSet = {};
     const unified: ToolSet = req.tools ?? {};
     for (const [name, def] of Object.entries(unified)) {
-      out[name] = this.wrapTool(name, def, req, signal);
+      out[name] = this.wrapTool(name, def, req, signal, requestStop);
     }
     return out;
   }
 
-  private wrapTool(name: string, def: ToolDefinition, req: ResolvedRequest, signal: AbortSignal) {
+  private wrapTool(
+    name: string,
+    def: ToolDefinition,
+    req: ResolvedRequest,
+    signal: AbortSignal,
+    requestStop: (reason?: string) => void,
+  ) {
     const inputSchema = toAiInputSchema(def.inputSchema);
     return tool({
       description: def.description,
@@ -354,7 +369,7 @@ export class AiSdkAdapter implements BackendAdapter {
         }
         const finalArgs = decision.action === "replaceArgs" ? decision.args : argObj;
         if (!def.execute) return { error: `Tool "${name}" has no executor` };
-        return await def.execute(finalArgs, { signal, callId });
+        return await def.execute(finalArgs, { signal, callId, requestStop });
       },
     });
   }

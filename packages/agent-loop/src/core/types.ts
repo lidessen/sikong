@@ -26,6 +26,12 @@ export interface ToolDefinition {
 export interface ToolExecutionContext {
   signal?: AbortSignal;
   callId?: string;
+  /**
+   * Ask the backend to stop at its next safe step / turn boundary. Tool
+   * executors should use this for terminal protocol tools instead of directly
+   * aborting the run mid-tool-call.
+   */
+  requestStop?: (reason?: string) => void;
 }
 
 export type ToolSet = Record<string, ToolDefinition>;

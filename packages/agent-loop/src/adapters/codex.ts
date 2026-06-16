@@ -472,12 +472,6 @@ function codexEffort(level: EffortLevel | undefined): CodexAdapterOptions["effor
  *  - "interrupt": cancel() sends `turn/interrupt` and closes the client.
  *
  * Capabilities:
- *  - "tools": `req.tools` are registered on turn/start and their calls are
- *    handled via `item/tool/call` — the adapter executes the tool's `execute`
- *    function and returns the result. MCP tools still route through the
- *    `-c mcp_servers.*` path below.
- *  - "hooks": pre-tool interception via `req.hooks.toolUse()`, for the
- *    `onToolUse` deny/replace-args lifecycle.
  *  - "mcp": req.mcp is translated into `-c mcp_servers.*` config overrides.
  *  - "steer.live": a steer message is injected into the running turn via
  *    `turn/steer`, applied mid-turn.
@@ -485,20 +479,19 @@ function codexEffort(level: EffortLevel | undefined): CodexAdapterOptions["effor
  *  - "usage": `thread/tokenUsage/updated` surfaces as runtime `usage` events.
  *  - "interrupt": cancel() sends `turn/interrupt` and closes the client.
  *
+ * Codex app-server exposes dynamic-tool request/response types, but the
+ * generated `thread/start` / `turn/start` params in current CLI builds do not
+ * expose a field for registering those tools. Until that protocol entrypoint is
+ * available, this adapter must not claim the shared `tools` / tool-hook
+ * capabilities; otherwise upper layers silently start runs that can never call
+ * their required terminal tools.
+ *
  * Codex's own approval RPCs are answered by `handleCodexRequest` based on
  * `fullAuto`.
  */
 export class CodexAdapter implements BackendAdapter {
   readonly id = "codex";
-  readonly capabilities: CapabilityList = [
-    "tools",
-    "mcp",
-    "hooks",
-    "steer.live",
-    "thinking",
-    "usage",
-    "interrupt",
-  ];
+  readonly capabilities: CapabilityList = ["mcp", "steer.live", "thinking", "usage", "interrupt"];
 
   private clients = new Set<JsonRpcStdioClient>();
 
@@ -534,6 +527,7 @@ export class CodexAdapter implements BackendAdapter {
     let threadId: string | undefined;
     let turnId: string | undefined;
     let settled = false;
+    let stopRequested = false;
 
     // Resolved/rejected when the turn finishes (turn/completed or error).
     let resolveDone!: () => void;
@@ -670,7 +664,8 @@ export class CodexAdapter implements BackendAdapter {
               resolveDone();
               break;
             case "interrupted":
-              rejectDone(new Error(turn.error?.message ?? "turn interrupted"));
+              if (stopRequested) resolveDone();
+              else rejectDone(new Error(turn.error?.message ?? "turn interrupted"));
               break;
             case "failed":
             default:
@@ -708,7 +703,14 @@ export class CodexAdapter implements BackendAdapter {
         args,
         cwd: this.opts.cwd,
         env: childEnv,
-        handleRequest: (request) => this.handleCodexRequest(request, tools, hooksBridge),
+        handleRequest: (request) =>
+          this.handleCodexRequest(request, tools, hooksBridge, () => {
+            stopRequested = true;
+            setTimeout(() => {
+              const turn = this.currentTurn;
+              if (turn) void this.interrupt(turn.client, turn.threadId, turn.turnId);
+            }, 0);
+          }),
       });
       this.clients.add(client);
       client.start(handleNotification);
@@ -747,15 +749,6 @@ export class CodexAdapter implements BackendAdapter {
       };
       req.signal?.addEventListener("abort", onAbort, { once: true });
 
-      // Start the turn — pass tool definitions so Codex knows about custom tools.
-      const toolDefs =
-        Object.keys(tools).length > 0
-          ? Object.entries(tools).map(([name, def]) => ({
-              name,
-              description: def.description ?? "",
-              inputSchema: def.inputSchema ?? null,
-            }))
-          : undefined;
       const turnResp = (await client.request("turn/start", {
         threadId,
         input: [{ type: "text", text: req.prompt, text_elements: [] }],
@@ -767,7 +760,6 @@ export class CodexAdapter implements BackendAdapter {
         approvalsReviewer: this.opts.approvalsReviewer ?? undefined,
         sandboxPolicy: o.sandboxPolicy ?? undefined,
         outputSchema: o.outputSchema ?? undefined,
-        ...(toolDefs ? { tools: toolDefs } : {}),
       })) as { turn?: { id?: string } };
       turnId = turnResp.turn?.id;
       if (!turnId) throw new Error("codex app-server returned no turn id");
@@ -821,6 +813,7 @@ export class CodexAdapter implements BackendAdapter {
     request: JsonRpcRequest,
     tools: ToolSet,
     hooksBridge: AdapterHookBridge,
+    requestStop: (reason?: string) => void,
   ): Promise<unknown> {
     const allow = this.opts.fullAuto === true;
     switch (request.method) {
@@ -871,6 +864,7 @@ export class CodexAdapter implements BackendAdapter {
           };
         }
         const toolDef = tools[toolName]!;
+        let toolRequestedStop = false;
 
         // Pre-tool interception hook (onToolUse)
         if (hooksBridge) {
@@ -896,8 +890,12 @@ export class CodexAdapter implements BackendAdapter {
           const result = await toolDef.execute?.(params.arguments ?? {}, {
             signal: undefined,
             callId: params.id,
+            requestStop: (_reason) => {
+              toolRequestedStop = true;
+            },
           });
           const resultText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          if (toolRequestedStop) requestStop("terminal tool requested stop");
           return {
             contentItems: [{ type: "inputText", text: resultText }],
             success: true,

@@ -27,6 +27,7 @@ type productOptions struct {
 	daemonAddr string
 	uiPort     string
 	noOpen     bool
+	json       bool
 	timeout    time.Duration
 }
 
@@ -103,7 +104,7 @@ func runStart(args []string) error {
 	if !opts.noOpen {
 		openBrowser(uiURL)
 	}
-	return printJSON(map[string]any{
+	payload := map[string]any{
 		"ok": true,
 		"data": map[string]any{
 			"version": buildinfo.Version(),
@@ -119,7 +120,12 @@ func runStart(args []string) error {
 				"health":  uiHealth,
 			},
 		},
-	})
+	}
+	if opts.json {
+		return printJSON(payload)
+	}
+	fmt.Print(formatStartText(daemonURL, uiURL))
+	return nil
 }
 
 func runStop(args []string) error {
@@ -133,13 +139,18 @@ func runStop(args []string) error {
 	shutdownOK := postShutdown(daemonURL + "/shutdown")
 	state.Updated = time.Now().UTC().Format(time.RFC3339)
 	_ = writeState(state)
-	return printJSON(map[string]any{
+	payload := map[string]any{
 		"ok": true,
 		"data": map[string]any{
 			"daemon": map[string]any{"url": daemonURL, "shutdown": shutdownOK},
 			"ui":     map[string]any{"pid": state.UI.PID, "stopped": uiStopped},
 		},
-	})
+	}
+	if opts.json {
+		return printJSON(payload)
+	}
+	fmt.Print(formatStopText(daemonURL, shutdownOK, state.UI.PID, uiStopped))
+	return nil
 }
 
 func runStatus(args []string) error {
@@ -152,7 +163,7 @@ func runStatus(args []string) error {
 	daemonHealth, daemonRunning := checkJSONHealth(daemonURL + "/health")
 	uiURL := "http://127.0.0.1:" + opts.uiPort
 	uiHealth, uiRunning := checkJSONHealth(uiURL + "/api/health")
-	return printJSON(map[string]any{
+	payload := map[string]any{
 		"ok": true,
 		"data": map[string]any{
 			"version": buildinfo.Version(),
@@ -170,7 +181,12 @@ func runStatus(args []string) error {
 				"pid":     state.UI.PID,
 			},
 		},
-	})
+	}
+	if opts.json {
+		return printJSON(payload)
+	}
+	fmt.Print(formatStatusText(daemonURL, daemonRunning, uiURL, uiRunning))
+	return nil
 }
 
 func parseProductOptions(args []string) (productOptions, error) {
@@ -198,6 +214,8 @@ func parseProductOptions(args []string) (productOptions, error) {
 			opts.uiPort = strings.TrimPrefix(arg, "--web-port=")
 		case arg == "--no-open":
 			opts.noOpen = true
+		case arg == "--json":
+			opts.json = true
 		case arg == "--timeout-ms":
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--timeout-ms requires a value")
@@ -219,6 +237,45 @@ func parseProductOptions(args []string) (productOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func formatStartText(daemonURL string, uiURL string) string {
+	return fmt.Sprintf("Sikong started\nDaemon: %s\nUI: %s\n", daemonURL, uiURL)
+}
+
+func formatStopText(daemonURL string, shutdownOK bool, uiPID int, uiStopped bool) string {
+	daemonStatus := "stopped"
+	if !shutdownOK {
+		daemonStatus = "not running"
+	}
+	uiStatus := "not tracked"
+	if uiPID > 0 {
+		if uiStopped {
+			uiStatus = "stopped"
+		} else {
+			uiStatus = "not running"
+		}
+	}
+	return fmt.Sprintf("Sikong stopped\nDaemon: %s (%s)\nUI: %s\n", daemonURL, daemonStatus, uiStatus)
+}
+
+func formatStatusText(daemonURL string, daemonRunning bool, uiURL string, uiRunning bool) string {
+	daemonStatus := "stopped"
+	if daemonRunning {
+		daemonStatus = "running"
+	}
+	uiStatus := "stopped"
+	if uiRunning {
+		uiStatus = "running"
+	}
+	return fmt.Sprintf(
+		"Sikong %s\nDaemon: %s (%s)\nUI: %s (%s)\n",
+		buildinfo.Version(),
+		daemonURL,
+		daemonStatus,
+		uiURL,
+		uiStatus,
+	)
 }
 
 func resolveManagedRuntime() (managedRuntime, error) {

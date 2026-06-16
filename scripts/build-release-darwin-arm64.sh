@@ -14,6 +14,7 @@ fi
 
 cleanup() {
   rm -rf "$ASSETS_DIR/bin" "$ASSETS_DIR/client-dist"
+  bun scripts/patch-cursor-sdk-standalone.ts restore >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -23,6 +24,7 @@ mkdir -p "$ASSETS_DIR/bin" "$RELEASE_DIR"
 cd "$ROOT"
 
 bun --filter @sikong/client build
+bun scripts/patch-cursor-sdk-standalone.ts apply
 
 bun build --compile packages/workspace/src/cli/index.ts \
   --outfile "$ASSETS_DIR/bin/sikong-workspace-cli"

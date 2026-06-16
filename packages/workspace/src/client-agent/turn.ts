@@ -1,4 +1,4 @@
-import type { AgentLoop, RunHandle, RunResult } from "agent-loop";
+import { emptyUsage, type AgentLoop, type RunHandle, type RunResult } from "agent-loop";
 import { createClientAgentTools } from "../tools";
 import type { CommandContext } from "../commands";
 import {
@@ -25,6 +25,8 @@ export interface RunClientAgentTurnInput {
   recentTranscriptLimit?: number;
   maxSteps?: number;
   settlementMaxSteps?: number;
+  passTimeoutMs?: number;
+  settlementPassTimeoutMs?: number;
   system?: string;
 }
 
@@ -65,7 +67,10 @@ recent transcript, or ask a concise clarification.
 Finish each visible turn with one of three client outcomes:
 - report: what changed or what you found;
 - question: a concise clarification for the operator;
-- request: an operator decision such as accepting a plan or final result.`;
+- request: an operator decision such as accepting a plan or final result.
+
+Do not rely on plain assistant text as the final reply. Once you have enough
+information for the visible turn, call finishClientTurn exactly once and stop.`;
 
 export async function runClientAgentTurn(
   input: RunClientAgentTurnInput,
@@ -91,6 +96,7 @@ export async function runClientAgentTurn(
     transcript: input.transcript,
     mode: "work",
     metadata: { surface: "sikong.client_agent", phase: "work" },
+    timeoutMs: input.passTimeoutMs ?? 60_000,
     ...(input.maxSteps !== undefined ? { maxSteps: input.maxSteps } : {}),
   });
   if (work.outcome) {
@@ -102,6 +108,16 @@ export async function runClientAgentTurn(
       settlement: { used: false, fallbackUsed: false },
     };
   }
+  if (isClientAgentPassTimeout(work.run)) {
+    const outcome = fallbackOutcome(work.run, skippedSettlementRun("skipped after work timeout"));
+    return {
+      context,
+      run: work.run,
+      outcome,
+      outcomeText: formatClientTurnOutcomeText(outcome),
+      settlement: { used: false, fallbackUsed: true },
+    };
+  }
 
   const settlement = await runClientAgentPass({
     ctx: input.ctx,
@@ -111,6 +127,7 @@ export async function runClientAgentTurn(
     transcript: input.transcript,
     mode: "settlement",
     maxSteps: input.settlementMaxSteps ?? 2,
+    timeoutMs: input.settlementPassTimeoutMs ?? 20_000,
     metadata: { surface: "sikong.client_agent", phase: "settlement" },
   });
   const outcome = settlement.outcome ?? fallbackOutcome(work.run, settlement.run);
@@ -145,7 +162,8 @@ and final task evidence are produced by the task orchestration agents.
 
 Turn boundary:
 When the visible work for this turn reaches a user-facing boundary, call
-finishClientTurn with a report, question, or request.`;
+finishClientTurn with a report, question, or request. Do not continue producing
+assistant text after calling finishClientTurn.`;
 }
 
 export function formatClientAgentSettlementPrompt(
@@ -178,11 +196,11 @@ async function runClientAgentPass(input: {
   transcript?: ClientTranscriptSource;
   mode: "work" | "settlement";
   maxSteps?: number;
+  timeoutMs?: number;
   metadata: Record<string, unknown>;
 }): Promise<{ run: RunResult; outcome?: ClientTurnOutcome }> {
   const sink: ClientTurnOutcomeSink = {};
-  let run: RunHandle | undefined;
-  run = input.loop.run({
+  const run = input.loop.run({
     system: input.system,
     prompt: input.prompt,
     tools: createClientAgentTools({
@@ -190,24 +208,66 @@ async function runClientAgentPass(input: {
       transcript: input.transcript,
       mode: input.mode,
       outcome: sink,
-      onFinish: () => run?.cancel("client-agent turn outcome submitted"),
     }),
     ...(input.maxSteps !== undefined ? { maxSteps: input.maxSteps } : {}),
     metadata: input.metadata,
   });
-  return { run: await run.result, ...(sink.outcome ? { outcome: sink.outcome } : {}) };
+  const result = await waitClientAgentRun(run, input.timeoutMs);
+  return { run: result, ...(sink.outcome ? { outcome: sink.outcome } : {}) };
+}
+
+async function waitClientAgentRun(
+  run: RunHandle,
+  timeoutMs: number | undefined,
+): Promise<RunResult> {
+  if (timeoutMs === undefined) return await run.result;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const timeoutResult = new Promise<RunResult>((resolve) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      const error = new Error(`client agent pass timed out after ${timeoutMs}ms`);
+      run.cancel(error.message);
+      void run.cleanup({ reason: error.message, graceMs: 2_000 });
+      resolve({
+        events: [],
+        usage: emptyUsage(),
+        durationMs: timeoutMs,
+        status: "error",
+        error,
+        text: "",
+      });
+    }, timeoutMs);
+  });
+  const result = await Promise.race([run.result, timeoutResult]);
+  if (timeout) clearTimeout(timeout);
+  if (timedOut) void run.result.catch(() => {});
+  return result;
 }
 
 function fallbackOutcome(work: RunResult, settlement: RunResult): ClientTurnOutcome {
-  const summary =
-    settlement.text.trim() ||
-    work.text.trim() ||
-    formatRunErrors(work, settlement) ||
-    "The client agent turn ended without a structured outcome.";
+  const visibleText = settlement.text.trim() || work.text.trim();
+  if (visibleText) {
+    return {
+      kind: "report",
+      title: "Sikong response",
+      summary: visibleText,
+    };
+  }
+
+  const errorSummary = formatRunErrors(work, settlement);
+  if (!errorSummary) {
+    return {
+      kind: "report",
+      title: "No response",
+      summary: "Client agent did not produce a usable response. Please retry.",
+    };
+  }
+
   return {
     kind: "report",
-    title: "Turn ended without structured outcome",
-    summary,
+    title: "Client agent turn failed",
+    summary: errorSummary,
     facts: [
       { label: "work pass", value: work.status },
       ...(work.error ? [{ label: "work error", value: work.error.message }] : []),
@@ -223,4 +283,18 @@ function formatRunErrors(work: RunResult, settlement: RunResult): string {
     settlement.error ? `Settlement pass error: ${settlement.error.message}` : "",
   ].filter(Boolean);
   return lines.join("\n");
+}
+
+function isClientAgentPassTimeout(run: RunResult): boolean {
+  return Boolean(run.error?.message.startsWith("client agent pass timed out after "));
+}
+
+function skippedSettlementRun(_reason: string): RunResult {
+  return {
+    events: [],
+    usage: emptyUsage(),
+    durationMs: 0,
+    status: "cancelled",
+    text: "",
+  };
 }

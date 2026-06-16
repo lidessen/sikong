@@ -18,10 +18,15 @@ function ctx(dataDir: string): CommandContext {
   };
 }
 
-async function callTool(tools: ToolSet, name: string, args: Record<string, unknown> = {}) {
+async function callTool(
+  tools: ToolSet,
+  name: string,
+  args: Record<string, unknown> = {},
+  toolCtx: Parameters<NonNullable<ToolDefinition["execute"]>>[1] = {},
+) {
   const tool = requireTool(tools, name);
   if (!tool.execute) throw new Error(`missing execute: ${name}`);
-  return await tool.execute(args, {});
+  return await tool.execute(args, toolCtx);
 }
 
 function requireTool(tools: ToolSet, name: string): ToolDefinition {
@@ -55,6 +60,7 @@ describe("client agent tools", () => {
   test("settlement tools are read-only and can finish the turn", async () => {
     const sink = {};
     let finished = false;
+    let stopReason: string | undefined;
     const tools = createClientAgentTools({
       ctx: ctx("/tmp/sikong-client-tools-test"),
       mode: "settlement",
@@ -74,12 +80,21 @@ describe("client agent tools", () => {
     expect(tools.waitTask).toBeUndefined();
 
     expect(
-      await callTool(tools, "finishClientTurn", {
-        kind: "report",
-        title: "Done",
-        summary: "Created the requested workspace.",
-        facts: [{ label: "workspace", value: "sikong" }],
-      }),
+      await callTool(
+        tools,
+        "finishClientTurn",
+        {
+          kind: "report",
+          title: "Done",
+          summary: "Created the requested workspace.",
+          facts: [{ label: "workspace", value: "sikong" }],
+        },
+        {
+          requestStop: (reason) => {
+            stopReason = reason;
+          },
+        },
+      ),
     ).toMatchObject({
       ok: true,
       data: {
@@ -97,6 +112,24 @@ describe("client agent tools", () => {
         title: "Done",
       },
     });
+    expect(stopReason).toBe("client-agent turn outcome submitted");
+  });
+
+  test("finishClientTurn schema declares variant-specific required fields", () => {
+    const tools = createClientAgentTools({
+      ctx: ctx("/tmp/sikong-client-tools-test"),
+      mode: "settlement",
+      outcome: {},
+    });
+    const schema = requireTool(tools, "finishClientTurn").inputSchema as {
+      oneOf?: Array<{ required?: string[] }>;
+    };
+
+    expect(schema.oneOf?.map((variant) => variant.required)).toEqual([
+      ["kind", "title", "summary"],
+      ["kind", "question"],
+      ["kind", "requestType", "title", "body"],
+    ]);
   });
 
   test("expose transcript, workspace, preference, task, and inspect command handlers", async () => {

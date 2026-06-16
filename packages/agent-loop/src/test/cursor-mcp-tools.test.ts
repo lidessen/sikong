@@ -1,8 +1,68 @@
 import { describe, expect, test } from "vitest";
 import { defineTool } from "../core/types";
-import { handleMcpRequest } from "../adapters/cursor";
+import { buildCursorCustomTools, handleMcpRequest } from "../adapters/cursor";
 
 describe("cursor MCP tool bridge", () => {
+  test("maps loop tools to Cursor custom tools", async () => {
+    let stopReason: string | undefined;
+    const customTools = buildCursorCustomTools(
+      {
+        finishClientTurn: defineTool({
+          description: "Finish the turn.",
+          inputSchema: {
+            type: "object",
+            properties: { summary: { type: "string" } },
+            required: ["summary"],
+          },
+          execute: async (args, ctx) => ({
+            ok: true,
+            args,
+            callId: ctx.callId,
+            stop: ctx.requestStop?.("done"),
+          }),
+        }),
+      },
+      undefined,
+      (reason) => {
+        stopReason = reason;
+      },
+    );
+
+    const result = await customTools.finishClientTurn?.execute(
+      { summary: "done" },
+      { toolCallId: "call_1" },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      args: { summary: "done" },
+      callId: "call_1",
+    });
+    expect(stopReason).toBe("done");
+  });
+
+  test("drops non-json custom tool schemas before passing them to Cursor", () => {
+    const customTools = buildCursorCustomTools({
+      finishClientTurn: defineTool({
+        description: "Finish the turn.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            summary: { type: "string", refine: () => true },
+          },
+        },
+        execute: async () => ({ ok: true }),
+      }),
+    });
+
+    expect(customTools.finishClientTurn?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        summary: { type: "string" },
+      },
+    });
+  });
+
   test("handles MCP initialization", async () => {
     const response = await handleMcpRequest(
       {

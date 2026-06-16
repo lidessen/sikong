@@ -186,6 +186,10 @@ async function runTurnWorkflow(
       ...(input.taskId ? { taskId: input.taskId } : {}),
     },
     transcript: transcriptSource({ excludeMessageId: userMessage.id }),
+    maxSteps: 4,
+    settlementMaxSteps: 1,
+    passTimeoutMs: 60_000,
+    settlementPassTimeoutMs: 20_000,
   });
 
   await progress({
