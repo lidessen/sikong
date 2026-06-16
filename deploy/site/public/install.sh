@@ -2,7 +2,7 @@
 set -eu
 
 REPO="${SIKONG_RELEASE_REPO:-lidessen/sikong}"
-VERSION="${SIKONG_VERSION:-v0.2.0-beta.6}"
+VERSION="${SIKONG_VERSION:-v0.2.0-beta.7}"
 ASSET="sikong-darwin-arm64.tar.gz"
 
 os="$(uname -s)"
