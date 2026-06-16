@@ -19,17 +19,22 @@ export class LocalProcessExecutionClient {
       throw new Error(`process run ${spec.runId} already exists`);
     }
 
-    const startedAt = new Date().toISOString();
+    const queuedAt = new Date().toISOString();
     const record: LocalProcessRecord = {
       snapshot: {
         runId: spec.runId,
         workspaceId: spec.workspaceId,
         ...(spec.taskId ? { taskId: spec.taskId } : {}),
-        state: "running",
+        state: "queued",
         spec,
-        startedAt,
+        queuedAt,
       },
       finished: Promise.resolve({} as ProcessRunSnapshot),
+    };
+    record.snapshot = {
+      ...record.snapshot,
+      state: "running",
+      startedAt: new Date().toISOString(),
     };
     record.finished = runProcess(spec)
       .then((result) => {

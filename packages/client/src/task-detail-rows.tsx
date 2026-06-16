@@ -148,7 +148,9 @@ export function RuntimeRunRow(props: {
       ? formatDuration(props.snapshot.result.durationMs)
       : props.processRun.finishedAt
         ? elapsedBetween(props.processRun.startedAt, props.processRun.finishedAt)
-        : "running";
+        : status === "queued"
+          ? "queued"
+          : "running";
   return (
     <div className="rounded-[var(--radius-md)] border bg-background p-2">
       <div className="flex items-center justify-between gap-2">
@@ -169,7 +171,12 @@ export function RuntimeRunRow(props: {
             <p className="truncate font-mono">cwd {props.snapshot.spec.cwd}</p>
           ) : null}
           <div className="flex flex-wrap gap-x-3 gap-y-1">
-            <span>started {formatTime(props.snapshot.startedAt)}</span>
+            {props.snapshot.queuedAt ? (
+              <span>queued {formatTime(props.snapshot.queuedAt)}</span>
+            ) : null}
+            {props.snapshot.startedAt ? (
+              <span>started {formatTime(props.snapshot.startedAt)}</span>
+            ) : null}
             <span>duration {duration}</span>
             <span>timeout {formatTimeout(props.snapshot.spec.timeoutMs)}</span>
           </div>

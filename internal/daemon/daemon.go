@@ -7,12 +7,17 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 )
 
 const (
-	DaemonAddrEnv     = "SIKONG_DAEMON_ADDR"
-	DefaultDaemonAddr = "127.0.0.1:8765"
+	DaemonAddrEnv                     = "SIKONG_DAEMON_ADDR"
+	DaemonProcessMaxConcurrentEnv     = "SIKONG_DAEMON_PROCESS_MAX_CONCURRENT"
+	DaemonSchedulerMaxConcurrentEnv   = "SIKONG_DAEMON_TASK_MAX_CONCURRENT"
+	DefaultDaemonAddr                 = "127.0.0.1:8765"
+	DefaultDaemonProcessMaxConcurrent = 8
+	DefaultDaemonTaskMaxConcurrent    = 4
 )
 
 type RunOptions struct {
@@ -30,16 +35,24 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts RunOptions) error {
 	if addr == "" {
 		addr = DefaultDaemonAddr
 	}
+	processMaxConcurrent := opts.MaxConcurrent
+	if processMaxConcurrent <= 0 {
+		processMaxConcurrent = positiveIntEnv(DaemonProcessMaxConcurrentEnv, DefaultDaemonProcessMaxConcurrent)
+	}
+	schedulerMaxConcurrent := positiveIntEnv(
+		DaemonSchedulerMaxConcurrentEnv,
+		DefaultDaemonTaskMaxConcurrent,
+	)
 
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 
 	scheduler := NewScheduler(runCtx, SchedulerOptions{
 		Addr:          addr,
-		MaxConcurrent: 2,
+		MaxConcurrent: schedulerMaxConcurrent,
 	})
 	api := NewProcessAPI(runCtx, NewProcessSupervisor(ProcessRunnerOptions{
-		MaxConcurrent: opts.MaxConcurrent,
+		MaxConcurrent: processMaxConcurrent,
 	}))
 	if !opts.DisableScheduler {
 		api.SetScheduler(scheduler)
@@ -76,4 +89,16 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts RunOptions) error {
 	case err := <-errs:
 		return err
 	}
+}
+
+func positiveIntEnv(name string, fallback int) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

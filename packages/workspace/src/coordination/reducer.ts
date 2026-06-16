@@ -74,11 +74,28 @@ export function applyTaskEvent(
         [event.processRunId]: {
           processRunId: event.processRunId,
           actionType: event.actionType,
+          status: "queued",
+          queuedAt: event.createdAt,
+          startedAt: event.createdAt,
+        },
+      };
+      break;
+    case "runtime_process.running": {
+      const existing = next.runtimeProcessRuns?.[event.processRunId];
+      next.runtimeProcessRuns = {
+        ...next.runtimeProcessRuns,
+        [event.processRunId]: {
+          ...(existing ?? {
+            processRunId: event.processRunId,
+            actionType: "unknown",
+            queuedAt: event.createdAt,
+          }),
           status: "running",
           startedAt: event.createdAt,
         },
       };
       break;
+    }
     case "runtime_process.finished": {
       const existing = next.runtimeProcessRuns?.[event.processRunId];
       next.runtimeProcessRuns = {

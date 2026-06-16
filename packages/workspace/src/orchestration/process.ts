@@ -8,6 +8,7 @@ import {
   getTask,
   ok,
   recordRuntimeProcessFinished,
+  recordRuntimeProcessRunning,
   recordRuntimeProcessStarted,
   type CommandContext,
   type CommandResult,
@@ -24,6 +25,7 @@ export interface OrchestrationProcessClient {
 }
 
 export interface OrchestrationProcessExecutionClient extends OrchestrationProcessClient {
+  getProcessRun?(runId: string): Promise<ProcessRunSnapshot>;
   waitProcessRun(runId: string, options?: { timeoutMs?: number }): Promise<ProcessRunSnapshot>;
 }
 
@@ -126,10 +128,21 @@ export async function executeOrchestrationActionProcess(
       });
       if (!recorded.ok) return recorded;
     }
+    const runningMonitor = taskId
+      ? monitorProcessRunning(input.ctx, input.client, {
+          workspaceId,
+          taskId,
+          processRunId: runId,
+        })
+      : undefined;
     const finished = await input.client.waitProcessRun(
       runId,
       input.waitTimeoutMs !== undefined ? { timeoutMs: input.waitTimeoutMs } : {},
     );
+    if (runningMonitor) {
+      const monitored = await runningMonitor;
+      if (monitored && !monitored.ok) return monitored;
+    }
     if (taskId && finished.result) {
       const recorded = await recordRuntimeProcessFinished(input.ctx, {
         workspaceId,
@@ -224,7 +237,12 @@ async function executeStageWorkerProcesses(
           actionType: action.type,
         });
         if (!recorded.ok) return recorded;
-        return ok({ action, runId });
+        const runningMonitor = monitorProcessRunning(input.ctx, input.client, {
+          workspaceId,
+          taskId,
+          processRunId: runId,
+        });
+        return ok({ action, runId, runningMonitor });
       }),
     );
 
@@ -238,38 +256,41 @@ async function executeStageWorkerProcesses(
           item.data.runId,
           input.waitTimeoutMs !== undefined ? { timeoutMs: input.waitTimeoutMs } : {},
         );
+        const monitored = await item.data.runningMonitor;
+        if (monitored && !monitored.ok) return { ...item.data, snapshot, error: monitored };
+        if (snapshot.result) {
+          const recorded = await recordRuntimeProcessFinished(input.ctx, {
+            workspaceId,
+            taskId,
+            processRunId: item.data.runId,
+            processStatus: snapshot.result.status,
+            ...(snapshot.result.exitCode !== undefined
+              ? { exitCode: snapshot.result.exitCode }
+              : {}),
+          });
+          if (!recorded.ok) return { ...item.data, snapshot, error: recorded };
+          if (snapshot.result.status !== "succeeded") {
+            const marked = await recordProcessActionFailure(
+              { ...input, action: item.data.action },
+              {
+                workspaceId,
+                taskId,
+                runId: item.data.runId,
+                status: snapshot.result.status,
+                exitCode: snapshot.result.exitCode,
+                stderr: snapshot.result.stderr,
+              },
+            );
+            if (!marked.ok) return { ...item.data, snapshot, error: marked };
+          }
+        }
         return { ...item.data, snapshot };
       }),
     );
 
     const outputs: OrchestrationWorkerRunSummary[] = [];
     for (const item of finished) {
-      if (item.snapshot.result) {
-        const recorded = await recordRuntimeProcessFinished(input.ctx, {
-          workspaceId,
-          taskId,
-          processRunId: item.runId,
-          processStatus: item.snapshot.result.status,
-          ...(item.snapshot.result.exitCode !== undefined
-            ? { exitCode: item.snapshot.result.exitCode }
-            : {}),
-        });
-        if (!recorded.ok) return recorded;
-        if (item.snapshot.result.status !== "succeeded") {
-          const marked = await recordProcessActionFailure(
-            { ...input, action: item.action },
-            {
-              workspaceId,
-              taskId,
-              runId: item.runId,
-              status: item.snapshot.result.status,
-              exitCode: item.snapshot.result.exitCode,
-              stderr: item.snapshot.result.stderr,
-            },
-          );
-          if (!marked.ok) return marked;
-        }
-      }
+      if ("error" in item && item.error && !item.error.ok) return item.error;
 
       if (item.snapshot.state !== "finished" || !item.snapshot.result) {
         return fail("internal_error", "Orchestration process did not finish.", {
@@ -306,6 +327,30 @@ async function executeStageWorkerProcesses(
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+async function monitorProcessRunning(
+  ctx: CommandContext,
+  client: OrchestrationProcessExecutionClient,
+  input: {
+    workspaceId: string;
+    taskId: string;
+    processRunId: string;
+  },
+): Promise<CommandResult<{ projection: unknown }> | undefined> {
+  if (!client.getProcessRun) return undefined;
+  for (;;) {
+    const snapshot = await client.getProcessRun(input.processRunId);
+    if (snapshot.state === "running") {
+      return await recordRuntimeProcessRunning(ctx, input);
+    }
+    if (snapshot.state === "finished") return undefined;
+    await sleep(500);
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function recordProcessActionFailure(

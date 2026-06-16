@@ -47,6 +47,9 @@ const projection: TaskProjection = {
           id: "work_unit_1",
           title: "Runtime preset work",
           objective: "Refactor runtime into presets.",
+          instructions: ["Refactor only the runtime preset wrapper path."],
+          deliverables: ["Runtime preset wrapper changes are complete."],
+          outOfScope: ["Do not change unrelated orchestration behavior."],
         },
       ],
     },
@@ -107,7 +110,10 @@ describe("worker preset wrappers", () => {
       },
     });
     expect(preset.goal).toContain("You are Sikong's Stage Worker");
-    expect(preset.goal).toContain("complete this work unit");
+    expect(preset.goal).toContain("complete only this work unit");
+    expect(preset.goal).toContain("Work unit instructions:");
+    expect(preset.goal).toContain("Expected deliverables:");
+    expect(preset.goal).toContain("Out of scope:");
     expect(preset.goal).toContain("Stage: Implement");
     expect(preset.goal).toContain("- Planner preset is a wrapper.");
   });

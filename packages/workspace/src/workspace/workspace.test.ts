@@ -83,9 +83,9 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
         runId: spec.runId,
         workspaceId: spec.workspaceId,
         ...(spec.taskId ? { taskId: spec.taskId } : {}),
-        state: "running",
+        state: "queued",
         spec,
-        startedAt: "2026-06-14T00:00:00.000Z",
+        queuedAt: "2026-06-14T00:00:00Z",
       };
     },
     async waitProcessRun(runId) {

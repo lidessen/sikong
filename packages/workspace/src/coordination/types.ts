@@ -35,6 +35,9 @@ export interface StageWorkUnitDef {
   id: string;
   title: string;
   objective: string;
+  instructions: string[];
+  deliverables: string[];
+  outOfScope: string[];
   acceptance?: string[];
 }
 
@@ -53,6 +56,7 @@ export type TaskEvent =
   | PlanAcceptedEvent
   | PlanRejectedEvent
   | RuntimeProcessStartedEvent
+  | RuntimeProcessRunningEvent
   | RuntimeProcessFinishedEvent
   | StageStartedEvent
   | StageRoundPlannedEvent
@@ -113,6 +117,11 @@ export interface RuntimeProcessStartedEvent extends TaskEventBase {
   type: "runtime_process.started";
   processRunId: string;
   actionType: string;
+}
+
+export interface RuntimeProcessRunningEvent extends TaskEventBase {
+  type: "runtime_process.running";
+  processRunId: string;
 }
 
 export interface RuntimeProcessFinishedEvent extends TaskEventBase {
@@ -285,9 +294,10 @@ export type RuntimeProcessStatus = "succeeded" | "failed" | "timed_out" | "cance
 export interface RuntimeProcessRunProjection {
   processRunId: string;
   actionType: string;
-  status: "running" | "finished";
+  status: "queued" | "running" | "finished";
   processStatus?: RuntimeProcessStatus;
   exitCode?: number;
+  queuedAt?: string;
   startedAt: string;
   finishedAt?: string;
 }

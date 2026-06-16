@@ -192,9 +192,9 @@ describe("daemon process client", () => {
           {
             runId: "run_daemon",
             workspaceId: "sikong",
-            state: "running",
+            state: "queued",
             spec: JSON.parse(String(init?.body)),
-            startedAt: "2026-06-14T00:00:00Z",
+            queuedAt: "2026-06-14T00:00:00Z",
           },
           { status: 202 },
         );
@@ -260,7 +260,7 @@ describe("daemon process client", () => {
         command: "bun",
         args: ["--version"],
       }),
-    ).resolves.toMatchObject({ runId: "run_daemon", state: "running" });
+    ).resolves.toMatchObject({ runId: "run_daemon", state: "queued" });
     await expect(client.waitProcessRun("run_daemon", { timeoutMs: 1000 })).resolves.toMatchObject({
       state: "finished",
       result: { status: "succeeded", stdout: "ok\n" },

@@ -173,7 +173,6 @@ describe("client agent tools", () => {
       const createdTask = await callTool(tools, "createTask", {
         workspaceId: "sikong",
         request: "Implement client agent tools.",
-        cwd: dir,
       });
       expect(createdTask).toMatchObject({
         ok: true,
@@ -182,6 +181,9 @@ describe("client agent tools", () => {
           projection: {
             taskId: "task_id_1",
             status: "created",
+            runtime: {
+              cwd: join(dir, "workspaces", "sikong", "tasks", "task_id_1"),
+            },
           },
         },
       });

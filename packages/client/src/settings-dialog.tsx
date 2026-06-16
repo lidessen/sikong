@@ -6,7 +6,14 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { CardDescription, CardTitle } from "./components/ui/card";
 import { Input } from "./components/ui/input";
-import type { DefaultAgentRuntime, DefaultAgentRuntimeKey, SikongSettings } from "./types";
+import type {
+  DefaultAgentRuntime,
+  DefaultAgentRuntimeKey,
+  RuntimeBackendOption,
+  RuntimeProviderOption,
+  SikongSettings,
+  SikongSettingsOptions,
+} from "./types";
 
 const agentDefaultLabels: Array<{
   key: DefaultAgentRuntimeKey;
@@ -30,12 +37,44 @@ const agentDefaultLabels: Array<{
   },
 ];
 
-const backendOptions = ["codex", "claude-code", "cursor", "ai-sdk"];
-const providerOptions = ["", "deepseek", "anthropic", "openai"];
+const fallbackSettingsOptions: SikongSettingsOptions = {
+  backends: [
+    {
+      id: "codex",
+      label: "Codex",
+      supportsProvider: true,
+      defaultProviderLabel: "Backend default",
+    },
+    {
+      id: "claude-code",
+      label: "Claude Code",
+      supportsProvider: true,
+      defaultProviderLabel: "Backend default",
+    },
+    {
+      id: "cursor",
+      label: "Cursor",
+      supportsProvider: false,
+      defaultProviderLabel: "Cursor API key",
+    },
+    {
+      id: "ai-sdk",
+      label: "AI SDK",
+      supportsProvider: true,
+      defaultProviderLabel: "Backend default",
+    },
+  ],
+  providers: [
+    { id: "deepseek", label: "DeepSeek", supportedBackends: ["claude-code", "ai-sdk"] },
+    { id: "anthropic", label: "Anthropic", supportedBackends: ["claude-code", "ai-sdk"] },
+    { id: "openai", label: "OpenAI", supportedBackends: ["codex", "ai-sdk"] },
+  ],
+};
 
 export function SettingsDialog(props: {
   open: boolean;
   settings: SikongSettings;
+  options?: SikongSettingsOptions;
   onClose: () => void;
   onSaveSettings: (settings: SikongSettings) => Promise<void>;
 }) {
@@ -63,6 +102,7 @@ export function SettingsDialog(props: {
         </Button>
         <SettingsForm
           settings={props.settings}
+          options={props.options ?? props.settings.options ?? fallbackSettingsOptions}
           titleId="settings-dialog-title"
           onSave={props.onSaveSettings}
         />
@@ -73,6 +113,7 @@ export function SettingsDialog(props: {
 
 function SettingsForm(props: {
   settings: SikongSettings;
+  options: SikongSettingsOptions;
   titleId?: string;
   onSave: (settings: SikongSettings) => Promise<void>;
 }) {
@@ -103,7 +144,7 @@ function SettingsForm(props: {
       version: 1,
       defaults: {
         ...current.defaults,
-        [key]: normalizeDraftDefault(next),
+        [key]: normalizeDraftDefault(next, props.options),
       },
     }));
   }
@@ -137,6 +178,7 @@ function SettingsForm(props: {
               key={item.key}
               role={item}
               value={draft.defaults[item.key]}
+              options={props.options}
               onChange={(next) => updateDefault(item.key, next)}
             />
           ))}
@@ -168,8 +210,12 @@ function SettingsForm(props: {
 function AgentDefaultFields(props: {
   role: (typeof agentDefaultLabels)[number];
   value: DefaultAgentRuntime;
+  options: SikongSettingsOptions;
   onChange: (value: DefaultAgentRuntime) => void;
 }) {
+  const backend = backendOption(props.options.backends, props.value.backend);
+  const providerDisabled = !backend.supportsProvider;
+  const providerOptions = providersForBackend(props.options.providers, props.value.backend);
   return (
     <div className="rounded-[var(--radius-lg)] border border-border bg-card p-3">
       <div className="grid gap-3 lg:grid-cols-[180px_minmax(0,1fr)] lg:items-start">
@@ -195,13 +241,20 @@ function AgentDefaultFields(props: {
             <select
               className={settingsSelectClassName}
               value={props.value.backend}
-              onChange={(event) =>
-                props.onChange({ ...props.value, backend: event.currentTarget.value })
-              }
+              onChange={(event) => {
+                const backend = event.currentTarget.value;
+                props.onChange({
+                  ...props.value,
+                  backend,
+                  ...(backendOption(props.options.backends, backend).supportsProvider
+                    ? {}
+                    : { provider: "" }),
+                });
+              }}
             >
-              {backendOptions.map((backend) => (
-                <option key={backend} value={backend}>
-                  {backend}
+              {props.options.backends.map((backend) => (
+                <option key={backend.id} value={backend.id}>
+                  {backend.label}
                 </option>
               ))}
             </select>
@@ -209,14 +262,18 @@ function AgentDefaultFields(props: {
           <RuntimeField label="Provider">
             <select
               className={settingsSelectClassName}
-              value={props.value.provider ?? ""}
+              value={providerDisabled ? "" : (props.value.provider ?? "")}
+              disabled={providerDisabled}
               onChange={(event) =>
                 props.onChange({ ...props.value, provider: event.currentTarget.value })
               }
             >
               {providerOptions.map((provider) => (
-                <option key={provider || "native"} value={provider}>
-                  {provider || "native"}
+                <option
+                  key={provider === "" ? "backend-default" : provider.id}
+                  value={provider === "" ? "" : provider.id}
+                >
+                  {provider === "" ? backend.defaultProviderLabel : provider.label}
                 </option>
               ))}
             </select>
@@ -254,13 +311,39 @@ function AgentRoleIcon(props: { role: DefaultAgentRuntimeKey }) {
   return <Cpu />;
 }
 
-function normalizeDraftDefault(value: DefaultAgentRuntime): DefaultAgentRuntime {
+function normalizeDraftDefault(
+  value: DefaultAgentRuntime,
+  options: SikongSettingsOptions,
+): DefaultAgentRuntime {
   const backend = value.backend.trim() || "codex";
-  const provider = value.provider?.trim();
+  const provider = backendOption(options.backends, backend).supportsProvider
+    ? value.provider?.trim()
+    : "";
   const model = value.model?.trim();
   return {
     backend,
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
   };
+}
+
+function backendOption(
+  options: readonly RuntimeBackendOption[],
+  backend: string,
+): RuntimeBackendOption {
+  return (
+    options.find((option) => option.id === backend) ?? {
+      id: backend,
+      label: backend,
+      supportsProvider: true,
+      defaultProviderLabel: "Backend default",
+    }
+  );
+}
+
+function providersForBackend(
+  providers: readonly RuntimeProviderOption[],
+  backend: string,
+): Array<RuntimeProviderOption | ""> {
+  return ["", ...providers.filter((provider) => provider.supportedBackends.includes(backend))];
 }

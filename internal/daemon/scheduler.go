@@ -87,7 +87,7 @@ func NewScheduler(ctx context.Context, opts SchedulerOptions) *Scheduler {
 		ctx = context.Background()
 	}
 	if opts.MaxConcurrent <= 0 {
-		opts.MaxConcurrent = 2
+		opts.MaxConcurrent = DefaultDaemonTaskMaxConcurrent
 	}
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 2 * time.Second
@@ -213,6 +213,7 @@ func (s *Scheduler) runTick(key string, task runnableTask) {
 	}()
 	_, stderr, err := s.runCLI(
 		s.ctx,
+		"--json",
 		"task",
 		"tick",
 		task.TaskID,
@@ -236,7 +237,7 @@ func (s *Scheduler) runTick(key string, task runnableTask) {
 }
 
 func (s *Scheduler) runnableTasks(ctx context.Context) ([]runnableTask, error) {
-	stdout, stderr, err := s.runCLI(ctx, "task", "runnable", "--all")
+	stdout, stderr, err := s.runCLI(ctx, "--json", "task", "runnable", "--all")
 	if err != nil {
 		if strings.TrimSpace(stderr) != "" {
 			return nil, errors.New(strings.TrimSpace(stderr))

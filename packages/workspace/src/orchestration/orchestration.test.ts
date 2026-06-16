@@ -49,6 +49,17 @@ function ctx(dataDir: string): CommandContext {
   };
 }
 
+function testWorkUnit(title: string, objective: string, acceptance?: string[]) {
+  return {
+    title,
+    objective,
+    instructions: [`Complete only: ${objective}`],
+    deliverables: [`Evidence that ${title} is complete.`],
+    outOfScope: ["Do not complete other work units or later stages."],
+    ...(acceptance ? { acceptance } : {}),
+  };
+}
+
 async function planRound(context: CommandContext, taskId: string, workUnits = 1) {
   const task = await getTask(context, { taskId });
   if (!task.ok || !task.data.projection.currentStageId) throw new Error("current stage missing");
@@ -57,8 +68,7 @@ async function planRound(context: CommandContext, taskId: string, workUnits = 1)
     stageId: task.data.projection.currentStageId,
     intent: "Execute current stage work.",
     workUnits: Array.from({ length: workUnits }, (_, index) => ({
-      title: `Work unit ${index + 1}`,
-      objective: `Complete work unit ${index + 1}.`,
+      ...testWorkUnit(`Work unit ${index + 1}`, `Complete work unit ${index + 1}.`),
     })),
   });
   if (!round.ok) throw new Error("round plan failed");
@@ -550,9 +560,9 @@ describe("orchestration process executor", () => {
               runId: spec.runId,
               workspaceId: spec.workspaceId,
               taskId: spec.taskId,
-              state: "running",
+              state: "queued",
               spec,
-              startedAt: "2026-06-14T00:00:00Z",
+              queuedAt: "2026-06-14T00:00:00Z",
             };
           },
           async waitProcessRun(runId) {
@@ -682,9 +692,9 @@ describe("orchestration process executor", () => {
               runId: spec.runId,
               workspaceId: spec.workspaceId,
               taskId: spec.taskId,
-              state: "running",
+              state: "queued",
               spec,
-              startedAt: "2026-06-14T00:00:00Z",
+              queuedAt: "2026-06-14T00:00:00Z",
             };
           },
           async waitProcessRun(runId) {
@@ -795,9 +805,9 @@ describe("orchestration process executor", () => {
               runId: spec.runId,
               workspaceId: spec.workspaceId,
               taskId: spec.taskId,
-              state: "running",
+              state: "queued",
               spec,
-              startedAt: "2026-06-14T00:00:00Z",
+              queuedAt: "2026-06-14T00:00:00Z",
             };
           },
           async waitProcessRun(runId) {

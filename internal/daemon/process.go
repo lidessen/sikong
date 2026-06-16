@@ -37,6 +37,7 @@ const (
 type ProcessRunState string
 
 const (
+	ProcessRunQueued   ProcessRunState = "queued"
 	ProcessRunRunning  ProcessRunState = "running"
 	ProcessRunFinished ProcessRunState = "finished"
 )
@@ -69,7 +70,8 @@ type ProcessRunSnapshot struct {
 	Spec        ProcessRunSpec    `json:"spec"`
 	Result      *ProcessRunResult `json:"result,omitempty"`
 	Error       string            `json:"error,omitempty"`
-	StartedAt   string            `json:"startedAt"`
+	QueuedAt    string            `json:"queuedAt,omitempty"`
+	StartedAt   string            `json:"startedAt,omitempty"`
 	FinishedAt  string            `json:"finishedAt,omitempty"`
 }
 
@@ -96,6 +98,14 @@ func NewProcessRunner(opts ProcessRunnerOptions) *ProcessRunner {
 }
 
 func (r *ProcessRunner) Run(ctx context.Context, spec ProcessRunSpec) (ProcessRunResult, error) {
+	return r.run(ctx, spec, nil)
+}
+
+func (r *ProcessRunner) run(
+	ctx context.Context,
+	spec ProcessRunSpec,
+	onStarted func(startedAt time.Time),
+) (ProcessRunResult, error) {
 	if err := ValidateProcessRunSpec(spec); err != nil {
 		return ProcessRunResult{}, err
 	}
@@ -105,7 +115,11 @@ func (r *ProcessRunner) Run(ctx context.Context, spec ProcessRunSpec) (ProcessRu
 	}
 	defer r.release()
 
-	return runProcess(ctx, spec)
+	started := time.Now()
+	if onStarted != nil {
+		onStarted(started)
+	}
+	return runProcess(ctx, spec, started)
 }
 
 func ValidateProcessRunSpec(spec ProcessRunSpec) error {
@@ -137,8 +151,7 @@ func (r *ProcessRunner) release() {
 	<-r.sem
 }
 
-func runProcess(ctx context.Context, spec ProcessRunSpec) (ProcessRunResult, error) {
-	started := time.Now()
+func runProcess(ctx context.Context, spec ProcessRunSpec, started time.Time) (ProcessRunResult, error) {
 	runCtx := ctx
 	cancel := func() {}
 	timedOut := false
@@ -319,15 +332,15 @@ func (s *ProcessSupervisor) Start(ctx context.Context, spec ProcessRunSpec) (Pro
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	startedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	queuedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	record := &processRunRecord{
 		snapshot: ProcessRunSnapshot{
 			RunID:       spec.RunID,
 			WorkspaceID: spec.WorkspaceID,
 			TaskID:      spec.TaskID,
-			State:       ProcessRunRunning,
+			State:       ProcessRunQueued,
 			Spec:        cloneProcessRunSpec(spec),
-			StartedAt:   startedAt,
+			QueuedAt:    queuedAt,
 		},
 		cancel: cancel,
 		done:   make(chan struct{}),
@@ -343,9 +356,14 @@ func (s *ProcessSupervisor) Start(ctx context.Context, spec ProcessRunSpec) (Pro
 	s.mu.Unlock()
 
 	go func() {
-		result, err := s.runner.Run(runCtx, spec)
+		result, err := s.runner.run(runCtx, spec, func(startedAt time.Time) {
+			s.mu.Lock()
+			record.snapshot.State = ProcessRunRunning
+			record.snapshot.StartedAt = startedAt.UTC().Format(time.RFC3339Nano)
+			s.mu.Unlock()
+		})
 		if result.RunID == "" {
-			result = processResultFromStartFailure(spec, record.snapshot.StartedAt, err, runCtx)
+			result = processResultFromStartFailure(spec, record.snapshot.QueuedAt, err, runCtx)
 		}
 		finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
 		s.mu.Lock()
@@ -418,7 +436,7 @@ func (s *ProcessSupervisor) Cancel(runID string) (ProcessRunSnapshot, bool) {
 		s.mu.Unlock()
 		return ProcessRunSnapshot{}, false
 	}
-	if record.snapshot.State == ProcessRunRunning && record.cancel != nil {
+	if (record.snapshot.State == ProcessRunQueued || record.snapshot.State == ProcessRunRunning) && record.cancel != nil {
 		record.cancel()
 	}
 	snapshot := s.cloneSnapshot(record.snapshot)

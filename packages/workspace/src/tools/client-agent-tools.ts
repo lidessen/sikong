@@ -270,8 +270,6 @@ export function createClientAgentTools(options: ClientAgentToolsOptions): ToolSe
         {
           workspaceId: stringSchema(),
           request: stringSchema(),
-          cwd: stringSchema(),
-          repoPath: stringSchema(),
         },
         ["request"],
       ),
@@ -281,8 +279,6 @@ export function createClientAgentTools(options: ClientAgentToolsOptions): ToolSe
         return await createTask(ctx, {
           workspaceId: optionalString(args, "workspaceId"),
           request: request.data,
-          cwd: optionalString(args, "cwd"),
-          repoPath: optionalString(args, "repoPath"),
         });
       },
     }),

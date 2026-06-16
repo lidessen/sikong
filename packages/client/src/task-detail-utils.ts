@@ -37,6 +37,7 @@ export function runtimeStatusVariant(status: string): ConsoleBadgeVariant {
   if (status === "succeeded") return "ok";
   if (status === "failed" || status === "timed_out" || status === "cancelled") return "err";
   if (status === "running") return "info";
+  if (status === "queued") return "neutral";
   return "outline";
 }
 

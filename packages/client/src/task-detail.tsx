@@ -57,6 +57,7 @@ export function TaskDetailMain(props: {
   const schedulerActive = props.scheduler?.activeTasks?.includes(schedulerTaskKey);
   const schedulerIdleRunnable =
     props.task.runtimeProcesses.running === 0 &&
+    props.task.runtimeProcesses.queued === 0 &&
     !props.task.terminal &&
     !["await_worker_results", "blocked", "terminal"].includes(props.task.nextAction.type) &&
     Boolean(props.scheduler?.enabled) &&
@@ -97,7 +98,7 @@ export function TaskDetailMain(props: {
           <Metric
             icon={<Clock3 />}
             label="Runtime"
-            value={`${props.task.runtimeProcesses.running}/${props.task.runtimeProcesses.total}`}
+            value={`${props.task.runtimeProcesses.running} running · ${props.task.runtimeProcesses.queued} queued`}
           />
           <Metric
             icon={<Layers3 />}

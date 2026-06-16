@@ -391,6 +391,8 @@ function leadPhaseGuidance(
         "Phase responsibility:",
         "- Plan only the next useful round for the active stage.",
         "- Split the round into one or more work units that can be executed independently.",
+        "- For each work unit, define explicit instructions, deliverables, and out-of-scope boundaries so the worker knows exactly what to do and what not to do.",
+        "- Do not ask a worker to complete another work unit, another stage, or the whole task unless the active stage is itself that small.",
         "- Use prior worker and reviewer evidence to aim the next round.",
         "",
       ];

@@ -266,6 +266,9 @@ async function readyTask(
       {
         title: "Runtime worker adapter",
         objective: "Connect runTask to worker terminal result commands.",
+        instructions: ["Connect only the runtime worker adapter path."],
+        deliverables: ["A terminal worker result is recorded through protocol commands."],
+        outOfScope: ["Do not modify planner or reviewer behavior."],
       },
     ],
   });

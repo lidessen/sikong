@@ -98,16 +98,16 @@ export async function runCli(
   env: NodeJS.ProcessEnv = process.env,
   options: CliRunOptions = {},
 ): Promise<CliRunResult> {
+  const outputMode = outputModeFromArgv(argv);
   try {
     const parsed = parseArgs(argv);
     if (flag(parsed, "help") || flag(parsed, "h")) return text(0, usage());
     if (flag(parsed, "version") || flag(parsed, "v")) {
-      return text(0, JSON.stringify({ ok: true, data: { version: "0.0.0" } }) + "\n");
+      return render(ok({ version: "0.0.0" }), outputMode);
     }
 
     const dataDir = value(parsed, "data-dir");
     const workspaceId = value(parsed, "workspace");
-    const outputMode = flag(parsed, "text") ? "text" : "json";
     const ctx: CommandContext = {
       dataDir: resolveDataDir({ dataDir, env }).dir,
       ...(workspaceId ? { workspaceId } : {}),
@@ -125,7 +125,7 @@ export async function runCli(
           message: err instanceof Error ? err.message : String(err),
         },
       },
-      "json",
+      outputMode,
     );
   }
 }
@@ -483,8 +483,8 @@ async function cancelTaskRuntimeProcesses(
   const task = await getTask(ctx, taskInput(parsed, taskIdArg));
   if (!task.ok) return task;
   const projection = task.data.projection;
-  const running = Object.values(projection.runtimeProcessRuns ?? {}).filter(
-    (processRun) => processRun.status === "running",
+  const active = Object.values(projection.runtimeProcessRuns ?? {}).filter(
+    (processRun) => processRun.status === "queued" || processRun.status === "running",
   );
   const baseUrl = daemonBaseUrl(value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR);
   const client = new DaemonProcessClient({
@@ -492,9 +492,12 @@ async function cancelTaskRuntimeProcesses(
     ...(options.daemonFetch ? { fetch: options.daemonFetch } : {}),
   });
   const cancelled = [];
-  for (const processRun of running) {
+  for (const processRun of active) {
     try {
-      const snapshot = await client.cancelProcessRun(processRun.processRunId);
+      const cancelledSnapshot = await client.cancelProcessRun(processRun.processRunId);
+      const snapshot = cancelledSnapshot.result
+        ? cancelledSnapshot
+        : await client.waitProcessRun(processRun.processRunId, { timeoutMs: 5_000 });
       cancelled.push(snapshot);
       if (snapshot.result) {
         const recorded = await recordRuntimeProcessFinished(ctx, {
@@ -510,12 +513,19 @@ async function cancelTaskRuntimeProcesses(
       return daemonClientErrorResult(err, baseUrl);
     }
   }
+  const terminal = await rejectTask(ctx, {
+    workspaceId: projection.workspaceId,
+    taskId: projection.taskId,
+    report: value(parsed, "report") ?? "Task cancelled by user.",
+  });
+  if (!terminal.ok) return terminal;
   return {
     ok: true,
     data: {
       taskId: projection.taskId,
       cancelled,
       cancelledCount: cancelled.length,
+      projection: terminal.data.projection,
     },
   };
 }
@@ -643,9 +653,68 @@ async function tickTaskCommand(
 function render(result: CommandResult<unknown>, outputMode: "json" | "text"): CliRunResult {
   if (outputMode === "text") {
     if (!result.ok) return text(1, "", `${result.error.code}: ${result.error.message}\n`);
-    return text(0, `${JSON.stringify(result.data, null, 2)}\n`);
+    return text(0, renderTextData(result.data));
   }
   return text(result.ok ? 0 : 1, `${JSON.stringify(result)}\n`);
+}
+
+function outputModeFromArgv(argv: readonly string[]): "json" | "text" {
+  return argv.some((arg) => arg === "--json") ? "json" : "text";
+}
+
+function renderTextData(data: unknown): string {
+  if (!isRecord(data)) return `${String(data)}\n`;
+  if (typeof data.version === "string") return `sikong ${data.version}\n`;
+  if (isDaemonStartData(data)) return renderDaemonStartText(data);
+  if (isDaemonStopData(data)) return `Daemon stopped: ${data.baseUrl}\n`;
+  if (isDaemonStatusData(data)) return `Daemon healthy: ${data.baseUrl}\n`;
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+function isDaemonStartData(data: Record<string, unknown>): data is {
+  baseUrl: string;
+  started: boolean;
+  alreadyRunning: boolean;
+  pid?: number;
+  web?: Record<string, unknown>;
+} {
+  return (
+    typeof data.baseUrl === "string" &&
+    typeof data.started === "boolean" &&
+    typeof data.alreadyRunning === "boolean"
+  );
+}
+
+function isDaemonStopData(
+  data: Record<string, unknown>,
+): data is { baseUrl: string; stopped: true } {
+  return typeof data.baseUrl === "string" && data.stopped === true;
+}
+
+function isDaemonStatusData(data: Record<string, unknown>): data is { baseUrl: string } {
+  return typeof data.baseUrl === "string" && isRecord(data.health);
+}
+
+function renderDaemonStartText(data: {
+  baseUrl: string;
+  started: boolean;
+  alreadyRunning: boolean;
+  pid?: number;
+  web?: Record<string, unknown>;
+}): string {
+  const lines = [
+    data.alreadyRunning
+      ? `Daemon already running: ${data.baseUrl}`
+      : `Daemon started: ${data.baseUrl}`,
+  ];
+  if (data.pid !== undefined) lines.push(`PID: ${data.pid}`);
+  if (data.web) {
+    const webUrl = typeof data.web.url === "string" ? data.web.url : undefined;
+    const webAlreadyRunning = data.web.alreadyRunning === true;
+    if (webUrl)
+      lines.push(webAlreadyRunning ? `UI already running: ${webUrl}` : `UI started: ${webUrl}`);
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -665,6 +734,10 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       flags[raw.slice(0, eq)] = raw.slice(eq + 1);
       continue;
     }
+    if (booleanFlagNames.has(raw)) {
+      flags[raw] = true;
+      continue;
+    }
 
     const next = argv[index + 1] === undefined ? undefined : String(argv[index + 1]);
     if (next && !next.startsWith("-")) {
@@ -676,6 +749,18 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   }
   return { positionals, flags };
 }
+
+const booleanFlagNames = new Set([
+  "all",
+  "h",
+  "help",
+  "json",
+  "no-build",
+  "text",
+  "ui",
+  "v",
+  "web",
+]);
 
 function value(parsed: ParsedArgs, name: string): string | undefined {
   const raw = parsed.flags[name];
@@ -1116,6 +1201,7 @@ function usage(): string {
   return `sikong
 
 Usage:
+  sikong [--json] <command>
   sikong --data-dir <path> workspace create --id <id> --name <name>
   sikong workspace list
   sikong workspace show <workspaceId>
@@ -1143,7 +1229,7 @@ Usage:
   sikong task recommend-final-review <taskId> --workspace <workspaceId> --review <reviewId> --recommendation <accept|reject> --report <text>
   sikong task accept <taskId> --workspace <workspaceId> --report <text>
   sikong task reject <taskId> --workspace <workspaceId> --report <text>
-  sikong task cancel <taskId> --workspace <workspaceId> [--daemon <url>]
+  sikong task cancel <taskId> --workspace <workspaceId> [--daemon <url>] [--report <text>]
   sikong task reconcile <taskId> --workspace <workspaceId>
   sikong daemon start [--daemon <url>] [--ui|--web] [--ui-port <port>]
   sikong daemon status [--daemon <url>]
@@ -1153,6 +1239,9 @@ Usage:
   sikong inspect events <taskId> --workspace <workspaceId>
   sikong inspect projection <taskId> --workspace <workspaceId>
   sikong inspect trace <taskId> --workspace <workspaceId>
+
+Options:
+  --json  Print structured JSON output.
 `;
 }
 

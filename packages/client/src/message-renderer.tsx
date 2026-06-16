@@ -362,7 +362,10 @@ function TaskCardPart(props: { task?: TaskCard; onOpen?: (taskId: string) => voi
             units
           </Badge>
         ) : null}
-        <Badge variant="outline">{props.task.runtimeProcesses.running} runtime</Badge>
+        <Badge variant="outline">
+          {props.task.runtimeProcesses.running} running · {props.task.runtimeProcesses.queued}{" "}
+          queued
+        </Badge>
       </div>
     </>
   );
@@ -460,10 +463,14 @@ function PlanStageList(props: { task?: TaskCard }) {
 function RuntimeProcessList(props: { task?: TaskCard }) {
   if (!props.task) return <UnsupportedElement reason="Work item not found" />;
   return (
-    <div className="grid grid-cols-2 gap-2 text-xs">
+    <div className="grid grid-cols-3 gap-2 text-xs">
       <div className="rounded-[var(--radius-md)] border bg-background p-2">
         <p className="text-muted-foreground">Total</p>
         <p className="font-medium">{props.task.runtimeProcesses.total}</p>
+      </div>
+      <div className="rounded-[var(--radius-md)] border bg-background p-2">
+        <p className="text-muted-foreground">Queued</p>
+        <p className="font-medium">{props.task.runtimeProcesses.queued}</p>
       </div>
       <div className="rounded-[var(--radius-md)] border bg-background p-2">
         <p className="text-muted-foreground">Running</p>
@@ -709,7 +716,7 @@ function statusBadgeVariant(task: TaskCard): ConsoleBadgeVariant {
   if (task.terminal?.outcome === "accepted") return "ok";
   if (task.terminal?.outcome === "rejected") return "err";
   if (task.terminal) return "neutral";
-  if (task.runtimeProcesses.running > 0) return "info";
+  if (task.runtimeProcesses.running > 0 || task.runtimeProcesses.queued > 0) return "info";
   if (task.waitingForLead) return "warn";
   if (task.status === "planning" || task.nextAction.type.includes("plan")) return "warn";
   if (task.status === "running") return "info";

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { worktreeDir } from "../data-dir";
-import { runCli } from "./index";
+import { runCli as runCliRaw, type CliRunOptions } from "./index";
 import {
   getTask,
   planStageRound,
@@ -17,8 +17,27 @@ import { FileSettingsStore } from "../settings";
 
 const tmp = () => mkdtemp(join(tmpdir(), "sikong-cli-"));
 
+function runCli(argv: readonly string[], env?: NodeJS.ProcessEnv, options?: CliRunOptions) {
+  return runCliRaw(["--json", ...argv], env, options);
+}
+
+function runCliText(argv: readonly string[], env?: NodeJS.ProcessEnv, options?: CliRunOptions) {
+  return runCliRaw(argv, env, options);
+}
+
 function json(stdout: string): unknown {
   return JSON.parse(stdout);
+}
+
+function testWorkUnit(title: string, objective: string, acceptance?: string[]) {
+  return {
+    title,
+    objective,
+    instructions: [`Complete only: ${objective}`],
+    deliverables: [`Evidence that ${title} is complete.`],
+    outOfScope: ["Do not complete other work units or later stages."],
+    ...(acceptance ? { acceptance } : {}),
+  };
 }
 
 function planningProcessClient(): OrchestrationProcessExecutionClient & {
@@ -73,9 +92,9 @@ function planningProcessClient(): OrchestrationProcessExecutionClient & {
         runId: spec.runId,
         workspaceId: spec.workspaceId,
         taskId: spec.taskId,
-        state: "running",
+        state: "queued",
         spec,
-        startedAt: "2026-06-14T00:00:00Z",
+        queuedAt: "2026-06-14T00:00:00Z",
       };
     },
     async waitProcessRun(runId) {
@@ -431,11 +450,9 @@ describe("workspace cli adapter", () => {
           stageId: acceptedTask.data.projection.currentStageId,
           intent: "Run the implementation work unit.",
           workUnits: [
-            {
-              title: "Implement",
-              objective: "Use protocol commands.",
-              acceptance: ["Worker terminal result is recorded."],
-            },
+            testWorkUnit("Implement", "Use protocol commands.", [
+              "Worker terminal result is recorded.",
+            ]),
           ],
         },
       );
@@ -932,6 +949,54 @@ describe("workspace cli adapter", () => {
     expect(requests).toEqual([{ input: "http://127.0.0.1:9876/shutdown", method: "POST" }]);
   });
 
+  test("prints human daemon start and stop output by default", async () => {
+    const start = await runCliText(["daemon", "start", "--daemon", "127.0.0.1:9876"], process.env, {
+      daemonFetch: async () => Response.json({ ok: true }),
+    });
+    expect(start.exitCode).toBe(0);
+    expect(start.stdout).toBe("Daemon already running: http://127.0.0.1:9876\n");
+
+    const stop = await runCliText(["daemon", "stop", "--daemon", "127.0.0.1:9876"], process.env, {
+      daemonFetch: async () => Response.json({ ok: true }),
+    });
+    expect(stop.exitCode).toBe(0);
+    expect(stop.stdout).toBe("Daemon stopped: http://127.0.0.1:9876\n");
+  });
+
+  test("prints structured JSON only when requested", async () => {
+    const leading = await runCliRaw(
+      ["--json", "daemon", "stop", "--daemon", "127.0.0.1:9876"],
+      process.env,
+      {
+        daemonFetch: async () => Response.json({ ok: true }),
+      },
+    );
+    expect(leading.exitCode).toBe(0);
+    expect(json(leading.stdout)).toMatchObject({
+      ok: true,
+      data: {
+        baseUrl: "http://127.0.0.1:9876",
+        stopped: true,
+      },
+    });
+
+    const trailing = await runCliRaw(
+      ["daemon", "stop", "--daemon", "127.0.0.1:9876", "--json"],
+      process.env,
+      {
+        daemonFetch: async () => Response.json({ ok: true }),
+      },
+    );
+    expect(trailing.exitCode).toBe(0);
+    expect(json(trailing.stdout)).toMatchObject({
+      ok: true,
+      data: {
+        baseUrl: "http://127.0.0.1:9876",
+        stopped: true,
+      },
+    });
+  });
+
   test("cancels running runtime processes recorded on a task", async () => {
     const dir = await tmp();
     try {
@@ -989,6 +1054,19 @@ describe("workspace cli adapter", () => {
             {
               daemonFetch: async (input, init) => {
                 requests.push(`${init?.method ?? "GET"} ${input}`);
+                if (String(input).endsWith("/cancel")) {
+                  return new Response(
+                    JSON.stringify({
+                      runId: "process_1",
+                      workspaceId: "sikong",
+                      taskId,
+                      state: "queued",
+                      queuedAt: "2026-06-14T00:00:00Z",
+                      spec: { runId: "process_1", workspaceId: "sikong", command: "bun" },
+                    }),
+                    { headers: { "content-type": "application/json" } },
+                  );
+                }
                 return new Response(
                   JSON.stringify({
                     runId: "process_1",
@@ -1026,9 +1104,16 @@ describe("workspace cli adapter", () => {
           taskId,
           cancelledCount: 1,
           cancelled: [{ runId: "process_1", state: "finished" }],
+          projection: {
+            status: "completed",
+            terminal: { outcome: "rejected", report: "Task cancelled by user." },
+          },
         },
       });
-      expect(requests).toEqual(["POST http://127.0.0.1:9876/process-runs/process_1/cancel"]);
+      expect(requests).toEqual([
+        "POST http://127.0.0.1:9876/process-runs/process_1/cancel",
+        "GET http://127.0.0.1:9876/process-runs/process_1/wait?timeoutMs=5000",
+      ]);
       const fresh = await getTask(context, { taskId });
       if (!fresh.ok) throw new Error(fresh.error.message);
       expect(fresh.data.projection.runtimeProcessRuns).toMatchObject({
@@ -1036,6 +1121,10 @@ describe("workspace cli adapter", () => {
           status: "finished",
           processStatus: "cancelled",
         },
+      });
+      expect(fresh.data.projection).toMatchObject({
+        status: "completed",
+        terminal: { outcome: "rejected", report: "Task cancelled by user." },
       });
     } finally {
       await rm(dir, { recursive: true, force: true });

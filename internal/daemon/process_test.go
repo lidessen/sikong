@@ -223,8 +223,33 @@ func TestProcessSupervisorStartWaitCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	if started.State != ProcessRunRunning {
-		t.Fatalf("started state = %q, want %q", started.State, ProcessRunRunning)
+	if started.State != ProcessRunQueued {
+		t.Fatalf("started state = %q, want %q", started.State, ProcessRunQueued)
+	}
+	if started.QueuedAt == "" {
+		t.Fatalf("queuedAt was empty for queued snapshot")
+	}
+	if started.StartedAt != "" {
+		t.Fatalf("startedAt = %q, want empty before the process actually starts", started.StartedAt)
+	}
+
+	eventuallyRunning := false
+	for i := 0; i < 20; i++ {
+		snapshot, ok := supervisor.GetSnapshot("run-async")
+		if !ok {
+			t.Fatal("started run disappeared")
+		}
+		if snapshot.State == ProcessRunRunning || snapshot.State == ProcessRunFinished {
+			eventuallyRunning = true
+			if snapshot.StartedAt == "" {
+				t.Fatalf("startedAt was empty once state reached %q", snapshot.State)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !eventuallyRunning {
+		t.Fatalf("run did not leave queued state")
 	}
 
 	finished, ok, err := supervisor.Wait(context.Background(), "run-async")
@@ -262,6 +287,63 @@ func TestProcessSupervisorStartWaitCancel(t *testing.T) {
 	}
 	if cancelled.Result.Status != ProcessRunCancelled {
 		t.Fatalf("status = %q, want %q", cancelled.Result.Status, ProcessRunCancelled)
+	}
+}
+
+func TestProcessSupervisorReportsQueuedBeforeActualStart(t *testing.T) {
+	t.Parallel()
+	supervisor := NewProcessSupervisor(ProcessRunnerOptions{MaxConcurrent: 1})
+
+	first, err := supervisor.Start(context.Background(), ProcessRunSpec{
+		RunID:       "run-blocking",
+		WorkspaceID: "workspace",
+		Command:     "sh",
+		Args:        []string{"-c", "sleep 0.2"},
+	})
+	if err != nil {
+		t.Fatalf("Start first returned error: %v", err)
+	}
+	if first.State != ProcessRunQueued {
+		t.Fatalf("first state = %q, want queued", first.State)
+	}
+
+	for i := 0; i < 20; i++ {
+		snapshot, ok := supervisor.GetSnapshot("run-blocking")
+		if !ok {
+			t.Fatal("first run disappeared")
+		}
+		if snapshot.State == ProcessRunRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	second, err := supervisor.Start(context.Background(), ProcessRunSpec{
+		RunID:       "run-waiting",
+		WorkspaceID: "workspace",
+		Command:     "sh",
+		Args:        []string{"-c", "echo waiting"},
+	})
+	if err != nil {
+		t.Fatalf("Start second returned error: %v", err)
+	}
+	if second.State != ProcessRunQueued {
+		t.Fatalf("second state = %q, want queued while the concurrency slot is occupied", second.State)
+	}
+	if second.StartedAt != "" {
+		t.Fatalf("second startedAt = %q, want empty while queued", second.StartedAt)
+	}
+
+	queued := supervisor.ListSnapshots(ProcessRunListFilter{State: ProcessRunQueued})
+	foundQueued := false
+	for _, snapshot := range queued {
+		if snapshot.RunID == "run-waiting" {
+			foundQueued = true
+			break
+		}
+	}
+	if !foundQueued {
+		t.Fatalf("queued snapshots did not include run-waiting: %#v", queued)
 	}
 }
 

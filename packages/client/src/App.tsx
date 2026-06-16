@@ -211,7 +211,9 @@ export function App() {
     try {
       setError(null);
       const saved = await updateSettings(settings);
-      setState((current) => (current ? { ...current, settings: saved } : current));
+      setState((current) =>
+        current ? { ...current, settings: saved, settingsOptions: saved.options } : current,
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       throw err;
@@ -381,6 +383,7 @@ export function App() {
       <SettingsDialog
         open={settingsOpen}
         settings={state.settings}
+        options={state.settingsOptions ?? state.settings.options}
         onClose={() => setSettingsOpen(false)}
         onSaveSettings={saveSettings}
       />

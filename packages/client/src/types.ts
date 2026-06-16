@@ -53,6 +53,7 @@ export interface TaskCard {
   waitingForLead: boolean;
   runtimeProcesses: {
     total: number;
+    queued: number;
     running: number;
   };
   terminal?: {
@@ -149,6 +150,7 @@ export interface ClientState {
   workLog: ClientWorkLogEntry[];
   transcript?: ClientMessage[];
   settings: SikongSettings;
+  settingsOptions?: SikongSettingsOptions;
   scheduler?: SchedulerStatus;
 }
 
@@ -261,7 +263,7 @@ export interface WorkerRunView {
 export interface RuntimeProcessRunView {
   processRunId: string;
   actionType: string;
-  status: "running" | "finished";
+  status: "queued" | "running" | "finished";
   processStatus?: "succeeded" | "failed" | "timed_out" | "cancelled";
   exitCode?: number;
   startedAt: string;
@@ -272,7 +274,7 @@ export interface ProcessRunSnapshotView {
   runId: string;
   workspaceId: string;
   taskId?: string;
-  state: "running" | "finished";
+  state: "queued" | "running" | "finished";
   spec: {
     runId: string;
     workspaceId: string;
@@ -305,7 +307,8 @@ export interface ProcessRunSnapshotView {
     cancelled?: boolean;
   };
   error?: string;
-  startedAt: string;
+  queuedAt?: string;
+  startedAt?: string;
   finishedAt?: string;
 }
 
@@ -436,6 +439,25 @@ export interface DefaultAgentRuntime {
 export interface SikongSettings {
   version: 1;
   defaults: Record<DefaultAgentRuntimeKey, DefaultAgentRuntime>;
+  options?: SikongSettingsOptions;
+}
+
+export interface RuntimeBackendOption {
+  id: string;
+  label: string;
+  supportsProvider: boolean;
+  defaultProviderLabel: string;
+}
+
+export interface RuntimeProviderOption {
+  id: string;
+  label: string;
+  supportedBackends: string[];
+}
+
+export interface SikongSettingsOptions {
+  backends: RuntimeBackendOption[];
+  providers: RuntimeProviderOption[];
 }
 
 export type ClientMessageRole = "user" | "assistant" | "system";

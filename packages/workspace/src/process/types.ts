@@ -33,7 +33,7 @@ export interface ProcessRunResult {
   cancelled?: boolean;
 }
 
-export type ProcessRunState = "running" | "finished";
+export type ProcessRunState = "queued" | "running" | "finished";
 
 export interface ProcessRunSnapshot {
   runId: string;
@@ -43,6 +43,7 @@ export interface ProcessRunSnapshot {
   spec: ProcessRunSpec;
   result?: ProcessRunResult;
   error?: string;
-  startedAt: string;
+  queuedAt?: string;
+  startedAt?: string;
   finishedAt?: string;
 }

@@ -369,7 +369,14 @@ function parseStageRoundArgs(args: Record<string, unknown>): CommandResult<{
   stageId: string;
   title?: string;
   intent: string;
-  workUnits: Array<{ title: string; objective: string; acceptance?: string[] }>;
+  workUnits: Array<{
+    title: string;
+    objective: string;
+    instructions: string[];
+    deliverables: string[];
+    outOfScope: string[];
+    acceptance?: string[];
+  }>;
 }> {
   const stageId = requiredString(args.stageId, "Stage id is required.");
   if (!stageId.ok) return stageId;
@@ -396,7 +403,14 @@ function parseStageRoundArgs(args: Record<string, unknown>): CommandResult<{
 function parseWorkUnit(
   value: unknown,
   index: number,
-): CommandResult<{ title: string; objective: string; acceptance?: string[] }> {
+): CommandResult<{
+  title: string;
+  objective: string;
+  instructions: string[];
+  deliverables: string[];
+  outOfScope: string[];
+  acceptance?: string[];
+}> {
   const record = asRecord(value);
   if (!record) return fail("invalid_input", `Work unit ${index + 1} must be an object.`);
   const title = requiredString(record.title, `Work unit ${index + 1} title is required.`);
@@ -406,6 +420,21 @@ function parseWorkUnit(
     `Work unit ${index + 1} objective is required.`,
   );
   if (!objective.ok) return objective;
+  const instructions = requiredStringList(
+    record.instructions,
+    `Work unit ${index + 1} instructions are required.`,
+  );
+  if (!instructions.ok) return instructions;
+  const deliverables = requiredStringList(
+    record.deliverables,
+    `Work unit ${index + 1} deliverables are required.`,
+  );
+  if (!deliverables.ok) return deliverables;
+  const outOfScope = requiredStringList(
+    record.outOfScope,
+    `Work unit ${index + 1} outOfScope is required.`,
+  );
+  if (!outOfScope.ok) return outOfScope;
   const acceptance =
     record.acceptance === undefined
       ? { ok: true as const, data: [] }
@@ -414,8 +443,18 @@ function parseWorkUnit(
   return okData({
     title: title.data,
     objective: objective.data,
+    instructions: instructions.data,
+    deliverables: deliverables.data,
+    outOfScope: outOfScope.data,
     ...(acceptance.data.length > 0 ? { acceptance: acceptance.data } : {}),
   });
+}
+
+function requiredStringList(value: unknown, message: string): CommandResult<string[]> {
+  const parsed = stringList(value);
+  if (!parsed.ok) return parsed;
+  if (parsed.data.length === 0) return fail("invalid_input", message);
+  return parsed;
 }
 
 function parseReviewArgs(args: Record<string, unknown>): CommandResult<{
@@ -551,10 +590,13 @@ const stageRoundSchema = {
       minItems: 1,
       items: {
         type: "object",
-        required: ["title", "objective"],
+        required: ["title", "objective", "instructions", "deliverables", "outOfScope"],
         properties: {
           title: { type: "string" },
           objective: { type: "string" },
+          instructions: { type: "array", items: { type: "string" }, minItems: 1 },
+          deliverables: { type: "array", items: { type: "string" }, minItems: 1 },
+          outOfScope: { type: "array", items: { type: "string" }, minItems: 1 },
           acceptance: { type: "array", items: { type: "string" } },
         },
       },

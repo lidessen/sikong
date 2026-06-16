@@ -78,7 +78,9 @@ export class CursorAdapter implements BackendAdapter {
   /** Active local MCP tool servers for this adapter (started per-run in start()). */
   private mcpToolServers = new Set<Server>();
 
-  constructor(private readonly opts: CursorAdapterOptions = {}) {}
+  constructor(private readonly opts: CursorAdapterOptions = {}) {
+    installCursorTransportErrorSuppressor();
+  }
 
   start(req: ResolvedRequest): BackendRun {
     const o = (req.runtimeOptions ?? {}) as CursorRuntimeOptions;
@@ -230,7 +232,7 @@ export class CursorAdapter implements BackendAdapter {
     // Close any lingering MCP tool servers from cancelled runs.
     for (const s of this.mcpToolServers) closeMcpServer(s);
     this.mcpToolServers.clear();
-    this.agent?.close();
+    await closeCursorAgent(this.agent);
     this.agent = null;
     this.agentPromise = null;
   }
@@ -238,7 +240,7 @@ export class CursorAdapter implements BackendAdapter {
   private getAgent(mcp: McpServers, agentId?: string): Promise<SDKAgent> {
     // A per-run agentId override forces a fresh agent so it is honored.
     if (agentId && this.agent && this.agent.agentId !== agentId) {
-      this.agent.close();
+      void closeCursorAgent(this.agent);
       this.agent = null;
       this.agentPromise = null;
     }
@@ -515,4 +517,35 @@ function closeMcpServer(server: Server): void {
   } catch {
     // best effort
   }
+}
+
+async function closeCursorAgent(agent: SDKAgent | null): Promise<void> {
+  try {
+    await Promise.resolve(agent?.close());
+  } catch {
+    // Cursor SDK close can surface transport shutdown errors after a successful run.
+  }
+}
+
+let cursorTransportSuppressorInstalled = false;
+
+function installCursorTransportErrorSuppressor(): void {
+  if (cursorTransportSuppressorInstalled) return;
+  cursorTransportSuppressorInstalled = true;
+  process.on("uncaughtException", (err) => {
+    if (isCursorTransportShutdownError(err)) return;
+    throw err;
+  });
+  process.on("unhandledRejection", (reason) => {
+    if (isCursorTransportShutdownError(reason)) return;
+    throw reason;
+  });
+}
+
+function isCursorTransportShutdownError(value: unknown): boolean {
+  if (!(value instanceof Error)) return false;
+  return (
+    value.message.includes("NGHTTP2_FRAME_SIZE_ERROR") ||
+    ("code" in value && value.code === "ERR_HTTP2_STREAM_ERROR")
+  );
 }

@@ -68,6 +68,56 @@ describe("runtime assembly registry", () => {
     }
   });
 
+  test("assembles cursor backend with task cwd and sandbox disabled by default", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Exercise cursor backend assembly.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+
+      let capturedOptions: unknown;
+      const registry = createDefaultRuntimeAssemblyRegistry().registerBackend(
+        "cursor",
+        (config) => {
+          capturedOptions = config.options;
+          return mockLoop();
+        },
+      );
+      const module = registry.createRuntimeModule({
+        backend: {
+          name: "cursor",
+          options: { provider: "deepseek", model: "composer-2" },
+        },
+      });
+
+      await module.createOrchestrationExecutionRuntime?.({
+        context: { dataDir: dir, workspaceId: "sikong" },
+        action: {
+          type: "start_stage_worker",
+          input: {
+            workspaceId: "sikong",
+            taskId: created.data.taskId,
+            roundId: "round_1",
+            workUnitId: "work_unit_1",
+            taskInput: {},
+          },
+        },
+      } satisfies OrchestrationRunnerRequest);
+
+      expect(capturedOptions).toEqual({
+        model: "composer-2",
+        cwd: dir,
+        sandboxEnabled: false,
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("hydrates loop and task actions with named tool profiles", async () => {
     const registry = createDefaultRuntimeAssemblyRegistry()
       .registerToolProfile("inspection", () => tool("read_file"))
@@ -182,7 +232,15 @@ describe("runtime assembly registry", () => {
         taskId: created.data.taskId,
         stageId: accepted.data.projection.currentStageId ?? "",
         intent: "Execute runtime assembly test work.",
-        workUnits: [{ title: "Work", objective: "Complete assembly test work." }],
+        workUnits: [
+          {
+            title: "Work",
+            objective: "Complete assembly test work.",
+            instructions: ["Complete only the runtime assembly test work."],
+            deliverables: ["A completed worker run exists for the test work unit."],
+            outOfScope: ["Do not modify unrelated runtime behavior."],
+          },
+        ],
       });
       if (!round.ok) throw new Error("round plan failed");
       const started = await startWorkerRun(context, {

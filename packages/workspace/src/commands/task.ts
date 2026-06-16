@@ -18,6 +18,7 @@ import {
   summarizeProjectionNextAction,
   type OrchestrationActionSummary,
 } from "../orchestration/summary";
+import type { ProcessRunSnapshot } from "../process";
 import { taskObservationsFile, taskProjectionsDir } from "../data-dir";
 import {
   FileWorkspaceStore,
@@ -83,6 +84,9 @@ export interface PlanStageRoundInput extends TaskIdInput {
   workUnits: Array<{
     title: string;
     objective: string;
+    instructions: string[];
+    deliverables: string[];
+    outOfScope: string[];
     acceptance?: string[];
   }>;
 }
@@ -133,13 +137,19 @@ export interface RecordRuntimeProcessStartedInput extends TaskIdInput {
   actionType: string;
 }
 
+export interface RecordRuntimeProcessRunningInput extends TaskIdInput {
+  processRunId: string;
+}
+
 export interface RecordRuntimeProcessFinishedInput extends TaskIdInput {
   processRunId: string;
   processStatus: RuntimeProcessStatus;
   exitCode?: number;
 }
 
-export interface ReconcileTaskRuntimeInput extends TaskIdInput {}
+export interface ReconcileTaskRuntimeInput extends TaskIdInput {
+  processSnapshots?: ProcessRunSnapshot[];
+}
 
 export async function createTask(
   ctx: CommandContext,
@@ -679,6 +689,9 @@ export async function inspectTaskSummary(
       planStatus: projection.planDecision?.status,
       workerRuns: Object.keys(projection.workerRuns).length,
       runtimeProcesses: Object.keys(projection.runtimeProcessRuns ?? {}).length,
+      queuedRuntimeProcesses: Object.values(projection.runtimeProcessRuns ?? {}).filter(
+        (processRun) => processRun.status === "queued",
+      ).length,
       runningRuntimeProcesses: Object.values(projection.runtimeProcessRuns ?? {}).filter(
         (processRun) => processRun.status === "running",
       ).length,
@@ -795,8 +808,8 @@ export async function recordRuntimeProcessFinished(
   if (!loaded.ok) return loaded;
   const projection = loaded.data.projection;
   const processRun = projection.runtimeProcessRuns?.[input.processRunId];
-  if (!processRun || processRun.status !== "running") {
-    return fail("invalid_state", "Runtime process run is not running.", {
+  if (!processRun || (processRun.status !== "queued" && processRun.status !== "running")) {
+    return fail("invalid_state", "Runtime process run is not active.", {
       taskId: input.taskId,
       processRunId: input.processRunId,
     });
@@ -813,14 +826,79 @@ export async function recordRuntimeProcessFinished(
   });
 }
 
+export async function recordRuntimeProcessRunning(
+  ctx: CommandContext,
+  input: RecordRuntimeProcessRunningInput,
+): Promise<CommandResult<{ projection: TaskProjection }>> {
+  const loaded = await loadTaskProjection(ctx, input);
+  if (!loaded.ok) return loaded;
+  const projection = loaded.data.projection;
+  const processRun = projection.runtimeProcessRuns?.[input.processRunId];
+  if (!processRun || processRun.status !== "queued") {
+    return fail("invalid_state", "Runtime process run is not queued.", {
+      taskId: input.taskId,
+      processRunId: input.processRunId,
+    });
+  }
+  return await appendAndProject(ctx, {
+    id: nextId("event", ctx.id),
+    type: "runtime_process.running",
+    taskId: input.taskId,
+    workspaceId: projection.workspaceId,
+    createdAt: commandNow(ctx),
+    processRunId: input.processRunId,
+  });
+}
+
 export async function reconcileTaskRuntime(
   ctx: CommandContext,
   input: ReconcileTaskRuntimeInput,
 ): Promise<CommandResult<{ projection: TaskProjection; reconciledCount: number }>> {
   const loaded = await loadTaskProjection(ctx, input);
   if (!loaded.ok) return loaded;
-  const projection = loaded.data.projection;
+  let projection = loaded.data.projection;
   const events: TaskEvent[] = [];
+  let reconciledCount = 0;
+
+  const snapshots = new Map(
+    (input.processSnapshots ?? []).map((snapshot) => [snapshot.runId, snapshot]),
+  );
+  for (const processRun of Object.values(projection.runtimeProcessRuns ?? {})) {
+    if (processRun.status !== "queued" && processRun.status !== "running") continue;
+    const snapshot = snapshots.get(processRun.processRunId);
+    if (!snapshot) continue;
+    if (processRun.status === "queued" && snapshot.state === "running") {
+      events.push({
+        id: nextId("event", ctx.id),
+        type: "runtime_process.running",
+        taskId: projection.taskId,
+        workspaceId: projection.workspaceId,
+        createdAt: commandNow(ctx),
+        processRunId: processRun.processRunId,
+      });
+      continue;
+    }
+    if (snapshot.state === "finished" && snapshot.result) {
+      events.push({
+        id: nextId("event", ctx.id),
+        type: "runtime_process.finished",
+        taskId: projection.taskId,
+        workspaceId: projection.workspaceId,
+        createdAt: commandNow(ctx),
+        processRunId: processRun.processRunId,
+        processStatus: snapshot.result.status,
+        ...(snapshot.result.exitCode !== undefined ? { exitCode: snapshot.result.exitCode } : {}),
+      });
+    }
+  }
+
+  if (events.length > 0) {
+    reconciledCount += events.length;
+    const updated = await appendAndProject(ctx, events);
+    if (!updated.ok) return updated;
+    projection = updated.data.projection;
+    events.length = 0;
+  }
 
   for (const processRun of Object.values(projection.runtimeProcessRuns ?? {})) {
     if (
@@ -856,10 +934,11 @@ export async function reconcileTaskRuntime(
     break;
   }
 
-  if (events.length === 0) return ok({ projection, reconciledCount: 0 });
+  if (events.length === 0) return ok({ projection, reconciledCount });
+  reconciledCount += events.length;
   const updated = await appendAndProject(ctx, events);
   if (!updated.ok) return updated;
-  return ok({ projection: updated.data.projection, reconciledCount: events.length });
+  return ok({ projection: updated.data.projection, reconciledCount });
 }
 
 export async function inspectTaskEvents(
@@ -913,6 +992,7 @@ export interface TaskSummary {
   planStatus?: PlanDecisionProjection["status"];
   workerRuns: number;
   runtimeProcesses: number;
+  queuedRuntimeProcesses: number;
   runningRuntimeProcesses: number;
   acceptedStages: number;
   terminal?: TaskProjection["terminal"];
@@ -954,6 +1034,7 @@ export interface TaskCompactView {
   };
   runtimeProcesses: {
     total: number;
+    queued: number;
     running: number;
   };
   latestRuntimeProcess?: {
@@ -1062,6 +1143,7 @@ function compactTaskView(projection: TaskProjection): TaskCompactView {
       nextAction.type === "start_lead_final_decision",
     runtimeProcesses: {
       total: runtimeProcesses.length,
+      queued: runtimeProcesses.filter((processRun) => processRun.status === "queued").length,
       running: runtimeProcesses.filter((processRun) => processRun.status === "running").length,
     },
     ...(latestWorker
@@ -1385,6 +1467,12 @@ function validateWorkUnits(
   for (const [index, workUnit] of workUnits.entries()) {
     const title = workUnit.title.trim();
     const objective = workUnit.objective.trim();
+    const instructions = normalizeRequiredStringList(workUnit.instructions, "instructions");
+    if (!instructions.ok) return instructions;
+    const deliverables = normalizeRequiredStringList(workUnit.deliverables, "deliverables");
+    if (!deliverables.ok) return deliverables;
+    const outOfScope = normalizeRequiredStringList(workUnit.outOfScope, "outOfScope");
+    if (!outOfScope.ok) return outOfScope;
     const acceptance = normalizeOptionalStringList(workUnit.acceptance, "acceptance");
     if (!acceptance.ok) return acceptance;
     if (!title || !objective) {
@@ -1393,10 +1481,25 @@ function validateWorkUnits(
     normalized.push({
       title,
       objective,
+      instructions: instructions.data.values,
+      deliverables: deliverables.data.values,
+      outOfScope: outOfScope.data.values,
       ...(acceptance.data.values.length > 0 ? { acceptance: acceptance.data.values } : {}),
     });
   }
   return ok({ workUnits: normalized });
+}
+
+function normalizeRequiredStringList(
+  values: string[] | undefined,
+  field: string,
+): CommandResult<{ values: string[] }> {
+  const normalized = normalizeOptionalStringList(values, field);
+  if (!normalized.ok) return normalized;
+  if (normalized.data.values.length === 0) {
+    return fail("invalid_input", `${field} must include at least one value.`);
+  }
+  return normalized;
 }
 
 async function loadSubmittedPlan(
@@ -1684,7 +1787,9 @@ function summarizeEvent(event: TaskEvent): string {
     case "plan.rejected":
       return event.report;
     case "runtime_process.started":
-      return `Runtime process ${event.processRunId} started for ${event.actionType}.`;
+      return `Runtime process ${event.processRunId} queued for ${event.actionType}.`;
+    case "runtime_process.running":
+      return `Runtime process ${event.processRunId} started running.`;
     case "runtime_process.finished":
       return `Runtime process ${event.processRunId} finished as ${event.processStatus}.`;
     case "stage.started":

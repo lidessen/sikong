@@ -53,6 +53,17 @@ function ctx(dataDir: string): CommandContext {
   };
 }
 
+function testWorkUnit(title: string, objective: string, acceptance?: string[]) {
+  return {
+    title,
+    objective,
+    instructions: [`Complete only: ${objective}`],
+    deliverables: [`Evidence that ${title} is complete.`],
+    outOfScope: ["Do not complete other work units or later stages."],
+    ...(acceptance ? { acceptance } : {}),
+  };
+}
+
 async function planSingleWorkUnitRound(context: CommandContext, taskId: string) {
   const task = await getTask(context, { taskId });
   if (!task.ok || !task.data.projection.currentStageId) throw new Error("current stage missing");
@@ -60,7 +71,7 @@ async function planSingleWorkUnitRound(context: CommandContext, taskId: string) 
     taskId,
     stageId: task.data.projection.currentStageId,
     intent: "Execute the next focused work unit.",
-    workUnits: [{ title: "Implement", objective: "Complete the current stage work." }],
+    workUnits: [testWorkUnit("Implement", "Complete the current stage work.")],
   });
   if (!round.ok) throw new Error("round plan failed");
   return {
@@ -280,7 +291,8 @@ describe("task command handlers", () => {
         data: {
           summary: {
             runtimeProcesses: 1,
-            runningRuntimeProcesses: 1,
+            queuedRuntimeProcesses: 1,
+            runningRuntimeProcesses: 0,
           },
         },
       });
@@ -288,11 +300,11 @@ describe("task command handlers", () => {
         ok: true,
         data: {
           compact: {
-            runtimeProcesses: { total: 1, running: 1 },
+            runtimeProcesses: { total: 1, queued: 1, running: 0 },
             latestRuntimeProcess: {
               processRunId: "process_1",
               actionType: "start_planning_worker",
-              status: "running",
+              status: "queued",
             },
           },
         },
@@ -376,6 +388,166 @@ describe("task command handlers", () => {
         result: {
           summary: expect.stringContaining("process_timeout"),
           report: expect.stringContaining("timed_out"),
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reconciles finished daemon snapshots into runtime process events", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Recover a finished process snapshot.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const taskId = created.data.taskId;
+      await recordRuntimeProcessStarted(context, {
+        taskId,
+        processRunId: "process_finished_snapshot",
+        actionType: "start_stage_worker",
+      });
+
+      expect(await inspectTaskSummary(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          summary: {
+            runtimeProcesses: 1,
+            queuedRuntimeProcesses: 1,
+            runningRuntimeProcesses: 0,
+          },
+        },
+      });
+
+      const reconciled = await reconcileTaskRuntime(context, {
+        taskId,
+        processSnapshots: [
+          {
+            runId: "process_finished_snapshot",
+            workspaceId: "sikong",
+            taskId,
+            state: "finished",
+            startedAt: "2026-06-14T00:00:00.000Z",
+            finishedAt: "2026-06-14T00:00:01.000Z",
+            spec: {
+              runId: "process_finished_snapshot",
+              workspaceId: "sikong",
+              taskId,
+              command: "echo",
+            },
+            result: {
+              runId: "process_finished_snapshot",
+              workspaceId: "sikong",
+              taskId,
+              status: "succeeded",
+              command: "echo",
+              args: [],
+              stdout: "",
+              stderr: "",
+              exitCode: 0,
+              startedAt: "2026-06-14T00:00:00.000Z",
+              finishedAt: "2026-06-14T00:00:01.000Z",
+              durationMs: 1_000,
+            },
+          },
+        ],
+      });
+
+      expect(reconciled).toMatchObject({
+        ok: true,
+        data: {
+          projection: {
+            runtimeProcessRuns: {
+              process_finished_snapshot: {
+                status: "finished",
+                processStatus: "succeeded",
+                exitCode: 0,
+              },
+            },
+          },
+        },
+      });
+      expect(await inspectTaskSummary(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          summary: {
+            runtimeProcesses: 1,
+            runningRuntimeProcesses: 0,
+          },
+        },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reconciles running daemon snapshots into runtime running events", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Recover a running process snapshot.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      const taskId = created.data.taskId;
+      await recordRuntimeProcessStarted(context, {
+        taskId,
+        processRunId: "process_running_snapshot",
+        actionType: "start_stage_worker",
+      });
+
+      const reconciled = await reconcileTaskRuntime(context, {
+        taskId,
+        processSnapshots: [
+          {
+            runId: "process_running_snapshot",
+            workspaceId: "sikong",
+            taskId,
+            state: "running",
+            spec: {
+              runId: "process_running_snapshot",
+              workspaceId: "sikong",
+              taskId,
+              command: "bun",
+            },
+            queuedAt: "2026-06-14T00:00:00.000Z",
+            startedAt: "2026-06-14T00:00:01.000Z",
+          },
+        ],
+      });
+
+      expect(reconciled).toMatchObject({
+        ok: true,
+        data: {
+          reconciledCount: 1,
+          projection: {
+            runtimeProcessRuns: {
+              process_running_snapshot: { status: "running" },
+            },
+          },
+        },
+      });
+      expect(await inspectTaskSummary(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          summary: {
+            queuedRuntimeProcesses: 0,
+            runningRuntimeProcesses: 1,
+          },
+        },
+      });
+      expect(await inspectTaskTrace(context, { taskId })).toMatchObject({
+        ok: true,
+        data: {
+          trace: expect.arrayContaining([
+            expect.objectContaining({ type: "runtime_process.running" }),
+          ]),
         },
       });
     } finally {

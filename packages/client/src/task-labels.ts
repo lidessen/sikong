@@ -16,7 +16,7 @@ export function statusBadgeVariant(task: TaskCard): ConsoleBadgeVariant {
   if (task.terminal?.outcome === "accepted") return "ok";
   if (task.terminal?.outcome === "rejected") return "err";
   if (task.terminal) return "neutral";
-  if (task.runtimeProcesses.running > 0) return "info";
+  if (task.runtimeProcesses.running > 0 || task.runtimeProcesses.queued > 0) return "info";
   if (task.waitingForLead) return "warn";
   if (task.status === "planning" || task.nextAction.type.includes("plan")) return "warn";
   if (task.status === "running") return "info";

@@ -9,6 +9,7 @@ import {
   listWorkspaces,
   resolveDataDir,
   runClientAgentTurn,
+  runtimeSettingsOptions,
   taskProjectionsDir,
   type ClientWorkLogEntryKind,
   type ClientTranscriptSource,
@@ -72,13 +73,15 @@ Bun.serve({
         });
       }
       if (request.method === "GET" && url.pathname === "/api/settings") {
-        return json(await settingsStore.read());
+        return json(settingsResponse(await settingsStore.read()));
       }
       if (request.method === "GET" && url.pathname === "/api/transcript") {
         return json(await readTranscript());
       }
       if (request.method === "PUT" && url.pathname === "/api/settings") {
-        return json(await settingsStore.write((await request.json()) as SikongSettings));
+        return json(
+          settingsResponse(await settingsStore.write((await request.json()) as SikongSettings)),
+        );
       }
       if (request.method === "POST" && url.pathname === "/api/work-log") {
         const body = await request.json();
@@ -349,6 +352,7 @@ async function clientState(workspaceId?: string) {
       workLog,
       transcript,
       settings,
+      settingsOptions: runtimeSettingsOptions(),
       scheduler,
     };
   }
@@ -365,7 +369,15 @@ async function clientState(workspaceId?: string) {
     workLog,
     transcript,
     settings,
+    settingsOptions: runtimeSettingsOptions(),
     scheduler,
+  };
+}
+
+function settingsResponse(settings: SikongSettings) {
+  return {
+    ...settings,
+    options: runtimeSettingsOptions(),
   };
 }
 

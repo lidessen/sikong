@@ -198,10 +198,10 @@ func processRunListQuery(w http.ResponseWriter, r *http.Request) (ProcessRunList
 	}
 	if state := query.Get("state"); state != "" {
 		switch ProcessRunState(state) {
-		case ProcessRunRunning, ProcessRunFinished:
+		case ProcessRunQueued, ProcessRunRunning, ProcessRunFinished:
 			filter.State = ProcessRunState(state)
 		default:
-			writeProcessAPIError(w, http.StatusBadRequest, "invalid_state", "state must be running or finished")
+			writeProcessAPIError(w, http.StatusBadRequest, "invalid_state", "state must be queued, running, or finished")
 			return ProcessRunListFilter{}, 0, false
 		}
 	}

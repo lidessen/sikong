@@ -2,7 +2,7 @@ import type { AgentLoop, ToolSet } from "agent-loop";
 import { join } from "node:path";
 import type { TaskProjection } from "../coordination";
 import { FileSettingsStore } from "../settings";
-import { LocalProcessExecutionClient } from "../process";
+import { LocalProcessExecutionClient, type ProcessRunSnapshot } from "../process";
 import { defaultRuntimeAssembly, type RuntimeAssemblyConfig } from "../runtime";
 import { reconcileTaskRuntime } from "./task";
 import {
@@ -17,6 +17,14 @@ import {
   type OrchestrationProcessExecutionClient,
 } from "../orchestration";
 import { fail, ok, type CommandContext, type CommandResult } from "./types";
+
+interface RuntimeSnapshotClient {
+  listProcessRuns(options: {
+    workspaceId?: string;
+    taskId?: string;
+    limit?: number;
+  }): Promise<{ runs: ProcessRunSnapshot[] }>;
+}
 
 export interface DriveTaskInput {
   taskId: string;
@@ -59,9 +67,10 @@ export async function driveTask(
   const command = input.command ?? process.env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
 
   try {
-    const reconciled = await reconcileTaskRuntime(ctx, {
+    const reconciled = await reconcileWithProcessSnapshots(ctx, {
       workspaceId: input.workspaceId,
       taskId: input.taskId,
+      client,
     });
     if (!reconciled.ok) return reconciled;
     return await runOrchestrationUntilWait({
@@ -116,9 +125,10 @@ export async function tickTask(
   const command = input.command ?? process.env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
 
   try {
-    const reconciled = await reconcileTaskRuntime(ctx, {
+    const reconciled = await reconcileWithProcessSnapshots(ctx, {
       workspaceId: input.workspaceId,
       taskId: input.taskId,
+      client,
     });
     if (!reconciled.ok) return reconciled;
     const projection = reconciled.data.projection;
@@ -141,9 +151,10 @@ export async function tickTask(
           waitTimeoutMs: input.waitTimeoutMs,
         });
     if (!executed.ok) return executed;
-    const latest = await reconcileTaskRuntime(ctx, {
+    const latest = await reconcileWithProcessSnapshots(ctx, {
       workspaceId: input.workspaceId,
       taskId: input.taskId,
+      client,
     });
     if (!latest.ok) return latest;
     return ok({
@@ -155,6 +166,48 @@ export async function tickTask(
   } catch (err) {
     return fail("internal_error", err instanceof Error ? err.message : String(err));
   }
+}
+
+async function reconcileWithProcessSnapshots(
+  ctx: CommandContext,
+  input: { workspaceId?: string; taskId: string; client: unknown },
+): Promise<CommandResult<{ projection: TaskProjection; reconciledCount: number }>> {
+  const processSnapshots = await listTaskProcessSnapshots(input.client, {
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+  });
+  return await reconcileTaskRuntime(ctx, {
+    workspaceId: input.workspaceId,
+    taskId: input.taskId,
+    ...(processSnapshots ? { processSnapshots } : {}),
+  });
+}
+
+async function listTaskProcessSnapshots(
+  client: unknown,
+  input: { workspaceId?: string; taskId: string },
+): Promise<ProcessRunSnapshot[] | undefined> {
+  if (!hasRuntimeSnapshotClient(client)) return undefined;
+  try {
+    const response = await client.listProcessRuns({
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+      limit: 200,
+    });
+    return response.runs;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasRuntimeSnapshotClient(client: unknown): client is RuntimeSnapshotClient {
+  return (
+    Boolean(client) &&
+    client !== null &&
+    typeof client === "object" &&
+    "listProcessRuns" in client &&
+    typeof (client as { listProcessRuns?: unknown }).listProcessRuns === "function"
+  );
 }
 
 function orchestrationInput(projection: TaskProjection): OrchestrationInput {

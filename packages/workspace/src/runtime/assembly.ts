@@ -267,7 +267,7 @@ async function runtimeBackendOptions(
   options: unknown,
   context: RuntimeAssemblyContext,
 ): Promise<Record<string, unknown>> {
-  const base = runtimeProviderOptions(backendOptions(options));
+  const base = runtimeProviderOptions(backend, backendOptions(options));
   const cwd = await resolveRuntimeCwd(context);
   if (!cwd) {
     if (requiresTaskRuntimeCwd(backend, context)) {
@@ -298,7 +298,7 @@ async function runtimeBackendOptions(
     return {
       ...base,
       cwd,
-      sandboxEnabled: Object.hasOwn(base, "sandboxEnabled") ? base.sandboxEnabled : true,
+      sandboxEnabled: Object.hasOwn(base, "sandboxEnabled") ? base.sandboxEnabled : false,
     };
   }
 
@@ -317,11 +317,16 @@ function requiresTaskRuntimeCwd(backend: string, context: RuntimeAssemblyContext
   );
 }
 
-function runtimeProviderOptions(options: Record<string, unknown>): Record<string, unknown> {
+function runtimeProviderOptions(
+  backend: string,
+  options: Record<string, unknown>,
+): Record<string, unknown> {
   const providerName = typeof options.provider === "string" ? options.provider.trim() : "";
   if (!providerName) return options;
 
   const { provider: _providerName, ...rest } = options;
+  if (backend === "cursor") return rest;
+
   const model =
     typeof options.model === "string" && options.model.trim() ? options.model : undefined;
   return {

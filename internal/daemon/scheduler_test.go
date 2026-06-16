@@ -18,11 +18,11 @@ func TestSchedulerScansRunnableTasksAndTicks(t *testing.T) {
 	dataDir := filepath.Join(dir, "data")
 	script := filepath.Join(dir, "workspace-cli.sh")
 	body := `#!/bin/sh
-if [ "$1" = "task" ] && [ "$2" = "runnable" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "task" ] && [ "$3" = "runnable" ]; then
   echo '{"ok":true,"data":{"tasks":[{"workspaceId":"workspace_a","taskId":"task_a"}]}}'
   exit 0
 fi
-if [ "$1" = "task" ] && [ "$2" = "tick" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "task" ] && [ "$3" = "tick" ]; then
   echo "$@ data=$SIKONG_DATA_DIR daemon=$SIKONG_DAEMON_ADDR" >> "` + logPath + `"
   echo '{"ok":true,"data":{}}'
   exit 0
@@ -56,7 +56,7 @@ exit 1
 		t.Fatal("scheduler did not invoke task tick")
 	}
 	for _, want := range []string{
-		"task tick task_a --workspace workspace_a --daemon 127.0.0.1:9876",
+		"--json task tick task_a --workspace workspace_a --daemon 127.0.0.1:9876",
 		"--process-timeout-ms 7200000 --wait-timeout-ms 7260000",
 		"data=" + dataDir,
 		"daemon=127.0.0.1:9876",
@@ -94,11 +94,11 @@ func TestSchedulerClearsStaleErrorAfterSuccessfulTick(t *testing.T) {
 	logPath := filepath.Join(dir, "calls.log")
 	script := filepath.Join(dir, "workspace-cli.sh")
 	body := `#!/bin/sh
-if [ "$1" = "task" ] && [ "$2" = "runnable" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "task" ] && [ "$3" = "runnable" ]; then
   echo '{"ok":true,"data":{"tasks":[{"workspaceId":"workspace_a","taskId":"task_a"}]}}'
   exit 0
 fi
-if [ "$1" = "task" ] && [ "$2" = "tick" ]; then
+if [ "$1" = "--json" ] && [ "$2" = "task" ] && [ "$3" = "tick" ]; then
   echo "$@" >> "` + logPath + `"
   echo '{"ok":true,"data":{}}'
   exit 0
