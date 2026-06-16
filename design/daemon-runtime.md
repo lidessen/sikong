@@ -76,9 +76,15 @@ The local daemon API is HTTP on loopback by default. `sikongd` listens on
 ```text
 GET  /health
 POST /process-runs
+GET  /process-runs?workspaceId=<id>&taskId=<id>&state=running|finished&limit=<n>
 GET  /process-runs/:runId
 GET  /process-runs/:runId/wait?timeoutMs=<ms>
 POST /process-runs/:runId/cancel
+GET  /scheduler/status
+POST /scheduler/wake
+POST /scheduler/pause
+POST /scheduler/resume
+GET  /tasks/runnable
 POST /shutdown
 ```
 
@@ -132,6 +138,20 @@ If TypeScript needs to start a runtime-backed run, it asks the Go daemon to
 start a generic process using a `ProcessRunSpec`. TypeScript then interprets the
 process result and appends domain events. The daemon returns process facts; it
 does not append planner, worker, or review domain events by itself.
+
+The Go daemon also owns the process-level scheduler. That scheduler is a
+liveness mechanism, not the coordination source of truth: it scans durable task
+projections, runs the workspace CLI `task tick` command for runnable tasks, and
+wakes again when a tick finishes or when the Client Agent submits new work. Each
+tick re-enters TypeScript command handlers, which derive the next action from
+the current projection and append all task-domain events.
+
+Scheduler-driven ticks are intended for long tasks. The default scheduler
+process timeout is 2 hours and the default wait timeout is 2 hours plus 60
+seconds. They are safety fallbacks, not normal turn boundaries. Local operators
+may override them with `SIKONG_SCHEDULER_PROCESS_TIMEOUT_MS` and
+`SIKONG_SCHEDULER_WAIT_TIMEOUT_MS`; `/scheduler/status` exposes the effective
+values.
 
 The TypeScript orchestration driver may repeatedly load projection state, plan
 the next action, and request runtime-backed process runs until it reaches a
@@ -267,5 +287,6 @@ It records runtime process start and finish facts in the task log so a separate
 facts remain process metadata and do not imply task success or failure.
 
 The CLI `task drive` command is an adapter over this TypeScript driver and
-process-backed action executor. It does not add daemon scheduling semantics; it
-only calls the same engine APIs an embedded tool surface can call.
+process-backed action executor. The daemon scheduler uses the narrower
+`task runnable` and `task tick` commands so scheduling stays in Go while domain
+state transitions stay in TypeScript.

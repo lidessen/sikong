@@ -194,6 +194,7 @@ func appendRuntimeEnv(env []string, runtime runtimebundle.Paths) []string {
 	return append(
 		env,
 		"SIKONG_RUNTIME_DIR="+runtime.Root,
+		"SIKONG_WORKSPACE_CLI_COMMAND="+runtime.WorkspaceCLI,
 		"SIKONG_CLIENT_DIST_DIR="+runtime.ClientDist,
 		"SIKONG_ORCHESTRATION_RUNNER_COMMAND="+runtime.OrchestrationRunner,
 		"SIKONG_PROCESS_RUNNER_COMMAND="+runtime.ProcessRunner,

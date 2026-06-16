@@ -37,6 +37,11 @@ Command handlers own application actions:
 Command handlers should be request-scoped. They must not rely on a global Bun
 singleton scheduler or process-local mutable state for correctness.
 
+Daemon-owned scheduling is outside the Bun command handler process. It may call
+request-scoped commands such as `task runnable` and `task tick`, but correctness
+still comes from durable task events, projections, and idempotent command
+handlers.
+
 The engine owns durable coordination semantics:
 
 - event append and reduction;

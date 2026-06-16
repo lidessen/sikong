@@ -65,6 +65,10 @@ export type SerializableOrchestrationAction =
       input: SerializableStageWorkerInput;
     }
   | {
+      type: "start_stage_workers";
+      inputs: SerializableStageWorkerInput[];
+    }
+  | {
       type: "await_worker_results";
       taskId: string;
       stageId: string;
@@ -163,7 +167,12 @@ export async function runOrchestrationRunner(
 
 function compactRunnerOutput(output: OrchestrationRunnerOutput): OrchestrationRunnerOutput {
   if (!output.ok) return output;
-  if (output.data.resultType !== "worker_task_completed") return output;
+  if (
+    output.data.resultType !== "worker_task_completed" &&
+    output.data.resultType !== "worker_tasks_completed"
+  ) {
+    return output;
+  }
   return {
     ok: true,
     data: {
@@ -233,6 +242,14 @@ export function toSerializableOrchestrationAction(
           taskInput: serializableTaskInput(action.input.taskInput),
         },
       };
+    case "start_stage_workers":
+      return {
+        type: action.type,
+        inputs: action.inputs.map((input) => ({
+          ...input,
+          taskInput: serializableTaskInput(input.taskInput),
+        })),
+      };
     default:
       return action;
   }
@@ -285,14 +302,28 @@ async function hydrateAction(
     return await runtimeModule.hydrateOrchestrationAction(request);
   }
   const { action } = request;
-  if (action.type !== "start_stage_worker") return action;
-  return {
-    ...action,
-    input: {
-      ...action.input,
-      taskInput: action.input.taskInput ?? {},
-    } as Extract<OrchestrationAction, { type: "start_stage_worker" }>["input"],
-  };
+  if (action.type === "start_stage_worker") {
+    return {
+      ...action,
+      input: {
+        ...action.input,
+        taskInput: action.input.taskInput ?? {},
+      } as Extract<OrchestrationAction, { type: "start_stage_worker" }>["input"],
+    };
+  }
+  if (action.type === "start_stage_workers") {
+    return {
+      ...action,
+      inputs: action.inputs.map(
+        (item) =>
+          ({
+            ...item,
+            taskInput: item.taskInput ?? {},
+          }) as Extract<OrchestrationAction, { type: "start_stage_worker" }>["input"],
+      ),
+    };
+  }
+  return action;
 }
 
 function serializableWorkerRunSpec(spec: WorkerRunSpec): SerializableWorkerRunSpec {

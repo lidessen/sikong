@@ -1,5 +1,5 @@
-import { access, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, appendFile, mkdir, readdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   FileTaskEventStore,
   FileTaskProjectionStore,
@@ -18,7 +18,7 @@ import {
   summarizeProjectionNextAction,
   type OrchestrationActionSummary,
 } from "../orchestration/summary";
-import { taskProjectionsDir } from "../data-dir";
+import { taskObservationsFile, taskProjectionsDir } from "../data-dir";
 import {
   FileWorkspaceStore,
   WorkspaceWorktreeError,
@@ -260,6 +260,37 @@ export async function listTasks(
     tasks.push(compactTaskView(projection));
   }
   tasks.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  return ok({ tasks });
+}
+
+export async function listRunnableTasks(
+  ctx: CommandContext,
+  input: { workspaceId?: string; all?: boolean } = {},
+): Promise<CommandResult<{ tasks: RunnableTaskView[] }>> {
+  const workspaces = input.all
+    ? await new FileWorkspaceStore(ctx.dataDir).list()
+    : input.workspaceId || ctx.workspaceId
+      ? [{ id: input.workspaceId ?? ctx.workspaceId!, name: "" }]
+      : await new FileWorkspaceStore(ctx.dataDir).list();
+  const tasks: RunnableTaskView[] = [];
+  for (const workspace of workspaces) {
+    const listed = await listTasks(ctx, { workspaceId: workspace.id });
+    if (!listed.ok) return listed;
+    for (const task of listed.data.tasks) {
+      if (!isRunnableTaskCompact(task)) continue;
+      tasks.push({
+        workspaceId: task.workspaceId,
+        taskId: task.taskId,
+        status: task.status,
+        nextAction: task.nextAction,
+        ...(task.currentStage ? { currentStage: task.currentStage } : {}),
+        ...(task.activeRound ? { activeRound: task.activeRound } : {}),
+        runtimeProcesses: task.runtimeProcesses,
+        ...(task.updatedAt ? { updatedAt: task.updatedAt } : {}),
+      });
+    }
+  }
+  tasks.sort((a, b) => (a.updatedAt ?? "").localeCompare(b.updatedAt ?? ""));
   return ok({ tasks });
 }
 
@@ -692,7 +723,7 @@ export async function inspectTaskDetail(
       projection,
       trace: trace.data.trace,
       events: events.data.events,
-      observations: collectWorkerObservations(projection),
+      observations: await collectWorkerObservations(ctx, projection),
     },
   });
 }
@@ -968,6 +999,17 @@ export interface TaskDetailView {
   }>;
 }
 
+export interface RunnableTaskView {
+  workspaceId: string;
+  taskId: string;
+  status: TaskCompactView["status"];
+  nextAction: TaskCompactView["nextAction"];
+  currentStage?: TaskCompactView["currentStage"];
+  activeRound?: TaskCompactView["activeRound"];
+  runtimeProcesses: TaskCompactView["runtimeProcesses"];
+  updatedAt?: string;
+}
+
 function compactTaskView(projection: TaskProjection): TaskCompactView {
   const currentStage = projection.plan?.stages.find(
     (stage) => stage.id === projection.currentStageId,
@@ -1063,6 +1105,16 @@ function isTaskWaitBoundary(compact: TaskCompactView): boolean {
   );
 }
 
+function isRunnableTaskCompact(compact: TaskCompactView): boolean {
+  if (compact.terminal) return false;
+  if (compact.runtimeProcesses.running > 0) return false;
+  return !(
+    compact.nextAction.type === "await_worker_results" ||
+    compact.nextAction.type === "blocked" ||
+    compact.nextAction.type === "terminal"
+  );
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1138,17 +1190,29 @@ function latestReviewProjection(
   };
 }
 
-function collectWorkerObservations(projection: TaskProjection): TaskDetailView["observations"] {
-  return Object.values(projection.workerRuns)
-    .filter((run) => run.result?.observations?.length)
-    .sort((a, b) => String(a.startedAt ?? a.runId).localeCompare(String(b.startedAt ?? b.runId)))
-    .map((run) => ({
+async function collectWorkerObservations(
+  ctx: CommandContext,
+  projection: TaskProjection,
+): Promise<TaskDetailView["observations"]> {
+  const groups: TaskDetailView["observations"] = [];
+  for (const run of Object.values(projection.workerRuns).sort((a, b) =>
+    String(a.startedAt ?? a.runId).localeCompare(String(b.startedAt ?? b.runId)),
+  )) {
+    const observations =
+      run.result?.observations ??
+      (run.result?.observationRef
+        ? await readWorkerObservations(ctx, projection.workspaceId, projection.taskId, run.runId)
+        : []);
+    if (observations.length === 0) continue;
+    groups.push({
       runId: run.runId,
       stageId: run.stageId,
       roundId: run.roundId,
       workUnitId: run.workUnitId,
-      observations: run.result?.observations ?? [],
-    }));
+      observations,
+    });
+  }
+  return groups;
 }
 
 async function resolveRuntimeInput(
@@ -1470,6 +1534,23 @@ async function finishWorkerRun(
       runId: input.runId,
     });
   }
+  const observations = normalizeWorkerObservations(input.observations ?? []);
+  const resultWithRef: TaskRunResult =
+    observations.length > 0
+      ? {
+          ...result.data.result,
+          observationRef: { runId: input.runId, count: observations.length },
+        }
+      : result.data.result;
+  if (observations.length > 0) {
+    await writeWorkerObservations(
+      ctx,
+      projection.workspaceId,
+      projection.taskId,
+      input.runId,
+      observations,
+    );
+  }
 
   return await appendAndProject(ctx, {
     id: nextId("event", ctx.id),
@@ -1479,7 +1560,7 @@ async function finishWorkerRun(
     createdAt: commandNow(ctx),
     runId: input.runId,
     stageId: run.stageId,
-    result: result.data.result,
+    result: resultWithRef,
   });
 }
 
@@ -1493,9 +1574,58 @@ function normalizeTaskRunResult(
       summary,
       ...(input.report?.trim() ? { report: input.report.trim() } : {}),
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
-      ...(input.observations?.length ? { observations: input.observations } : {}),
     },
   });
+}
+
+function normalizeWorkerObservations(
+  observations: NonNullable<TaskRunResult["observations"]>,
+): NonNullable<TaskRunResult["observations"]> {
+  return observations.filter((observation) => {
+    if (observation.kind === "thinking" || observation.kind === "text") {
+      const summary = observation.summary.trim();
+      return Boolean(
+        observation.toolName ||
+        observation.status ||
+        observation.usage ||
+        summary.includes(" ") ||
+        summary.length > 40,
+      );
+    }
+    return true;
+  });
+}
+
+async function writeWorkerObservations(
+  ctx: CommandContext,
+  workspaceId: string,
+  taskId: string,
+  runId: string,
+  observations: NonNullable<TaskRunResult["observations"]>,
+): Promise<void> {
+  const file = taskObservationsFile(ctx.dataDir, workspaceId, taskId, runId);
+  await mkdir(dirname(file), { recursive: true });
+  await appendFile(file, observations.map((item) => JSON.stringify(item)).join("\n") + "\n");
+}
+
+async function readWorkerObservations(
+  ctx: CommandContext,
+  workspaceId: string,
+  taskId: string,
+  runId: string,
+): Promise<NonNullable<TaskRunResult["observations"]>> {
+  const file = taskObservationsFile(ctx.dataDir, workspaceId, taskId, runId);
+  let text: string;
+  try {
+    text = await readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  return text
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as NonNullable<TaskRunResult["observations"]>[number]);
 }
 
 async function finishTask(

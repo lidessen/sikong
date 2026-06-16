@@ -160,6 +160,22 @@ export class RuntimeAssemblyRegistry {
             },
           },
         };
+      case "start_stage_workers":
+        return {
+          ...action,
+          inputs: await Promise.all(
+            action.inputs.map(async (input) => ({
+              ...input,
+              taskInput: {
+                ...input.taskInput,
+                tools: mergeToolSets(
+                  input.taskInput?.tools,
+                  await this.resolveToolProfile(profiles.execution, context),
+                ),
+              },
+            })),
+          ),
+        };
       default:
         return action;
     }
@@ -295,6 +311,7 @@ function requiresTaskRuntimeCwd(backend: string, context: RuntimeAssemblyContext
     (backend === "claude-code" || backend === "codex" || backend === "cursor") &&
     (actionType === "start_planning_worker" ||
       actionType === "start_stage_worker" ||
+      actionType === "start_stage_workers" ||
       actionType === "start_stage_verification_worker" ||
       actionType === "start_final_verification_worker")
   );
@@ -396,6 +413,8 @@ function taskIdFromAction(action: SerializableOrchestrationAction): string | und
       return action.spec.taskId;
     case "start_stage_worker":
       return action.input.taskId;
+    case "start_stage_workers":
+      return action.inputs[0]?.taskId;
     default:
       return action.taskId;
   }
@@ -413,6 +432,8 @@ function workspaceIdFromAction(action: SerializableOrchestrationAction): string 
       return action.spec.workspaceId;
     case "start_stage_worker":
       return action.input.workspaceId;
+    case "start_stage_workers":
+      return action.inputs[0]?.workspaceId;
     case "start_stage_review":
       return action.workspaceId;
     default:

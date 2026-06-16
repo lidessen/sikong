@@ -149,6 +149,23 @@ export interface ClientState {
   workLog: ClientWorkLogEntry[];
   transcript?: ClientMessage[];
   settings: SikongSettings;
+  scheduler?: SchedulerStatus;
+}
+
+export interface SchedulerStatus {
+  enabled: boolean;
+  paused?: boolean;
+  active?: number;
+  maxConcurrent?: number;
+  lastScanAt?: string;
+  lastTickAt?: string;
+  lastError?: string;
+  started?: number;
+  completed?: number;
+  runnableSeen?: number;
+  activeTasks?: string[];
+  processTimeoutMs?: number;
+  waitTimeoutMs?: number;
 }
 
 export interface TaskDetailView {
@@ -157,6 +174,8 @@ export interface TaskDetailView {
   trace: TaskTraceEntry[];
   events: TaskEventView[];
   observations: WorkerRunObservationGroup[];
+  processRuns?: ProcessRunSnapshotView[];
+  processRunError?: string;
 }
 
 export interface TaskProjectionView {
@@ -245,6 +264,47 @@ export interface RuntimeProcessRunView {
   status: "running" | "finished";
   processStatus?: "succeeded" | "failed" | "timed_out" | "cancelled";
   exitCode?: number;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface ProcessRunSnapshotView {
+  runId: string;
+  workspaceId: string;
+  taskId?: string;
+  state: "running" | "finished";
+  spec: {
+    runId: string;
+    workspaceId: string;
+    taskId?: string;
+    command: string;
+    args?: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+    timeoutMs?: number;
+    labels?: Record<string, string>;
+    stdin?: string;
+  };
+  result?: {
+    runId: string;
+    workspaceId: string;
+    taskId?: string;
+    status: "succeeded" | "failed" | "timed_out" | "cancelled";
+    command: string;
+    args: string[];
+    cwd?: string;
+    labels?: Record<string, string>;
+    exitCode?: number;
+    signal?: string;
+    stdout: string;
+    stderr: string;
+    startedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    timedOut?: boolean;
+    cancelled?: boolean;
+  };
+  error?: string;
   startedAt: string;
   finishedAt?: string;
 }

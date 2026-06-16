@@ -173,6 +173,11 @@ export interface TaskRunResult {
   summary: string;
   report?: string;
   note?: string;
+  observationRef?: {
+    runId: string;
+    count: number;
+  };
+  /** Legacy field: new writes store observations in state/observations instead. */
   observations?: WorkerRunObservation[];
 }
 

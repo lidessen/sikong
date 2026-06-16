@@ -12,6 +12,13 @@ export type OrchestrationActionSummary =
   | { type: "start_lead_round_planning"; stageId: string }
   | { type: "start_stage_worker"; stageId: string; roundId: string; workUnitId: string }
   | {
+      type: "start_stage_workers";
+      stageId: string;
+      roundId: string;
+      workUnitIds: string[];
+      count: number;
+    }
+  | {
       type: "await_worker_results";
       stageId: string;
       runningRuns: number;
@@ -66,18 +73,27 @@ function summarizeRunningAction(projection: TaskProjection): OrchestrationAction
     return { type: "start_lead_round_planning", stageId };
   }
 
-  const unstartedWorkUnit = activeRound.workUnits.find(
+  const unstartedWorkUnits = activeRound.workUnits.filter(
     (workUnit) =>
       !Object.values(projection.workerRuns).some(
         (run) => run.roundId === activeRound.id && run.workUnitId === workUnit.id,
       ),
   );
-  if (unstartedWorkUnit) {
+  if (unstartedWorkUnits.length === 1) {
     return {
       type: "start_stage_worker",
       stageId,
       roundId: activeRound.id,
-      workUnitId: unstartedWorkUnit.id,
+      workUnitId: unstartedWorkUnits[0]!.id,
+    };
+  }
+  if (unstartedWorkUnits.length > 1) {
+    return {
+      type: "start_stage_workers",
+      stageId,
+      roundId: activeRound.id,
+      workUnitIds: unstartedWorkUnits.map((workUnit) => workUnit.id),
+      count: unstartedWorkUnits.length,
     };
   }
 

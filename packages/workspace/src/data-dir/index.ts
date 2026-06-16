@@ -7,6 +7,8 @@ export {
   taskEventsDir,
   taskEventsFile,
   taskEventsLockFile,
+  taskObservationsDir,
+  taskObservationsFile,
   taskProjectionFile,
   taskProjectionsDir,
   taskRuntimeDir,

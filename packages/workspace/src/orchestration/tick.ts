@@ -56,6 +56,10 @@ export type OrchestrationAction =
       input: Omit<RunWorkerTaskInput, "runTask">;
     }
   | {
+      type: "start_stage_workers";
+      inputs: Array<Omit<RunWorkerTaskInput, "runTask">>;
+    }
+  | {
       type: "await_worker_results";
       taskId: string;
       stageId: string;
@@ -185,13 +189,22 @@ function planRunningAction(input: OrchestrationInput): OrchestrationAction {
     return startLeadRoundPlanning(input);
   }
 
-  const unstartedWorkUnit = activeRound.workUnits.find(
+  const unstartedWorkUnits = activeRound.workUnits.filter(
     (workUnit) =>
       !Object.values(projection.workerRuns).some(
         (run) => run.roundId === activeRound.id && run.workUnitId === workUnit.id,
       ),
   );
-  if (unstartedWorkUnit) return startStageWorker(input, activeRound, unstartedWorkUnit.id);
+  if (unstartedWorkUnits.length === 1) {
+    return startStageWorker(input, activeRound, unstartedWorkUnits[0]!.id);
+  }
+  if (unstartedWorkUnits.length > 1) {
+    return startStageWorkers(
+      input,
+      activeRound,
+      unstartedWorkUnits.map((workUnit) => workUnit.id),
+    );
+  }
 
   const allRuns = runsForRound(projection, activeRound.id);
   const terminalRuns = terminalRunsForRound(projection, activeRound.id);
@@ -297,6 +310,26 @@ function startStageWorker(
       executionTools: input.tools.executionTools,
       skills: input.executionSkills,
     }),
+  };
+}
+
+function startStageWorkers(
+  input: OrchestrationInput,
+  round: StageRoundProjection,
+  workUnitIds: string[],
+): OrchestrationAction {
+  return {
+    type: "start_stage_workers",
+    inputs: workUnitIds.map((workUnitId) =>
+      createStageExecutionPreset({
+        projection: input.projection,
+        roundId: round.id,
+        workUnitId,
+        baseTaskInput: input.workerTaskInput,
+        executionTools: input.tools.executionTools,
+        skills: input.executionSkills,
+      }),
+    ),
   };
 }
 

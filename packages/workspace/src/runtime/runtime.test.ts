@@ -13,6 +13,7 @@ import {
   createTask,
   createWorkspace,
   planStageRound,
+  inspectTaskDetail,
   submitRequirementSpec,
   submitPlan,
   type CommandContext,
@@ -121,30 +122,39 @@ describe("worker run task bridge", () => {
                 result: {
                   summary: "Worker completed through runTask.",
                   report: expect.stringContaining("Gate accepted."),
-                  observations: expect.arrayContaining([
-                    expect.objectContaining({
-                      kind: "thinking",
-                      summary: "Inspecting the current files.",
-                    }),
-                    expect.objectContaining({
-                      kind: "tool_call",
-                      toolName: "readFile",
-                      status: "started",
-                      argsSummary: expect.stringContaining("[redacted]"),
-                    }),
-                    expect.objectContaining({
-                      kind: "tool_call",
-                      toolName: "readFile",
-                      status: "completed",
-                      durationMs: 12,
-                    }),
-                  ]),
+                  observationRef: { runId: result.ok ? result.data.runId : "missing", count: 5 },
                 },
               },
             },
           },
         },
       });
+      const detail = await inspectTaskDetail(context, { taskId: target.taskId });
+      expect(detail).toMatchObject({ ok: true });
+      if (!detail.ok) throw new Error("task detail failed");
+      expect(detail.data.detail.observations).toEqual([
+        expect.objectContaining({
+          runId: result.ok ? result.data.runId : "missing",
+          observations: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "thinking",
+              summary: "Inspecting the current files.",
+            }),
+            expect.objectContaining({
+              kind: "tool_call",
+              toolName: "readFile",
+              status: "started",
+              argsSummary: expect.stringContaining("[redacted]"),
+            }),
+            expect.objectContaining({
+              kind: "tool_call",
+              toolName: "readFile",
+              status: "completed",
+              durationMs: 12,
+            }),
+          ]),
+        }),
+      ]);
       expect(seenGoals[0]).toContain("Task: Implement runtime worker adapter.");
       expect(seenGoals[0]).toContain("Stage: Implement");
       expect(seenGoals[0]).toContain("- Worker result is terminal-tool backed.");

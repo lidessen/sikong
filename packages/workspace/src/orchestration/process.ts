@@ -14,7 +14,7 @@ import {
 } from "../commands";
 import type { ProcessRunSnapshot, ProcessRunSpec } from "../process";
 import type { RuntimeAssemblyConfig } from "../runtime";
-import type { OrchestrationExecutionResult } from "./execute";
+import type { OrchestrationExecutionResult, OrchestrationWorkerRunSummary } from "./execute";
 import type { OrchestrationRunnerOutput } from "./runner";
 import { toSerializableOrchestrationAction } from "./runner";
 import type { OrchestrationAction } from "./tick";
@@ -80,6 +80,10 @@ export interface ExecuteOrchestrationActionProcessInput {
 export async function executeOrchestrationActionProcess(
   input: ExecuteOrchestrationActionProcessInput,
 ): Promise<CommandResult<OrchestrationExecutionResult>> {
+  if (input.action.type === "start_stage_workers") {
+    return await executeStageWorkerProcesses({ ...input, action: input.action });
+  }
+
   const workspaceId = workspaceIdForAction(input.action) ?? input.ctx.workspaceId;
   if (!workspaceId) return fail("invalid_input", "Workspace id is required.");
   const taskId = taskIdForAction(input.action);
@@ -166,6 +170,144 @@ export async function executeOrchestrationActionProcess(
   }
 }
 
+async function executeStageWorkerProcesses(
+  input: ExecuteOrchestrationActionProcessInput & {
+    action: Extract<OrchestrationAction, { type: "start_stage_workers" }>;
+  },
+): Promise<CommandResult<OrchestrationExecutionResult>> {
+  if (input.action.inputs.length === 0) {
+    return fail("invalid_input", "start_stage_workers requires at least one worker input.");
+  }
+  const workspaceId = input.action.inputs[0]?.workspaceId ?? input.ctx.workspaceId;
+  if (!workspaceId) return fail("invalid_input", "Workspace id is required.");
+  const taskId = input.action.inputs[0]?.taskId;
+  if (!taskId) return fail("invalid_input", "Task id is required for stage worker execution.");
+
+  const tempDir = await mkdtemp(join(tmpdir(), "sikong-orchestration-"));
+  try {
+    const launched = await Promise.all(
+      input.action.inputs.map(async (workerInput, index) => {
+        const action: OrchestrationAction = {
+          type: "start_stage_worker",
+          input: workerInput,
+        };
+        const runId = `orchestration_${randomUUID()}`;
+        const requestPath = join(tempDir, `request-${index}.json`);
+        await writeFile(
+          requestPath,
+          JSON.stringify({
+            context: {
+              dataDir: input.ctx.dataDir,
+              workspaceId,
+              ...(input.ctx.outputMode ? { outputMode: input.ctx.outputMode } : {}),
+            },
+            action: toSerializableOrchestrationAction(action),
+            ...(input.runtimeAssembly ? { runtimeAssembly: input.runtimeAssembly } : {}),
+          }),
+        );
+        await input.client.startProcess(
+          createOrchestrationProcessSpec({
+            runId,
+            workspaceId,
+            taskId,
+            requestPath,
+            cwd: input.packageCwd,
+            command: input.command,
+            env: input.env,
+            timeoutMs: input.timeoutMs,
+          }),
+        );
+        const recorded = await recordRuntimeProcessStarted(input.ctx, {
+          workspaceId,
+          taskId,
+          processRunId: runId,
+          actionType: action.type,
+        });
+        if (!recorded.ok) return recorded;
+        return ok({ action, runId });
+      }),
+    );
+
+    const failedLaunch = launched.find((item) => !item.ok);
+    if (failedLaunch && !failedLaunch.ok) return failedLaunch;
+    const active = launched.filter((item): item is Extract<typeof item, { ok: true }> => item.ok);
+
+    const finished = await Promise.all(
+      active.map(async (item) => {
+        const snapshot = await input.client.waitProcessRun(
+          item.data.runId,
+          input.waitTimeoutMs !== undefined ? { timeoutMs: input.waitTimeoutMs } : {},
+        );
+        return { ...item.data, snapshot };
+      }),
+    );
+
+    const outputs: OrchestrationWorkerRunSummary[] = [];
+    for (const item of finished) {
+      if (item.snapshot.result) {
+        const recorded = await recordRuntimeProcessFinished(input.ctx, {
+          workspaceId,
+          taskId,
+          processRunId: item.runId,
+          processStatus: item.snapshot.result.status,
+          ...(item.snapshot.result.exitCode !== undefined
+            ? { exitCode: item.snapshot.result.exitCode }
+            : {}),
+        });
+        if (!recorded.ok) return recorded;
+        if (item.snapshot.result.status !== "succeeded") {
+          const marked = await recordProcessActionFailure(
+            { ...input, action: item.action },
+            {
+              workspaceId,
+              taskId,
+              runId: item.runId,
+              status: item.snapshot.result.status,
+              exitCode: item.snapshot.result.exitCode,
+              stderr: item.snapshot.result.stderr,
+            },
+          );
+          if (!marked.ok) return marked;
+        }
+      }
+
+      if (item.snapshot.state !== "finished" || !item.snapshot.result) {
+        return fail("internal_error", "Orchestration process did not finish.", {
+          runId: item.runId,
+        });
+      }
+      if (item.snapshot.result.status !== "succeeded") {
+        return fail("internal_error", "Orchestration process failed.", {
+          runId: item.runId,
+          status: item.snapshot.result.status,
+          exitCode: item.snapshot.result.exitCode,
+          stderr: item.snapshot.result.stderr,
+        });
+      }
+
+      const parsed = parseRunnerOutput(item.snapshot.result.stdout, item.runId);
+      if (!parsed.ok) return parsed;
+      if (parsed.data.resultType !== "worker_task_completed") {
+        return fail("internal_error", "Stage worker process returned unexpected result.", {
+          runId: item.runId,
+          resultType: parsed.data.resultType,
+        });
+      }
+      outputs.push(parsed.data.run);
+    }
+
+    const latest = await getTask(input.ctx, { workspaceId, taskId });
+    if (!latest.ok) return latest;
+    return ok({
+      resultType: "worker_tasks_completed",
+      runs: outputs,
+      projection: latest.data.projection,
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function recordProcessActionFailure(
   input: ExecuteOrchestrationActionProcessInput,
   result: {
@@ -188,7 +330,10 @@ async function recordProcessActionFailure(
 
   const run = Object.values(task.data.projection.workerRuns)
     .filter(
-      (candidate) => candidate.status === "running" && candidate.roundId === actionInput.roundId,
+      (candidate) =>
+        candidate.status === "running" &&
+        candidate.roundId === actionInput.roundId &&
+        candidate.workUnitId === actionInput.workUnitId,
     )
     .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0];
   if (!run) return ok({});
@@ -253,6 +398,8 @@ function taskIdForAction(action: OrchestrationAction): string | undefined {
       return action.spec.taskId;
     case "start_stage_worker":
       return action.input.taskId;
+    case "start_stage_workers":
+      return action.inputs[0]?.taskId;
     default:
       return action.taskId;
   }
@@ -270,6 +417,8 @@ function workspaceIdForAction(action: OrchestrationAction): string | undefined {
       return action.spec.workspaceId;
     case "start_stage_worker":
       return action.input.workspaceId;
+    case "start_stage_workers":
+      return action.inputs[0]?.workspaceId;
     case "start_stage_review":
       return action.workspaceId;
     default:

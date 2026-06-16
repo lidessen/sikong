@@ -50,6 +50,11 @@ export type OrchestrationExecutionResult =
       projection: TaskProjection;
     }
   | {
+      resultType: "worker_tasks_completed";
+      runs: OrchestrationWorkerRunSummary[];
+      projection: TaskProjection;
+    }
+  | {
       resultType: "stage_review_started";
       reviewId: string;
       projection: TaskProjection;
@@ -133,6 +138,30 @@ export async function executeOrchestrationAction(
         resultType: "worker_task_completed",
         run: summarizeWorkerRun(run.data),
         projection: run.data.projection,
+      });
+    }
+
+    case "start_stage_workers": {
+      if (!runtime.runTask) {
+        return fail("invalid_input", "runTask is required for stage worker execution.", {
+          actionType: action.type,
+        });
+      }
+      const runs = await Promise.all(
+        action.inputs.map((input) =>
+          runWorkerTask(ctx, {
+            ...input,
+            runTask: runtime.runTask!,
+          }),
+        ),
+      );
+      const failed = runs.find((run) => !run.ok);
+      if (failed && !failed.ok) return failed;
+      const completed = runs.filter((run): run is Extract<typeof run, { ok: true }> => run.ok);
+      return ok({
+        resultType: "worker_tasks_completed",
+        runs: completed.map((run) => summarizeWorkerRun(run.data)),
+        projection: completed.at(-1)!.data.projection,
       });
     }
 

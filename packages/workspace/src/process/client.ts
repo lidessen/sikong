@@ -40,6 +40,49 @@ export class DaemonProcessClient {
     );
   }
 
+  async schedulerStatus(): Promise<{
+    enabled: boolean;
+    paused: boolean;
+    active: number;
+    maxConcurrent: number;
+    lastScanAt?: string;
+    lastTickAt?: string;
+    lastError?: string;
+    started: number;
+    completed: number;
+    runnableSeen: number;
+    activeTasks?: string[];
+    processTimeoutMs: number;
+    waitTimeoutMs: number;
+  }> {
+    return this.readJson(this.request("/scheduler/status"));
+  }
+
+  async wakeScheduler(): Promise<unknown> {
+    return this.readJson(
+      this.request("/scheduler/wake", {
+        method: "POST",
+      }),
+    );
+  }
+
+  async listProcessRuns(
+    options: {
+      workspaceId?: string;
+      taskId?: string;
+      state?: ProcessRunSnapshot["state"];
+      limit?: number;
+    } = {},
+  ): Promise<{ runs: ProcessRunSnapshot[] }> {
+    const search = new URLSearchParams();
+    if (options.workspaceId) search.set("workspaceId", options.workspaceId);
+    if (options.taskId) search.set("taskId", options.taskId);
+    if (options.state) search.set("state", options.state);
+    if (options.limit !== undefined) search.set("limit", String(options.limit));
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    return this.readJson(this.request(`/process-runs${suffix}`));
+  }
+
   async startProcess(spec: ProcessRunSpec): Promise<ProcessRunSnapshot> {
     return this.readJson(
       this.request("/process-runs", {

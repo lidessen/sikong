@@ -1,7 +1,6 @@
 import {
   createDefaultRuntimeAssemblyRegistry,
   DaemonProcessClient,
-  driveTask,
   FileClientWorkLog,
   FileSettingsStore,
   inspectTaskDetail,
@@ -14,8 +13,7 @@ import {
   type ClientWorkLogEntryKind,
   type ClientTranscriptSource,
   type CommandContext,
-  type CommandResult,
-  type OrchestrationDriverResult,
+  type ProcessRunSnapshot,
   type SikongSettings,
   type TaskProjection,
 } from "@sikong/workspace";
@@ -34,9 +32,6 @@ const settingsStore = new FileSettingsStore(dataDir);
 const transcriptPath = join(dataDir, "state", "client-transcript.json");
 const clientDistDir = process.env.SIKONG_CLIENT_DIST_DIR ?? join(import.meta.dir, "..", "dist");
 const turnStreamHeartbeatMs = 5_000;
-const autoDriveMaxActions = 40;
-const autoDriveProcessTimeoutMs = 300_000;
-const autoDriveWaitTimeoutMs = 300_000;
 
 function commandContext(workspaceId?: string): CommandContext {
   return {
@@ -69,7 +64,12 @@ Bun.serve({
           taskId,
         });
         if (!detail.ok) return json({ message: detail.error.message }, 400);
-        return json(detail.data.detail);
+        const processRuns = await taskProcessRuns(workspaceId, taskId);
+        return json({
+          ...detail.data.detail,
+          processRuns: processRuns.runs,
+          ...(processRuns.error ? { processRunError: processRuns.error } : {}),
+        });
       }
       if (request.method === "GET" && url.pathname === "/api/settings") {
         return json(await settingsStore.read());
@@ -126,22 +126,11 @@ interface TurnProgressUpdate {
 }
 
 interface TurnWorkflowResponse extends TurnResponse {
-  autoDriven: AutoDriveResult[];
+  schedulerWake?: SchedulerWakeResult;
 }
 
-interface TaskSnapshotEntry {
-  workspaceId: string;
-  taskId: string;
-}
-
-interface AutoDriveResult {
-  workspaceId: string;
-  taskId: string;
+interface SchedulerWakeResult {
   ok: boolean;
-  stopReason?: string;
-  status?: string;
-  terminal?: string;
-  stepCount?: number;
   error?: string;
 }
 
@@ -160,7 +149,6 @@ async function runTurnWorkflow(
   const progress = async (update: TurnProgressUpdate) => {
     await onProgress?.(update);
   };
-  const beforeTasks = await taskSnapshot();
   const userMessage = textMessage("user", input.message);
   await appendTranscript(userMessage);
   await progress({
@@ -199,10 +187,10 @@ async function runTurnWorkflow(
 
   await progress({
     phaseId: "workspace",
-    detail: "Agent result received. Starting newly created work items when needed.",
+    detail: "Agent result received. Waking the background scheduler.",
   });
-  const autoDriven = await autoDriveNewTasks(beforeTasks);
-  const responseText = appendAutoDriveSummary(result.outcomeText, autoDriven);
+  const schedulerWake = await wakeScheduler();
+  const responseText = result.outcomeText;
   const assistantMessage = textMessage(
     "assistant",
     responseText || `Turn finished with status ${result.run.status}.`,
@@ -219,92 +207,23 @@ async function runTurnWorkflow(
     context: result.context,
     outcome: result.outcome,
     message: assistantMessage,
-    autoDriven,
+    schedulerWake,
   };
-}
-
-async function taskSnapshot(): Promise<Map<string, TaskSnapshotEntry>> {
-  const workspaces = await listWorkspaces(commandContext());
-  if (!workspaces.ok) throw new Error(workspaces.error.message);
-  const entries = new Map<string, TaskSnapshotEntry>();
-  for (const workspace of workspaces.data.workspaces) {
-    const tasks = await listTasks(commandContext(workspace.id), { workspaceId: workspace.id });
-    if (!tasks.ok) throw new Error(tasks.error.message);
-    for (const task of tasks.data.tasks) {
-      entries.set(taskSnapshotKey(workspace.id, task.taskId), {
-        workspaceId: workspace.id,
-        taskId: task.taskId,
-      });
-    }
-  }
-  return entries;
-}
-
-async function autoDriveNewTasks(beforeTasks: Map<string, TaskSnapshotEntry>) {
-  const afterTasks = await taskSnapshot();
-  const created = [...afterTasks.values()].filter(
-    (task) => !beforeTasks.has(taskSnapshotKey(task.workspaceId, task.taskId)),
-  );
-  const client = new DaemonProcessClient({ baseUrl: daemonProcessBaseUrl() });
-  const results: AutoDriveResult[] = [];
-  for (const task of created) {
-    const result = await driveTask(commandContext(task.workspaceId), {
-      workspaceId: task.workspaceId,
-      taskId: task.taskId,
-      maxActions: autoDriveMaxActions,
-      processTimeoutMs: autoDriveProcessTimeoutMs,
-      waitTimeoutMs: autoDriveWaitTimeoutMs,
-      processClient: client,
-    });
-    results.push(autoDriveResult(task, result));
-  }
-  return results;
-}
-
-function autoDriveResult(
-  task: TaskSnapshotEntry,
-  result: CommandResult<OrchestrationDriverResult>,
-): AutoDriveResult {
-  if (!result.ok) {
-    return {
-      ...task,
-      ok: false,
-      error: result.error.message,
-    };
-  }
-  return {
-    ...task,
-    ok: true,
-    stopReason: result.data.stopReason,
-    status: result.data.projection.status,
-    terminal: result.data.projection.terminal?.outcome,
-    stepCount: result.data.steps.length,
-  };
-}
-
-function appendAutoDriveSummary(text: string, driven: AutoDriveResult[]): string {
-  if (driven.length === 0) return text;
-  const lines = [
-    text,
-    "",
-    "Auto-run summary:",
-    ...driven.map((item) =>
-      item.ok
-        ? `- ${item.workspaceId}/${item.taskId}: ${item.status ?? "unknown"}; stop=${item.stopReason ?? "unknown"}; terminal=${item.terminal ?? "none"}; steps=${item.stepCount ?? 0}`
-        : `- ${item.workspaceId}/${item.taskId}: failed to auto-run; ${item.error ?? "unknown error"}`,
-    ),
-  ];
-  return lines.filter((line, index) => index === 1 || line.trim()).join("\n");
-}
-
-function taskSnapshotKey(workspaceId: string, taskId: string): string {
-  return `${workspaceId}/${taskId}`;
 }
 
 function daemonProcessBaseUrl(): string {
   const raw = process.env.SIKONG_DAEMON_ADDR ?? "127.0.0.1:8765";
   if (raw.startsWith("http://") || raw.startsWith("https://")) return raw.replace(/\/+$/, "");
   return `http://${raw.replace(/\/+$/, "")}`;
+}
+
+async function wakeScheduler(): Promise<SchedulerWakeResult> {
+  try {
+    await new DaemonProcessClient({ baseUrl: daemonProcessBaseUrl() }).wakeScheduler();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 function turnStreamResponse(input: TurnRequestInput): Response {
@@ -409,9 +328,10 @@ function turnStreamResponse(input: TurnRequestInput): Response {
 }
 
 async function clientState(workspaceId?: string) {
-  const [settings, workspacesResult] = await Promise.all([
+  const [settings, workspacesResult, scheduler] = await Promise.all([
     settingsStore.read(),
     listWorkspaces(commandContext()),
+    schedulerStatus(),
   ]);
   if (!workspacesResult.ok) throw new Error(workspacesResult.error.message);
   const workspaces = await Promise.all(workspacesResult.data.workspaces.map(workspaceView));
@@ -429,6 +349,7 @@ async function clientState(workspaceId?: string) {
       workLog,
       transcript,
       settings,
+      scheduler,
     };
   }
 
@@ -444,7 +365,37 @@ async function clientState(workspaceId?: string) {
     workLog,
     transcript,
     settings,
+    scheduler,
   };
+}
+
+async function schedulerStatus() {
+  try {
+    return await new DaemonProcessClient({ baseUrl: daemonProcessBaseUrl() }).schedulerStatus();
+  } catch (err) {
+    return {
+      enabled: false,
+      lastError: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function taskProcessRuns(
+  workspaceId: string | undefined,
+  taskId: string,
+): Promise<{ runs: ProcessRunSnapshot[]; error?: string }> {
+  try {
+    const response = await new DaemonProcessClient({
+      baseUrl: daemonProcessBaseUrl(),
+    }).listProcessRuns({
+      ...(workspaceId ? { workspaceId } : {}),
+      taskId,
+      limit: 80,
+    });
+    return { runs: response.runs };
+  } catch (err) {
+    return { runs: [], error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function workspaceView(workspace: { id: string; name: string }) {

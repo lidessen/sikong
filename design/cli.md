@@ -145,6 +145,11 @@ terminal state, blocked state, or action budget. Runtime-backed actions run
 through daemon-managed generic process runs. Pure wait/terminal actions are
 handled locally by the TypeScript engine.
 
+`task runnable` lists durable tasks whose current projection has an immediate
+engine action available. `task tick` executes exactly one next action for one
+task. These two commands are the daemon scheduler interface; they are not
+intended as the user's normal task-driving surface.
+
 `task wait` is read-only polling over the compact task view. It returns when
 the task is waiting for lead input, waiting for worker results, terminal, or
 blocked. It does not start workers, steer running loops, or own scheduling.

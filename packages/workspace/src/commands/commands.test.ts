@@ -22,6 +22,7 @@ import {
   inspectTaskEvents,
   inspectTaskSummary,
   inspectTaskTrace,
+  listRunnableTasks,
   listTasks,
   listWorkspacePreferences,
   listWorkspaces,
@@ -213,6 +214,41 @@ describe("task command handlers", () => {
         data: {
           trace: [{ type: "task.created", summary: "Implement command handlers." }],
         },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("lists runnable tasks for scheduler scans", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+
+      const created = await createTask(context, {
+        request: "Build the next feature.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+
+      expect(await listRunnableTasks(context)).toMatchObject({
+        ok: true,
+        data: {
+          tasks: [
+            {
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              status: "created",
+              nextAction: { type: "start_lead_requirement_spec" },
+            },
+          ],
+        },
+      });
+
+      expect(await listRunnableTasks(context, { all: true })).toMatchObject({
+        ok: true,
+        data: { tasks: [{ taskId: created.data.taskId }] },
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -658,12 +694,11 @@ describe("task command handlers", () => {
       if (!detail.ok) throw new Error("task detail failed");
       expect(detail.data.detail.compact).toMatchObject({ taskId, status: "completed" });
       expect(detail.data.detail.projection.plan?.stages).toHaveLength(2);
-      expect(detail.data.detail.projection.workerRuns[runId]?.result?.observations).toEqual([
-        expect.objectContaining({
-          kind: "thinking",
-          summary: "Reviewed files and prepared the implementation.",
-        }),
-      ]);
+      expect(detail.data.detail.projection.workerRuns[runId]?.result?.observations).toBeUndefined();
+      expect(detail.data.detail.projection.workerRuns[runId]?.result?.observationRef).toEqual({
+        runId,
+        count: 1,
+      });
       expect(detail.data.detail.trace).toEqual(
         expect.arrayContaining([expect.objectContaining({ type: "task.completed" })]),
       );

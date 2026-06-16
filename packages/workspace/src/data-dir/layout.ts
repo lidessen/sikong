@@ -65,6 +65,27 @@ export function taskProjectionFile(dataDir: string, workspaceId: string, taskId:
   return join(taskProjectionsDir(dataDir, workspaceId), `${safeWorkspaceSegment(taskId)}.json`);
 }
 
+export function taskObservationsDir(dataDir: string, workspaceId: string, taskId: string): string {
+  return join(
+    workspaceDir(dataDir, workspaceId),
+    "state",
+    "observations",
+    safeWorkspaceSegment(taskId),
+  );
+}
+
+export function taskObservationsFile(
+  dataDir: string,
+  workspaceId: string,
+  taskId: string,
+  runId: string,
+): string {
+  return join(
+    taskObservationsDir(dataDir, workspaceId, taskId),
+    `${safeWorkspaceSegment(runId)}.jsonl`,
+  );
+}
+
 export function worktreesDir(dataDir: string, workspaceId: string): string {
   return join(workspaceDir(dataDir, workspaceId), "worktrees");
 }

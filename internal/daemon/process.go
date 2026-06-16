@@ -73,6 +73,12 @@ type ProcessRunSnapshot struct {
 	FinishedAt  string            `json:"finishedAt,omitempty"`
 }
 
+type ProcessRunListFilter struct {
+	WorkspaceID string
+	TaskID      string
+	State       ProcessRunState
+}
+
 type ProcessRunner struct {
 	sem chan struct{}
 }
@@ -363,6 +369,26 @@ func (s *ProcessSupervisor) GetSnapshot(runID string) (ProcessRunSnapshot, bool)
 		return ProcessRunSnapshot{}, false
 	}
 	return s.cloneSnapshot(record.snapshot), true
+}
+
+func (s *ProcessSupervisor) ListSnapshots(filter ProcessRunListFilter) []ProcessRunSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshots := make([]ProcessRunSnapshot, 0, len(s.runs))
+	for _, record := range s.runs {
+		snapshot := record.snapshot
+		if filter.WorkspaceID != "" && snapshot.WorkspaceID != filter.WorkspaceID {
+			continue
+		}
+		if filter.TaskID != "" && snapshot.TaskID != filter.TaskID {
+			continue
+		}
+		if filter.State != "" && snapshot.State != filter.State {
+			continue
+		}
+		snapshots = append(snapshots, s.cloneSnapshot(snapshot))
+	}
+	return snapshots
 }
 
 func (s *ProcessSupervisor) Wait(ctx context.Context, runID string) (ProcessRunSnapshot, bool, error) {

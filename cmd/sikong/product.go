@@ -81,7 +81,7 @@ func runStart(args []string) error {
 	uiURL := "http://127.0.0.1:" + opts.uiPort
 	uiHealth, uiRunning := checkJSONHealth(uiURL + "/api/health")
 	if !uiRunning {
-		proc, err := startUI(rt, opts.uiPort)
+		proc, err := startUI(rt, opts.uiPort, opts.daemonAddr)
 		if err != nil {
 			return err
 		}
@@ -239,13 +239,18 @@ func resolveManagedRuntime() (managedRuntime, error) {
 func startDaemon(rt managedRuntime, addr string) (processState, error) {
 	env := append(os.Environ(), "SIKONG_DAEMON_ADDR="+daemonAddr(addr))
 	if rt.embedded {
+		env = appendRuntimeEnv(env, rt.paths)
 		return startManagedProcess(rt.paths.Daemon, nil, rt.paths.Root, env, "daemon", daemonBaseURL(addr), "")
 	}
 	return startManagedProcess("go", []string{"run", "./cmd/sikongd"}, rt.repoRoot, env, "daemon", daemonBaseURL(addr), "")
 }
 
-func startUI(rt managedRuntime, port string) (processState, error) {
-	env := append(os.Environ(), "SIKONG_CLIENT_API_PORT="+port)
+func startUI(rt managedRuntime, port string, daemonAddrValue string) (processState, error) {
+	env := append(
+		os.Environ(),
+		"SIKONG_CLIENT_API_PORT="+port,
+		"SIKONG_DAEMON_ADDR="+daemonAddr(daemonAddrValue),
+	)
 	if rt.embedded {
 		env = appendRuntimeEnv(env, rt.paths)
 		return startManagedProcess(rt.paths.ClientAPI, nil, rt.paths.Root, env, "ui", "http://127.0.0.1:"+port, port)

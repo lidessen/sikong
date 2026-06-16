@@ -14,7 +14,7 @@ func TestRunWithOptionsStartsAndStopsLocalAPI(t *testing.T) {
 	time.AfterFunc(20*time.Millisecond, cancel)
 
 	var out bytes.Buffer
-	if err := RunWithOptions(ctx, &out, RunOptions{Addr: "127.0.0.1:0"}); err != nil {
+	if err := RunWithOptions(ctx, &out, RunOptions{Addr: "127.0.0.1:0", DisableScheduler: true}); err != nil {
 		t.Fatalf("RunWithOptions returned error: %v", err)
 	}
 	text := out.String()

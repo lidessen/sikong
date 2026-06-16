@@ -8,13 +8,15 @@ import { reconcileTaskRuntime } from "./task";
 import {
   executeOrchestrationAction,
   executeOrchestrationActionProcess,
+  planNextOrchestrationAction,
   runOrchestrationUntilWait,
   type OrchestrationAction,
   type OrchestrationDriverResult,
+  type OrchestrationExecutionResult,
   type OrchestrationInput,
   type OrchestrationProcessExecutionClient,
 } from "../orchestration";
-import { fail, type CommandContext, type CommandResult } from "./types";
+import { fail, ok, type CommandContext, type CommandResult } from "./types";
 
 export interface DriveTaskInput {
   taskId: string;
@@ -26,6 +28,15 @@ export interface DriveTaskInput {
   packageCwd?: string;
   runtimeAssembly?: RuntimeAssemblyConfig;
   processClient?: OrchestrationProcessExecutionClient;
+}
+
+export interface TickTaskInput extends Omit<DriveTaskInput, "maxActions"> {}
+
+export interface TickTaskResult {
+  taskId: string;
+  action: OrchestrationAction;
+  result: OrchestrationExecutionResult;
+  projection: TaskProjection;
 }
 
 export async function driveTask(
@@ -85,6 +96,67 @@ export async function driveTask(
   }
 }
 
+export async function tickTask(
+  ctx: CommandContext,
+  input: TickTaskInput,
+): Promise<CommandResult<TickTaskResult>> {
+  if (!input.taskId.trim()) return fail("invalid_input", "taskId is required.");
+  const settings = await new FileSettingsStore(ctx.dataDir).read();
+  const workerAssembly =
+    input.runtimeAssembly ?? defaultRuntimeAssembly(settings.defaults.worker, "worker");
+  const leadAssembly =
+    input.runtimeAssembly ?? defaultRuntimeAssembly(settings.defaults.lead, "lead");
+  const planningAssembly =
+    input.runtimeAssembly ?? defaultRuntimeAssembly(settings.defaults.worker, "planning");
+  const reviewAssembly =
+    input.runtimeAssembly ?? defaultRuntimeAssembly(settings.defaults.worker, "review");
+  const client = input.processClient ?? new LocalProcessExecutionClient();
+  const packageCwd =
+    input.packageCwd ?? process.env.SIKONG_PACKAGE_CWD ?? join(import.meta.dir, "../..");
+  const command = input.command ?? process.env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
+
+  try {
+    const reconciled = await reconcileTaskRuntime(ctx, {
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+    });
+    if (!reconciled.ok) return reconciled;
+    const projection = reconciled.data.projection;
+    const action = planNextOrchestrationAction(orchestrationInput(projection));
+    const executed = !requiresRuntimeProcess(action)
+      ? await executeOrchestrationAction(ctx, action, {})
+      : await executeOrchestrationActionProcess({
+          client,
+          ctx,
+          action,
+          runtimeAssembly: runtimeAssemblyForAction(action, {
+            lead: leadAssembly,
+            planning: planningAssembly,
+            review: reviewAssembly,
+            worker: workerAssembly,
+          }),
+          packageCwd,
+          command,
+          timeoutMs: input.processTimeoutMs,
+          waitTimeoutMs: input.waitTimeoutMs,
+        });
+    if (!executed.ok) return executed;
+    const latest = await reconcileTaskRuntime(ctx, {
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+    });
+    if (!latest.ok) return latest;
+    return ok({
+      taskId: input.taskId,
+      action,
+      result: executed.data,
+      projection: latest.data.projection,
+    });
+  } catch (err) {
+    return fail("internal_error", err instanceof Error ? err.message : String(err));
+  }
+}
+
 function orchestrationInput(projection: TaskProjection): OrchestrationInput {
   return {
     projection,
@@ -106,6 +178,7 @@ function requiresRuntimeProcess(action: OrchestrationAction): boolean {
     action.type === "start_lead_round_planning" ||
     action.type === "start_lead_final_decision" ||
     action.type === "start_stage_worker" ||
+    action.type === "start_stage_workers" ||
     action.type === "start_stage_verification_worker" ||
     action.type === "start_final_verification_worker"
   );

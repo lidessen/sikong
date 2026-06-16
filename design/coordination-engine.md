@@ -144,10 +144,12 @@ load durable projection
   -> continue until wait / terminal / blocked / maxActions
 ```
 
-This loop is intentionally stateless after it returns. Progress lives in the
-task event log and projection, not in a long-lived in-memory scheduler. The Go
-daemon may supervise subprocesses, but it does not decide which orchestration
-action comes next.
+This loop is intentionally stateless after each tick. Progress lives in the
+task event log and projection, not in a process-local Bun singleton. The Go
+daemon owns a liveness scheduler that scans durable task projections and asks
+TypeScript to execute one orchestration tick at a time. The daemon does not
+choose planner, worker, review, or lead actions itself; TypeScript computes the
+next action from durable state for every tick.
 
 ## Plan Lifecycle
 
@@ -352,6 +354,11 @@ The round policy is intentionally small:
 The normal round-loop stop condition is accepted stage review. Budget,
 cancellation, blocked, and final lead rejection are system or lead-level escape
 conditions, not normal stage completion.
+
+In the daemon-backed product path, round concurrency means one daemon-supervised
+subprocess per work unit. TypeScript may use promise coordination to launch and
+wait for the subprocesses, but each worker remains an independent runtime
+process with its own process facts, timeout, and cancellation surface.
 
 Each worker run:
 

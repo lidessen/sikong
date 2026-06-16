@@ -16,8 +16,9 @@ const (
 )
 
 type RunOptions struct {
-	Addr          string
-	MaxConcurrent int
+	Addr             string
+	MaxConcurrent    int
+	DisableScheduler bool
 }
 
 func Run(ctx context.Context, out io.Writer) error {
@@ -33,9 +34,17 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts RunOptions) error {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 
+	scheduler := NewScheduler(runCtx, SchedulerOptions{
+		Addr:          addr,
+		MaxConcurrent: 2,
+	})
 	api := NewProcessAPI(runCtx, NewProcessSupervisor(ProcessRunnerOptions{
 		MaxConcurrent: opts.MaxConcurrent,
 	}))
+	if !opts.DisableScheduler {
+		api.SetScheduler(scheduler)
+		scheduler.Start()
+	}
 	api.SetShutdownFunc(stop)
 	server := &http.Server{
 		Addr:              addr,

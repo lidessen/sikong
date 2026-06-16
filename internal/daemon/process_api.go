@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 type ProcessAPI struct {
 	ctx        context.Context
 	supervisor *ProcessSupervisor
+	scheduler  *Scheduler
 	shutdown   func()
 }
 
@@ -31,12 +33,26 @@ func (api *ProcessAPI) SetShutdownFunc(shutdown func()) {
 	api.shutdown = shutdown
 }
 
+func (api *ProcessAPI) SetScheduler(scheduler *Scheduler) {
+	api.scheduler = scheduler
+}
+
 func (api *ProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/health":
 		api.handleHealth(w, r)
 	case r.URL.Path == "/shutdown":
 		api.handleShutdown(w, r)
+	case r.URL.Path == "/scheduler/status":
+		api.handleSchedulerStatus(w, r)
+	case r.URL.Path == "/scheduler/wake":
+		api.handleSchedulerWake(w, r)
+	case r.URL.Path == "/scheduler/pause":
+		api.handleSchedulerPause(w, r)
+	case r.URL.Path == "/scheduler/resume":
+		api.handleSchedulerResume(w, r)
+	case r.URL.Path == "/tasks/runnable":
+		api.handleRunnableTasks(w, r)
 	case r.URL.Path == "/process-runs":
 		api.handleProcessRuns(w, r)
 	case strings.HasPrefix(r.URL.Path, "/process-runs/"):
@@ -44,6 +60,74 @@ func (api *ProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeProcessAPIError(w, http.StatusNotFound, "not_found", "route not found")
 	}
+}
+
+func (api *ProcessAPI) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeProcessAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if api.scheduler == nil {
+		writeProcessAPIJSON(w, http.StatusOK, SchedulerStatus{Enabled: false})
+		return
+	}
+	writeProcessAPIJSON(w, http.StatusOK, api.scheduler.Status())
+}
+
+func (api *ProcessAPI) handleSchedulerWake(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeProcessAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if api.scheduler == nil {
+		writeProcessAPIError(w, http.StatusServiceUnavailable, "scheduler_unavailable", "scheduler is unavailable")
+		return
+	}
+	api.scheduler.Wake()
+	writeProcessAPIJSON(w, http.StatusAccepted, api.scheduler.Status())
+}
+
+func (api *ProcessAPI) handleSchedulerPause(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeProcessAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if api.scheduler == nil {
+		writeProcessAPIError(w, http.StatusServiceUnavailable, "scheduler_unavailable", "scheduler is unavailable")
+		return
+	}
+	api.scheduler.Pause()
+	writeProcessAPIJSON(w, http.StatusOK, api.scheduler.Status())
+}
+
+func (api *ProcessAPI) handleSchedulerResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeProcessAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if api.scheduler == nil {
+		writeProcessAPIError(w, http.StatusServiceUnavailable, "scheduler_unavailable", "scheduler is unavailable")
+		return
+	}
+	api.scheduler.Resume()
+	writeProcessAPIJSON(w, http.StatusOK, api.scheduler.Status())
+}
+
+func (api *ProcessAPI) handleRunnableTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeProcessAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if api.scheduler == nil {
+		writeProcessAPIError(w, http.StatusServiceUnavailable, "scheduler_unavailable", "scheduler is unavailable")
+		return
+	}
+	tasks, err := api.scheduler.RunnableTasks(r.Context())
+	if err != nil {
+		writeProcessAPIError(w, http.StatusInternalServerError, "scheduler_failed", err.Error())
+		return
+	}
+	writeProcessAPIJSON(w, http.StatusOK, map[string][]runnableTask{"tasks": tasks})
 }
 
 func (api *ProcessAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +152,10 @@ func (api *ProcessAPI) handleShutdown(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *ProcessAPI) handleProcessRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		api.listProcessRuns(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeProcessAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
@@ -85,6 +173,48 @@ func (api *ProcessAPI) handleProcessRuns(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeProcessAPIJSON(w, http.StatusAccepted, snapshot)
+}
+
+func (api *ProcessAPI) listProcessRuns(w http.ResponseWriter, r *http.Request) {
+	filter, limit, ok := processRunListQuery(w, r)
+	if !ok {
+		return
+	}
+	snapshots := api.supervisor.ListSnapshots(filter)
+	sort.SliceStable(snapshots, func(i, j int) bool {
+		return snapshots[i].StartedAt < snapshots[j].StartedAt
+	})
+	if limit > 0 && len(snapshots) > limit {
+		snapshots = snapshots[len(snapshots)-limit:]
+	}
+	writeProcessAPIJSON(w, http.StatusOK, map[string][]ProcessRunSnapshot{"runs": snapshots})
+}
+
+func processRunListQuery(w http.ResponseWriter, r *http.Request) (ProcessRunListFilter, int, bool) {
+	query := r.URL.Query()
+	filter := ProcessRunListFilter{
+		WorkspaceID: query.Get("workspaceId"),
+		TaskID:      query.Get("taskId"),
+	}
+	if state := query.Get("state"); state != "" {
+		switch ProcessRunState(state) {
+		case ProcessRunRunning, ProcessRunFinished:
+			filter.State = ProcessRunState(state)
+		default:
+			writeProcessAPIError(w, http.StatusBadRequest, "invalid_state", "state must be running or finished")
+			return ProcessRunListFilter{}, 0, false
+		}
+	}
+	limit := 0
+	if raw := query.Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			writeProcessAPIError(w, http.StatusBadRequest, "invalid_limit", "limit must be a non-negative integer")
+			return ProcessRunListFilter{}, 0, false
+		}
+		limit = value
+	}
+	return filter, limit, true
 }
 
 func (api *ProcessAPI) handleProcessRun(w http.ResponseWriter, r *http.Request) {

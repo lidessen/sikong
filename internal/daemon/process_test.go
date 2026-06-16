@@ -273,6 +273,7 @@ func TestProcessAPIRunLifecycle(t *testing.T) {
 	body, err := json.Marshal(ProcessRunSpec{
 		RunID:       "run-api",
 		WorkspaceID: "workspace",
+		TaskID:      "task-api",
 		Command:     "sh",
 		Args:        []string{"-c", "echo api"},
 	})
@@ -305,6 +306,33 @@ func TestProcessAPIRunLifecycle(t *testing.T) {
 	}
 	if strings.TrimSpace(snapshot.Result.Stdout) != "api" {
 		t.Fatalf("stdout = %q, want api", snapshot.Result.Stdout)
+	}
+
+	listResp, err := http.Get(server.URL + "/process-runs?workspaceId=workspace&taskId=task-api&state=finished&limit=1")
+	if err != nil {
+		t.Fatalf("GET process-runs: %v", err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, want %d", listResp.StatusCode, http.StatusOK)
+	}
+	var listed struct {
+		Runs []ProcessRunSnapshot `json:"runs"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed.Runs) != 1 || listed.Runs[0].RunID != "run-api" {
+		t.Fatalf("listed runs = %#v, want run-api", listed.Runs)
+	}
+
+	badResp, err := http.Get(server.URL + "/process-runs?state=unknown")
+	if err != nil {
+		t.Fatalf("GET bad process-runs: %v", err)
+	}
+	defer badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad list status = %d, want %d", badResp.StatusCode, http.StatusBadRequest)
 	}
 }
 

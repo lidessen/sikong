@@ -199,6 +199,21 @@ describe("daemon process client", () => {
           { status: 202 },
         );
       }
+      if (url.endsWith("/process-runs?workspaceId=sikong&taskId=task_a&state=finished&limit=20")) {
+        return Response.json({
+          runs: [
+            {
+              runId: "run_daemon",
+              workspaceId: "sikong",
+              taskId: "task_a",
+              state: "finished",
+              spec: { runId: "run_daemon", workspaceId: "sikong", command: "bun" },
+              startedAt: "2026-06-14T00:00:00Z",
+              finishedAt: "2026-06-14T00:00:01Z",
+            },
+          ],
+        });
+      }
       if (url.endsWith("/process-runs/run_daemon/wait?timeoutMs=1000")) {
         return Response.json({
           runId: "run_daemon",
@@ -254,6 +269,16 @@ describe("daemon process client", () => {
       runId: "run_daemon",
       state: "running",
     });
+    await expect(
+      client.listProcessRuns({
+        workspaceId: "sikong",
+        taskId: "task_a",
+        state: "finished",
+        limit: 20,
+      }),
+    ).resolves.toMatchObject({
+      runs: [{ runId: "run_daemon", taskId: "task_a", state: "finished" }],
+    });
 
     expect(calls.map((call) => call.url)).toEqual([
       "http://127.0.0.1:1234/health",
@@ -261,6 +286,7 @@ describe("daemon process client", () => {
       "http://127.0.0.1:1234/process-runs",
       "http://127.0.0.1:1234/process-runs/run_daemon/wait?timeoutMs=1000",
       "http://127.0.0.1:1234/process-runs/run_daemon/cancel",
+      "http://127.0.0.1:1234/process-runs?workspaceId=sikong&taskId=task_a&state=finished&limit=20",
     ]);
     expect(calls[1]?.init?.method).toBe("POST");
     expect(calls[2]?.init?.method).toBe("POST");

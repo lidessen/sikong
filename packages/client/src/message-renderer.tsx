@@ -485,6 +485,8 @@ function actionTypeLabel(actionType: string): string {
       return "Lead round planning";
     case "start_stage_worker":
       return "Worker unit";
+    case "start_stage_workers":
+      return "Worker units";
     case "await_worker_results":
       return "Waiting for workers";
     case "complete_stage_round":

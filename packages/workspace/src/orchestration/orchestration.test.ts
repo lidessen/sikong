@@ -252,7 +252,8 @@ describe("orchestration tick", () => {
       const afterRound = await getTask(context, { taskId: created.data.taskId });
       if (!afterRound.ok) throw new Error("task get failed");
       expect(next(afterRound.data.projection)).toMatchObject({
-        type: "start_stage_worker",
+        type: "start_stage_workers",
+        inputs: [{ workUnitId: round.workUnits[0]!.id }, { workUnitId: round.workUnits[1]!.id }],
       });
       const first = await startWorkerRun(context, {
         taskId: created.data.taskId,
@@ -739,6 +740,141 @@ describe("orchestration process executor", () => {
           exitCode: 143,
         },
       });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("starts stage round work units as parallel daemon processes", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Execute parallel work units through process client.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
+      const submitted = await submitPlan(context, {
+        taskId: created.data.taskId,
+        stages: [
+          {
+            title: "Implement",
+            objective: "Run two independent worker units.",
+            acceptance: ["Both worker units complete."],
+          },
+        ],
+      });
+      if (!submitted.ok) throw new Error("plan submit failed");
+      const accepted = await acceptPlan(context, {
+        taskId: created.data.taskId,
+        planId: submitted.data.plan.id,
+        version: submitted.data.plan.version,
+        report: "Accepted.",
+      });
+      if (!accepted.ok) throw new Error("plan accept failed");
+      const round = await planRound(context, created.data.taskId, 2);
+
+      const ready = await getTask(context, { taskId: created.data.taskId });
+      if (!ready.ok) throw new Error("task get failed");
+      const action = next(ready.data.projection);
+      if (action.type !== "start_stage_workers") throw new Error("expected stage workers action");
+
+      const specs = new Map<string, { args?: string[]; runId: string }>();
+      const waitStartedAfterLaunch: number[] = [];
+      const result = await executeOrchestrationActionProcess({
+        ctx: context,
+        action,
+        packageCwd: join(import.meta.dir, "../.."),
+        runtimeAssembly: { backend: "mock" },
+        client: {
+          async startProcess(spec) {
+            specs.set(spec.runId, { runId: spec.runId, args: spec.args });
+            return {
+              runId: spec.runId,
+              workspaceId: spec.workspaceId,
+              taskId: spec.taskId,
+              state: "running",
+              spec,
+              startedAt: "2026-06-14T00:00:00Z",
+            };
+          },
+          async waitProcessRun(runId) {
+            waitStartedAfterLaunch.push(specs.size);
+            const spec = specs.get(runId);
+            const requestPath = spec?.args?.[2];
+            if (!spec || !requestPath) throw new Error("request path missing");
+            const request = JSON.parse(await Bun.file(requestPath).text()) as {
+              action: { input: { roundId: string; workUnitId: string } };
+            };
+            const started = await startWorkerRun(context, {
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              roundId: request.action.input.roundId,
+              workUnitId: request.action.input.workUnitId,
+            });
+            if (!started.ok) throw new Error("worker start failed");
+            const completed = await completeWorkerRun(context, {
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              runId: started.data.runId,
+              summary: `Completed ${request.action.input.workUnitId}.`,
+            });
+            if (!completed.ok) throw new Error("worker complete failed");
+            return {
+              runId,
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              state: "finished",
+              spec: spec as never,
+              startedAt: "2026-06-14T00:00:00Z",
+              finishedAt: "2026-06-14T00:00:01Z",
+              result: {
+                runId,
+                workspaceId: "sikong",
+                taskId: created.data.taskId,
+                status: "succeeded",
+                command: "bun",
+                args: [],
+                stdout:
+                  JSON.stringify({
+                    ok: true,
+                    data: {
+                      resultType: "worker_task_completed",
+                      run: {
+                        runId: started.data.runId,
+                        taskResult: { status: "completed", report: "done" },
+                      },
+                      projection: completed.data.projection,
+                    },
+                  }) + "\n",
+                stderr: "",
+                exitCode: 0,
+                startedAt: "2026-06-14T00:00:00Z",
+                finishedAt: "2026-06-14T00:00:01Z",
+                durationMs: 1,
+              },
+            };
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        data: {
+          resultType: "worker_tasks_completed",
+          runs: [{ taskResult: { status: "completed" } }, { taskResult: { status: "completed" } }],
+        },
+      });
+      expect(specs.size).toBe(2);
+      expect(waitStartedAfterLaunch).toEqual([2, 2]);
+      const fresh = await getTask(context, { taskId: created.data.taskId });
+      if (!fresh.ok) throw new Error("task get failed");
+      expect(
+        Object.values(fresh.data.projection.workerRuns).filter((run) => run.roundId === round.id),
+      ).toHaveLength(2);
+      expect(next(fresh.data.projection)).toMatchObject({ type: "complete_stage_round" });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

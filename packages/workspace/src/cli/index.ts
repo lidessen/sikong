@@ -19,6 +19,7 @@ import {
   inspectTaskProjection,
   inspectTaskSummary,
   inspectTaskTrace,
+  listRunnableTasks,
   listWorkspacePreferences,
   listWorkspaces,
   ok,
@@ -33,6 +34,7 @@ import {
   startWorkerRun,
   submitRequirementSpec,
   submitPlan,
+  tickTask,
   waitTask,
   type CommandContext,
   type CommandResult,
@@ -192,6 +194,15 @@ async function dispatch(
       });
     if (action === "drive") {
       return driveTask(ctx, parsed, arg, env, options);
+    }
+    if (action === "tick") {
+      return tickTaskCommand(ctx, parsed, arg, env, options);
+    }
+    if (action === "runnable") {
+      return listRunnableTasks(ctx, {
+        workspaceId: value(parsed, "workspace"),
+        all: Boolean(value(parsed, "all")),
+      });
     }
     if (action === "wait") {
       return waitTask(ctx, {
@@ -593,6 +604,42 @@ async function driveTask(
   return driven as CommandResult<CliCommandData>;
 }
 
+async function tickTaskCommand(
+  ctx: CommandContext,
+  parsed: ParsedArgs,
+  taskIdArg: string | undefined,
+  env: NodeJS.ProcessEnv,
+  options: CliRunOptions,
+): Promise<CommandResult<CliCommandData>> {
+  const taskId = required(taskIdArg, "task id is required.");
+  const client =
+    options.processClient ??
+    new DaemonProcessClient({
+      baseUrl: daemonBaseUrl(value(parsed, "daemon") ?? env.SIKONG_DAEMON_ADDR),
+    });
+  const packageCwd =
+    value(parsed, "package-cwd") ??
+    env.SIKONG_PACKAGE_CWD ??
+    options.packageCwd ??
+    join(import.meta.dir, "../..");
+  const runnerCommand = value(parsed, "command") ?? env.SIKONG_ORCHESTRATION_RUNNER_COMMAND;
+  return (await tickTask(ctx, {
+    taskId,
+    workspaceId: value(parsed, "workspace"),
+    processClient: client,
+    packageCwd,
+    command: runnerCommand,
+    processTimeoutMs: optionalNumber(
+      value(parsed, "process-timeout-ms"),
+      "--process-timeout-ms must be a positive integer.",
+    ),
+    waitTimeoutMs: optionalNumber(
+      value(parsed, "wait-timeout-ms"),
+      "--wait-timeout-ms must be a positive integer.",
+    ),
+  })) as CommandResult<CliCommandData>;
+}
+
 function render(result: CommandResult<unknown>, outputMode: "json" | "text"): CliRunResult {
   if (outputMode === "text") {
     if (!result.ok) return text(1, "", `${result.error.code}: ${result.error.message}\n`);
@@ -927,6 +974,7 @@ function requiresRuntimeProcess(action: OrchestrationAction): boolean {
     action.type === "start_lead_round_planning" ||
     action.type === "start_lead_final_decision" ||
     action.type === "start_stage_worker" ||
+    action.type === "start_stage_workers" ||
     action.type === "start_stage_verification_worker" ||
     action.type === "start_final_verification_worker"
   );
@@ -1078,6 +1126,8 @@ Usage:
   sikong task create --workspace <workspaceId> --request <text> [--cwd <path>] [--repo <path>]
   sikong task show <taskId> --workspace <workspaceId>
   sikong task drive <taskId> --workspace <workspaceId> [--backend <name>] [--daemon <url>]
+  sikong task tick <taskId> --workspace <workspaceId> [--daemon <url>]
+  sikong task runnable [--workspace <workspaceId>|--all]
   sikong task wait <taskId> --workspace <workspaceId> [--timeout-ms <n>]
   sikong task submit-requirement-spec <taskId> --workspace <workspaceId> --summary <text>
   sikong task submit-plan <taskId> --workspace <workspaceId> --plan-json <json>
