@@ -44,6 +44,7 @@ function commandContext(workspaceId?: string): CommandContext {
 Bun.serve({
   hostname: "127.0.0.1",
   port,
+  idleTimeout: 0,
   async fetch(request, server) {
     const url = new URL(request.url);
     try {
