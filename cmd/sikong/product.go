@@ -82,7 +82,7 @@ func runStart(args []string) error {
 		state.Daemon = proc
 		daemonHealth, daemonRunning = waitForHealth(daemonURL+"/health", opts.timeout)
 		if !daemonRunning {
-			return fmt.Errorf("daemon did not become healthy before timeout")
+			return fmt.Errorf("daemon did not become healthy before timeout; inspect logs with `sikong logs --daemon --lines 200`")
 		}
 	} else {
 		state.Daemon.URL = daemonURL
@@ -98,7 +98,7 @@ func runStart(args []string) error {
 		state.UI = proc
 		uiHealth, uiRunning = waitForHealth(uiURL+"/api/health", opts.timeout)
 		if !uiRunning {
-			return fmt.Errorf("web UI did not become healthy before timeout")
+			return fmt.Errorf("web UI did not become healthy before timeout; inspect logs with `sikong logs --ui --lines 200`")
 		}
 	} else {
 		state.UI.URL = uiURL
@@ -107,6 +107,7 @@ func runStart(args []string) error {
 
 	state.Version = buildinfo.Version()
 	state.Updated = time.Now().UTC().Format(time.RFC3339)
+	state = withDefaultLogPaths(state)
 	if err := writeState(state); err != nil {
 		return err
 	}
@@ -121,12 +122,14 @@ func runStart(args []string) error {
 				"url":     daemonURL,
 				"running": daemonRunning,
 				"health":  daemonHealth,
+				"logPath": state.Daemon.LogPath,
 			},
 			"ui": map[string]any{
 				"url":     uiURL,
 				"port":    opts.uiPort,
 				"running": uiRunning,
 				"health":  uiHealth,
+				"logPath": state.UI.LogPath,
 			},
 		},
 	}
@@ -168,6 +171,7 @@ func runStatus(args []string) error {
 		return err
 	}
 	state, _ := readState()
+	state = withDefaultLogPaths(state)
 	daemonURL := daemonBaseURL(opts.daemonAddr)
 	daemonHealth, daemonRunning := checkJSONHealth(daemonURL + "/health")
 	uiURL := "http://127.0.0.1:" + opts.uiPort
@@ -181,6 +185,7 @@ func runStatus(args []string) error {
 				"running": daemonRunning,
 				"health":  daemonHealth,
 				"pid":     state.Daemon.PID,
+				"logPath": state.Daemon.LogPath,
 			},
 			"ui": map[string]any{
 				"url":     uiURL,
@@ -188,6 +193,7 @@ func runStatus(args []string) error {
 				"running": uiRunning,
 				"health":  uiHealth,
 				"pid":     state.UI.PID,
+				"logPath": state.UI.LogPath,
 			},
 		},
 	}
@@ -204,6 +210,7 @@ func runLogs(args []string) error {
 		return err
 	}
 	state, _ := readState()
+	state = withDefaultLogPaths(state)
 	paths, err := resolveLogPaths(state, opts)
 	if err != nil {
 		return err
@@ -365,7 +372,7 @@ func formatStatusText(daemonURL string, daemonRunning bool, uiURL string, uiRunn
 		uiStatus = "running"
 	}
 	return fmt.Sprintf(
-		"Sikong %s\nDaemon: %s (%s)\nUI: %s (%s)\n",
+		"Sikong %s\nDaemon: %s (%s)\nUI: %s (%s)\nLogs: sikong logs --lines 200\n",
 		buildinfo.Version(),
 		daemonURL,
 		daemonStatus,
@@ -549,6 +556,20 @@ func runLogPath(name string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, name+".log"), nil
+}
+
+func withDefaultLogPaths(state sikongState) sikongState {
+	if state.Daemon.LogPath == "" {
+		if path, err := runLogPath("daemon"); err == nil {
+			state.Daemon.LogPath = path
+		}
+	}
+	if state.UI.LogPath == "" {
+		if path, err := runLogPath("ui"); err == nil {
+			state.UI.LogPath = path
+		}
+	}
+	return state
 }
 
 type namedLogPath struct {

@@ -33,6 +33,15 @@ const settingsStore = new FileSettingsStore(dataDir);
 const transcriptPath = join(dataDir, "state", "client-transcript.json");
 const clientDistDir = process.env.SIKONG_CLIENT_DIST_DIR ?? join(import.meta.dir, "..", "dist");
 const turnStreamHeartbeatMs = 5_000;
+const startedAt = new Date().toISOString();
+
+process.on("uncaughtException", (err) => {
+  logServerError("uncaughtException", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  logServerError("unhandledRejection", err);
+});
 
 function commandContext(workspaceId?: string): CommandContext {
   return {
@@ -45,6 +54,10 @@ Bun.serve({
   hostname: "127.0.0.1",
   port,
   idleTimeout: 0,
+  error(error) {
+    logServerError("serve.error", error);
+    return json({ message: "internal server error" }, 500);
+  },
   async fetch(request, server) {
     const url = new URL(request.url);
     try {
@@ -52,7 +65,12 @@ Bun.serve({
         return new Response(null, { status: 204, headers: corsHeaders() });
       }
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return json({ ok: true, dataDir });
+        return json({
+          ok: true,
+          dataDir,
+          startedAt,
+          uptimeMs: Math.round(process.uptime() * 1000),
+        });
       }
       if (request.method === "GET" && url.pathname === "/api/state") {
         return json(await clientState(url.searchParams.get("workspaceId") ?? undefined));
@@ -472,9 +490,14 @@ async function appendTranscript(message: ClientMessage): Promise<void> {
   const transcript = await readTranscript();
   transcript.push(message);
   await mkdir(dirname(transcriptPath), { recursive: true });
-  const tmp = `${transcriptPath}.${process.pid}.tmp`;
+  const tmp = `${transcriptPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(transcript.slice(-200), null, 2));
   await rename(tmp, transcriptPath);
+}
+
+function logServerError(kind: string, err: unknown): void {
+  const message = err instanceof Error ? `${err.stack ?? err.message}` : String(err);
+  console.error(`[sikong-client-api] ${kind}: ${message}`);
 }
 
 function textMessage(role: "user" | "assistant", text: string): ClientMessage {
