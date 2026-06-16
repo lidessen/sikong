@@ -426,7 +426,7 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 /* Local MCP tool server — wraps req.tools as an HTTP MCP server for Cursor   */
 /* -------------------------------------------------------------------------- */
 
-interface JsonRpcMessage {
+export interface JsonRpcMessage {
   jsonrpc: "2.0";
   id?: number | string;
   method?: string;
@@ -451,17 +451,21 @@ function startMcpToolServer(tools: ToolSet): Promise<Server> {
 
       let body = "";
       req.on("data", (chunk: string) => (body += chunk));
-      req.on("end", () => {
-        let response: JsonRpcMessage;
+      req.on("end", async () => {
+        let response: JsonRpcMessage | undefined;
         try {
           const msg = JSON.parse(body) as JsonRpcMessage;
-          response = handleMcpRequest(msg, tools);
+          response = await handleMcpRequest(msg, tools);
         } catch {
           response = {
             jsonrpc: "2.0",
             id: undefined,
             error: { code: -32700, message: "Parse error" },
           };
+        }
+        if (!response) {
+          res.writeHead(204).end();
+          return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(response));
@@ -472,8 +476,33 @@ function startMcpToolServer(tools: ToolSet): Promise<Server> {
   });
 }
 
-function handleMcpRequest(msg: JsonRpcMessage, tools: ToolSet): JsonRpcMessage {
+export async function handleMcpRequest(
+  msg: JsonRpcMessage,
+  tools: ToolSet,
+): Promise<JsonRpcMessage | undefined> {
   const base = { jsonrpc: "2.0" as const, id: msg.id };
+
+  if (msg.method === "initialize") {
+    return {
+      ...base,
+      result: {
+        protocolVersion: "2025-06-18",
+        capabilities: {
+          tools: {},
+        },
+        serverInfo: {
+          name: "agent-loop-tools",
+          version: "0.1.0",
+        },
+      },
+    };
+  }
+
+  if (msg.method === "notifications/initialized") return undefined;
+
+  if (msg.method === "ping") {
+    return { ...base, result: {} };
+  }
 
   if (msg.method === "tools/list") {
     const toolList = Object.entries(tools).map(([name, def]) => ({
@@ -495,7 +524,9 @@ function handleMcpRequest(msg: JsonRpcMessage, tools: ToolSet): JsonRpcMessage {
     }
     const toolDef = tools[name]!;
     try {
-      const result = toolDef.execute?.(params.arguments ?? {}, {});
+      const result = await toolDef.execute?.(params.arguments ?? {}, {
+        callId: typeof msg.id === "string" ? msg.id : msg.id?.toString(),
+      });
       const content = typeof result === "string" ? result : JSON.stringify(result ?? null);
       return { ...base, result: { content: [{ type: "text", text: content }] } };
     } catch (err) {

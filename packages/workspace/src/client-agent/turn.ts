@@ -202,6 +202,7 @@ function fallbackOutcome(work: RunResult, settlement: RunResult): ClientTurnOutc
   const summary =
     settlement.text.trim() ||
     work.text.trim() ||
+    formatRunErrors(work, settlement) ||
     "The client agent turn ended without a structured outcome.";
   return {
     kind: "report",
@@ -209,7 +210,17 @@ function fallbackOutcome(work: RunResult, settlement: RunResult): ClientTurnOutc
     summary,
     facts: [
       { label: "work pass", value: work.status },
+      ...(work.error ? [{ label: "work error", value: work.error.message }] : []),
       { label: "settlement pass", value: settlement.status },
+      ...(settlement.error ? [{ label: "settlement error", value: settlement.error.message }] : []),
     ],
   };
+}
+
+function formatRunErrors(work: RunResult, settlement: RunResult): string {
+  const lines = [
+    work.error ? `Work pass error: ${work.error.message}` : "",
+    settlement.error ? `Settlement pass error: ${settlement.error.message}` : "",
+  ].filter(Boolean);
+  return lines.join("\n");
 }

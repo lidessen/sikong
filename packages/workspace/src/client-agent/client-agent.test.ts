@@ -188,6 +188,41 @@ describe("client agent context", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("includes backend errors when both passes fail without an outcome", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const loop = switchLoop([
+        errorLoop("Cursor MCP tools/call failed"),
+        errorLoop("Cursor settlement failed"),
+      ]);
+
+      const result = await runClientAgentTurn({
+        ctx: context,
+        loop,
+        message: "Show current Sikong work.",
+        focus: { workspaceId: "sikong" },
+      });
+
+      expect(result.settlement).toEqual({ used: true, fallbackUsed: true });
+      expect(result.outcome.kind).toBe("report");
+      if (result.outcome.kind !== "report") throw new Error("expected report outcome");
+      expect(result.outcome.summary).toContain("Work pass error: Cursor MCP tools/call failed");
+      expect(result.outcome.summary).toContain("Settlement pass error: Cursor settlement failed");
+      expect(result.outcome.facts).toContainEqual({
+        label: "work error",
+        value: "Cursor MCP tools/call failed",
+      });
+      expect(result.outcome.facts).toContainEqual({
+        label: "settlement error",
+        value: "Cursor settlement failed",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 function fixedTranscript(
@@ -223,6 +258,61 @@ function switchLoop(loops: AgentLoop[]): AgentLoop {
       return loop.run(input);
     },
     runTask: (input) => loops[Math.min(index, loops.length - 1)]!.runTask(input),
+    preflight: async () => ({ ok: true }),
+    dispose: async () => {},
+  };
+}
+
+function errorLoop(message: string): AgentLoop {
+  return {
+    id: "error-mock",
+    capabilities: ["tools", "mcp", "usage"],
+    supports: (cap: Capability) => cap === "tools" || cap === "mcp" || cap === "usage",
+    run: () => {
+      const error = new Error(message);
+      const result = Promise.resolve({
+        events: [{ type: "error" as const, error }],
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+        },
+        durationMs: 1,
+        status: "error" as const,
+        error,
+        text: "",
+      });
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "error" as const, error };
+        },
+        textStream: {
+          async *[Symbol.asyncIterator]() {},
+        },
+        result,
+        text: result.then((run) => run.text),
+        usage: result.then((run) => run.usage),
+        steer: async () => ({ mode: "rejected" as const }),
+        cancel: () => {},
+        cleanup: async () => ({
+          status: "settled" as const,
+          elapsedMs: 0,
+          hardKill: false,
+          resultStatus: "error" as const,
+        }),
+      };
+    },
+    runTask: async () => ({
+      status: "failed",
+      report: message,
+      timeline: [],
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+      rounds: 0,
+    }),
     preflight: async () => ({ ok: true }),
     dispose: async () => {},
   };
