@@ -6,6 +6,7 @@ import {
   cursorLoop,
   anthropic,
   deepseek,
+  kimi,
   mockLoop,
   openai,
   type AgentLoop,
@@ -344,6 +345,8 @@ function createRuntimeProvider(providerName: string, model?: string): ModelProvi
   switch (providerName) {
     case "deepseek":
       return deepseek(model ? { model } : {});
+    case "kimi":
+      return kimi(model ? { model } : {});
     case "anthropic":
       return anthropic(model ? { model } : {});
     case "openai":

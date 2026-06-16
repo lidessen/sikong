@@ -4,6 +4,7 @@ import {
   deepseek,
   gateway,
   isAutoDiscoverEnabled,
+  kimi,
   MissingCredentialError,
   resolveApiKey,
 } from "../index";
@@ -70,5 +71,42 @@ describe("credential resolution", () => {
   test("resolveApiKey helper: required:false returns undefined", () => {
     const v = resolveApiKey({ providerId: "x", envVars: ["NOPE_API_KEY"], required: false });
     expect(v).toBeUndefined();
+  });
+
+  test("kimi discovers KIMI_CODE_API_KEY for claude-code", () => {
+    const previous = process.env.KIMI_CODE_API_KEY;
+    process.env.KIMI_CODE_API_KEY = "sk-kimi";
+    try {
+      const cfg = kimi().configureFor("claude-code");
+      expect(cfg.runtime).toBe("claude-code");
+      if (cfg.runtime === "claude-code") {
+        expect(cfg.model).toBe("kimi-for-coding");
+        expect(cfg.env.ANTHROPIC_BASE_URL).toBe("https://api.kimi.com/coding/");
+        expect(cfg.env.ANTHROPIC_API_KEY).toBe("sk-kimi");
+      }
+    } finally {
+      if (previous === undefined) delete process.env.KIMI_CODE_API_KEY;
+      else process.env.KIMI_CODE_API_KEY = previous;
+    }
+  });
+
+  test("kimi supports ai-sdk through the Kimi Code OpenAI-compatible endpoint", () => {
+    const previous = process.env.KIMI_CODE_API_KEY;
+    process.env.KIMI_CODE_API_KEY = "sk-kimi";
+    try {
+      const cfg = kimi().configureFor("ai-sdk");
+      expect(cfg.runtime).toBe("ai-sdk");
+      if (cfg.runtime === "ai-sdk") {
+        expect(cfg.spec).toEqual({
+          kind: "moonshotai",
+          baseURL: "https://api.kimi.com/coding/v1",
+          apiKey: "sk-kimi",
+          model: "kimi-for-coding",
+        });
+      }
+    } finally {
+      if (previous === undefined) delete process.env.KIMI_CODE_API_KEY;
+      else process.env.KIMI_CODE_API_KEY = previous;
+    }
   });
 });

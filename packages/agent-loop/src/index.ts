@@ -23,6 +23,7 @@ export {
   anthropicCompatible,
   deepseek,
   gateway,
+  kimi,
   modelPricing,
   openai,
   openaiCompatible,

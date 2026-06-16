@@ -68,6 +68,48 @@ describe("runtime assembly registry", () => {
     }
   });
 
+  test("creates kimi-backed claude-code runtime from assembly options", async () => {
+    const previous = process.env.KIMI_CODE_API_KEY;
+    process.env.KIMI_CODE_API_KEY = "test-kimi-key";
+    try {
+      const runtime = await createRuntimeAssembly({
+        backend: {
+          name: "claude-code",
+          options: { provider: "kimi", model: "kimi-for-coding" },
+        },
+      });
+
+      expect(runtime.loop?.id).toBe("claude-code");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KIMI_CODE_API_KEY;
+      } else {
+        process.env.KIMI_CODE_API_KEY = previous;
+      }
+    }
+  });
+
+  test("creates kimi-backed ai-sdk runtime from assembly options", async () => {
+    const previous = process.env.KIMI_CODE_API_KEY;
+    process.env.KIMI_CODE_API_KEY = "test-kimi-key";
+    try {
+      const runtime = await createRuntimeAssembly({
+        backend: {
+          name: "ai-sdk",
+          options: { provider: "kimi", model: "kimi-for-coding" },
+        },
+      });
+
+      expect(runtime.loop?.id).toBe("ai-sdk");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.KIMI_CODE_API_KEY;
+      } else {
+        process.env.KIMI_CODE_API_KEY = previous;
+      }
+    }
+  });
+
   test("assembles cursor backend with task cwd and sandbox disabled by default", async () => {
     const dir = await tmp();
     try {

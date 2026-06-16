@@ -31,6 +31,9 @@ import { MODEL_PRICES } from "./prices.generated";
 const DEEPSEEK_ANTHROPIC = "https://api.deepseek.com/anthropic";
 /** DeepSeek's cheap/fast tier — used for Claude Code haiku-level + subagent calls. */
 const DEEPSEEK_FLASH = "deepseek-v4-flash";
+const KIMI_CODE_ANTHROPIC = "https://api.kimi.com/coding/";
+const KIMI_CODE_OPENAI = "https://api.kimi.com/coding/v1";
+const KIMI_CODE_MODEL = "kimi-for-coding";
 const ANTHROPIC_BASE = "https://api.anthropic.com";
 const OPENAI_BASE = "https://api.openai.com/v1";
 
@@ -125,6 +128,48 @@ export function deepseek(opts: { apiKey?: string; model?: string } = {}): ModelP
           );
         default:
           return unsupported("deepseek", runtime, supportedRuntimes);
+      }
+    },
+    pricing: (modelId) => modelPricing(modelId),
+  };
+}
+
+/** Kimi Code Plan — subscription-backed coding endpoint for Claude Code + AI SDK. */
+export function kimi(opts: { apiKey?: string; model?: string } = {}): ModelProvider {
+  const apiKey = resolveApiKey({
+    providerId: "kimi",
+    explicit: opts.apiKey,
+    envVars: ["KIMI_CODE_API_KEY"],
+  })!;
+  const model = opts.model ?? KIMI_CODE_MODEL;
+  const supportedRuntimes: RuntimeType[] = ["claude-code", "ai-sdk"];
+  return {
+    id: "kimi",
+    supportedRuntimes,
+    configureFor(runtime): RuntimeConfig {
+      switch (runtime) {
+        case "claude-code":
+          return {
+            runtime,
+            model,
+            env: {
+              ANTHROPIC_BASE_URL: KIMI_CODE_ANTHROPIC,
+              ANTHROPIC_API_KEY: apiKey,
+              CLAUDE_CODE_AUTO_COMPACT_WINDOW: "262144",
+            },
+          };
+        case "ai-sdk":
+          return {
+            runtime,
+            spec: {
+              kind: "moonshotai",
+              baseURL: KIMI_CODE_OPENAI,
+              apiKey,
+              model,
+            },
+          };
+        default:
+          return unsupported("kimi", runtime, supportedRuntimes);
       }
     },
     pricing: (modelId) => modelPricing(modelId),

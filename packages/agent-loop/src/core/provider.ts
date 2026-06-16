@@ -54,6 +54,13 @@ export type AiSdkProviderSpec =
       model: string;
       headers?: Record<string, string>;
     }
+  | {
+      kind: "moonshotai";
+      apiKey: string;
+      baseURL?: string;
+      model: string;
+      headers?: Record<string, string>;
+    }
   | { kind: "deepseek"; apiKey: string; baseURL?: string; model: string }
   | { kind: "anthropic"; apiKey: string; baseURL?: string; model: string }
   | { kind: "openai"; apiKey: string; baseURL?: string; model: string }

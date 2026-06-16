@@ -71,6 +71,11 @@ export function runtimeSettingsOptions(): SikongSettingsOptions {
         supportedBackends: ["claude-code", "ai-sdk"],
       },
       {
+        id: "kimi",
+        label: "Kimi",
+        supportedBackends: ["claude-code", "ai-sdk"],
+      },
+      {
         id: "anthropic",
         label: "Anthropic",
         supportedBackends: ["claude-code", "ai-sdk"],

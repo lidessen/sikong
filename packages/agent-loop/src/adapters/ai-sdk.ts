@@ -23,7 +23,7 @@ import type { EffortLevel, PreflightResult, ToolDefinition, ToolSet } from "../c
  *
  * Supported provider kinds:
  *  - anthropic / anthropic-compatible: `{ anthropic: { thinking: { type: "enabled", budgetTokens } } }`
- *  - openai / openai-compatible / deepseek: `{ <key>: { reasoning_effort } }` (key is provider name)
+ *  - openai / openai-compatible / moonshotai / deepseek: `{ <key>: { reasoning_effort } }`
  *
  * Unsupported spec kinds or unset effort → empty object (honest no-op).
  */
@@ -43,16 +43,23 @@ function effortToProviderOptions(
   // OpenAI / DeepSeek / OpenAI-compatible reasoning-effort mapping.
   // Note: @ai-sdk/deepseek may not support per-call reasoning_effort — this
   // is a best-effort pass-through; the provider ignores it if unsupported.
-  if (spec?.kind === "openai" || spec?.kind === "deepseek" || spec?.kind === "openai-compatible") {
+  if (
+    spec?.kind === "openai" ||
+    spec?.kind === "deepseek" ||
+    spec?.kind === "moonshotai" ||
+    spec?.kind === "openai-compatible"
+  ) {
     const reasoningEffort = effort === "max" ? "high" : effort;
     // Use the provider id as the key — AI SDK models typically key on the
     // provider base name (e.g. "openai", "deepseek").
     const providerKey =
       spec.kind === "deepseek"
         ? "deepseek"
-        : spec.kind === "openai-compatible"
-          ? spec.name
-          : spec.kind;
+        : spec.kind === "moonshotai"
+          ? "moonshotai"
+          : spec.kind === "openai-compatible"
+            ? spec.name
+            : spec.kind;
     return { [providerKey]: { reasoning_effort: reasoningEffort } };
   }
 
@@ -398,6 +405,14 @@ async function resolveAiSdkModel(spec: AiSdkProviderSpec): Promise<LanguageModel
         name: spec.name,
         baseURL: spec.baseURL,
         apiKey: spec.apiKey,
+        ...(spec.headers ? { headers: spec.headers } : {}),
+      })(spec.model);
+    }
+    case "moonshotai": {
+      const { createMoonshotAI } = await import("@ai-sdk/moonshotai");
+      return createMoonshotAI({
+        apiKey: spec.apiKey,
+        ...(spec.baseURL ? { baseURL: spec.baseURL } : {}),
         ...(spec.headers ? { headers: spec.headers } : {}),
       })(spec.model);
     }

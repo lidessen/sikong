@@ -16,6 +16,7 @@
     "dev:client-api": "bun --filter @sikong/client api",
     "dev:cli": "go run ./cmd/sikong",
     "dev:daemon": "go run ./cmd/sikongd",
+    "dev:install": "bash scripts/install-local-dev.sh",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
