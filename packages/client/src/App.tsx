@@ -1,37 +1,54 @@
-import { ArrowLeft, CircleDot, Layers3, Loader2, SquareTerminal } from "lucide-react";
+import { ArrowLeft, CircleDot, Layers3, Loader2, SquareTerminal, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import {
   deleteTranscriptMessage,
   getClientState,
+  getSettings,
   getTaskDetail,
+  resumeTurnStream,
   runTurnStream,
   updateSettings,
 } from "./api";
+import { readAppUrlState, writeAppUrlState, type AppMainView } from "./app-url";
 import { ActivityStream, Composer } from "./chat-panel";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { createPendingMessage, createTextMessage, messageFromTurnResponse } from "./messages";
 import { SettingsDialog } from "./settings-dialog";
+import { classifyTurnError, SystemDiagnosticsBar } from "./system-diagnostics";
 import { TaskDetailMain } from "./task-detail";
+import { taskRequestPreview } from "./task-request";
 import { buildClientTurnProgress } from "./turn-progress";
+import {
+  clearActiveTurnState,
+  readActiveTurnState,
+  writeActiveTurnState,
+  type ActiveTurnState,
+} from "./turn-resume";
 import { MobileWorkPanel, Sidebar } from "./workspace-nav";
 import type {
   ClientMessage,
   ClientState,
+  ClientTurnActivity,
   ClientTurnProgressPhaseId,
   SchedulerStatus,
   SikongSettings,
   TaskDetailView,
+  TurnResponse,
+  TurnStreamEvent,
 } from "./types";
 
-type MainView = "chat" | "task";
+type MainView = AppMainView;
 
 export function App() {
+  const initialUrl = useMemo(() => readAppUrlState(), []);
   const [state, setState] = useState<ClientState | null>(null);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | undefined>();
-  const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
-  const [mainView, setMainView] = useState<MainView>("chat");
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | undefined>(
+    initialUrl.workspaceId,
+  );
+  const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>(initialUrl.taskId);
+  const [mainView, setMainView] = useState<MainView>(initialUrl.view);
   const [mobileWorkOpen, setMobileWorkOpen] = useState(false);
   const [taskDetail, setTaskDetail] = useState<TaskDetailView | null>(null);
   const [taskDetailLoading, setTaskDetailLoading] = useState(false);
@@ -40,24 +57,39 @@ export function App() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [turnAbortController, setTurnAbortController] = useState<AbortController | null>(null);
   const [pendingTurn, setPendingTurn] = useState<{
     messageId: string;
     startedAt: string;
     phaseId?: ClientTurnProgressPhaseId;
     detail?: string;
+    activities: ClientTurnActivity[];
   } | null>(null);
 
   useEffect(() => {
     void refresh(selectedWorkspaceId);
-  }, [selectedWorkspaceId]);
+    const activeTurn = readActiveTurnState();
+    if (activeTurn) {
+      void resumeInterruptedTurn(activeTurn);
+    }
+  }, []);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (busy || pendingTurn) return;
-      void refresh(selectedWorkspaceId);
-    }, 4000);
-    return () => window.clearInterval(interval);
-  }, [busy, pendingTurn, selectedWorkspaceId]);
+    if (!mobileWorkOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setMobileWorkOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobileWorkOpen]);
+
+  useEffect(() => {
+    writeAppUrlState({
+      workspaceId: selectedWorkspaceId,
+      taskId: selectedTaskId,
+      view: mainView,
+    });
+  }, [mainView, selectedTaskId, selectedWorkspaceId]);
 
   const selectedWorkspace = useMemo(
     () => state?.workspaces.find((workspace) => workspace.id === selectedWorkspaceId),
@@ -72,6 +104,20 @@ export function App() {
     [state?.taskCards],
   );
   const activeTaskCount = (state?.taskCards.length ?? 0) - terminalCount;
+
+  useEffect(() => {
+    const intervalMs = activeTaskCount > 0 ? 2000 : 10000;
+    const interval = window.setInterval(() => {
+      if (busy || pendingTurn) return;
+      void refresh(selectedWorkspaceId);
+    }, intervalMs);
+    return () => window.clearInterval(interval);
+  }, [activeTaskCount, busy, pendingTurn, selectedWorkspaceId]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    void loadSettingsOptions();
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (mainView !== "task" || !selectedTaskId) {
@@ -96,49 +142,272 @@ export function App() {
     };
   }, [mainView, selectedTask?.updatedAt, selectedTaskId, selectedWorkspaceId]);
 
-  useEffect(() => {
-    if (!pendingTurn) return;
-    const currentPendingTurn = pendingTurn;
+  function updatePendingMessageProgress(input: {
+    messageId: string;
+    startedAt: string;
+    phaseId?: ClientTurnProgressPhaseId;
+    detail?: string;
+    activities: ClientTurnActivity[];
+  }) {
+    setMessages((items) =>
+      items.map((item) =>
+        item.id === input.messageId
+          ? {
+              ...item,
+              pending: true,
+              parts: [
+                {
+                  type: "progress-card",
+                  progress: buildClientTurnProgress({
+                    startedAt: input.startedAt,
+                    workspaceName: selectedWorkspace?.name,
+                    taskId: selectedTaskId,
+                    activePhaseId: input.phaseId,
+                    detail: input.detail,
+                    activities: input.activities,
+                  }),
+                },
+              ],
+            }
+          : item,
+      ),
+    );
+  }
 
-    function updateProgress() {
+  async function loadSettingsOptions() {
+    try {
+      const settings = await getSettings();
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              settings,
+              settingsOptions: settings.options ?? current.settingsOptions,
+            }
+          : current,
+      );
+    } catch (err) {
+      setError(classifyTurnError(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async function refresh(workspaceId?: string) {
+    try {
+      const next = await getClientState(workspaceId ?? selectedWorkspaceId);
+      setState(next);
+      const url = readAppUrlState();
+      const workspace = url.workspaceId ?? next.selectedWorkspaceId;
+      setSelectedWorkspaceId(workspace);
+      if (
+        url.taskId &&
+        next.taskCards.some((task) => task.taskId === url.taskId && task.workspaceId === workspace)
+      ) {
+        setSelectedTaskId(url.taskId);
+        setMainView(url.view);
+      } else if (url.taskId) {
+        setSelectedTaskId(undefined);
+        setMainView("chat");
+      }
+      setMessages(next.transcript ?? []);
+    } catch (err) {
+      setError(classifyTurnError(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  function navigateToChat() {
+    setMainView("chat");
+    setSelectedTaskId(undefined);
+  }
+
+  function navigateToTask(taskId: string) {
+    setSelectedTaskId(taskId);
+    setMainView("task");
+  }
+
+  function navigateToWorkspace(workspaceId: string) {
+    setSelectedTaskId(undefined);
+    setMainView("chat");
+    setSelectedWorkspaceId(workspaceId);
+    void refresh(workspaceId);
+  }
+
+  function queueComposerMessage(text: string) {
+    navigateToChat();
+    setMessage(text);
+  }
+
+  function cancelTurn() {
+    clearActiveTurnState();
+    turnAbortController?.abort();
+  }
+
+  async function resumeInterruptedTurn(active: ActiveTurnState) {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const abortController = new AbortController();
+    setTurnAbortController(abortController);
+    const turnState = {
+      messageId: active.messageId,
+      startedAt: active.startedAt,
+      phaseId: "prepare" as ClientTurnProgressPhaseId | undefined,
+      detail: "Reconnecting to in-flight turn…",
+      activities: [] as ClientTurnActivity[],
+    };
+    setPendingTurn({ ...turnState, activities: [] });
+    setMessages((items) => {
+      if (items.some((item) => item.id === active.messageId)) return items;
+      return [
+        ...items,
+        {
+          ...createPendingMessage(
+            buildClientTurnProgress({
+              startedAt: active.startedAt,
+              workspaceName: selectedWorkspace?.name,
+              taskId: selectedTaskId,
+              activePhaseId: "prepare",
+              detail: turnState.detail,
+            }),
+          ),
+          id: active.messageId,
+        },
+      ];
+    });
+    let cancelledByEvent = false;
+    try {
+      const response = await resumeTurnStream(
+        active.turnId,
+        active.lastEventIndex,
+        (event, eventIndex) => {
+          processTurnStreamEvent({
+            event,
+            eventIndex,
+            turnState,
+            pendingMessageId: active.messageId,
+            onCancelled: () => {
+              cancelledByEvent = true;
+            },
+          });
+        },
+        abortController.signal,
+      );
+      await finalizeTurnResponse(response, active.messageId, cancelledByEvent);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("no longer active")) {
+        clearActiveTurnState();
+        return;
+      }
+      handleTurnFailure(err, active.messageId, cancelledByEvent);
+    } finally {
+      clearActiveTurnState();
+      setTurnAbortController(null);
+      setPendingTurn(null);
+      setBusy(false);
+    }
+  }
+
+  function processTurnStreamEvent(input: {
+    event: TurnStreamEvent;
+    eventIndex: number;
+    turnState: {
+      messageId: string;
+      startedAt: string;
+      phaseId?: ClientTurnProgressPhaseId;
+      detail?: string;
+      activities: ClientTurnActivity[];
+    };
+    pendingMessageId: string;
+    onCancelled: () => void;
+  }) {
+    const { event, eventIndex, turnState, pendingMessageId, onCancelled } = input;
+    if ("turnId" in event) {
+      writeActiveTurnState({
+        turnId: event.turnId,
+        messageId: turnState.messageId,
+        startedAt: turnState.startedAt,
+        lastEventIndex: eventIndex,
+      });
+    }
+    if (event.type === "turn.started") {
+      turnState.startedAt = event.startedAt;
+      turnState.phaseId = event.phaseId;
+      turnState.detail = event.detail;
+      turnState.activities = [];
+      setPendingTurn({ ...turnState });
+      updatePendingMessageProgress({ ...turnState });
+    }
+    if (event.type === "turn.progress") {
+      turnState.phaseId = event.phaseId;
+      turnState.detail = event.detail;
+      setPendingTurn({ ...turnState });
+      updatePendingMessageProgress({ ...turnState });
+    }
+    if (event.type === "turn.activity") {
+      turnState.activities = mergeTurnActivity(turnState.activities, event.activity);
+      setPendingTurn({ ...turnState });
+      updatePendingMessageProgress({ ...turnState });
+    }
+    if (event.type === "turn.cancelled") {
+      onCancelled();
+      setPendingTurn(null);
       setMessages((items) =>
         items.map((item) =>
-          item.id === currentPendingTurn.messageId
-            ? {
-                ...item,
-                pending: true,
-                parts: [
-                  {
-                    type: "progress-card",
-                    progress: buildClientTurnProgress({
-                      startedAt: currentPendingTurn.startedAt,
-                      workspaceName: selectedWorkspace?.name,
-                      taskId: selectedTaskId,
-                      activePhaseId: currentPendingTurn.phaseId,
-                      detail: currentPendingTurn.detail,
-                    }),
-                  },
-                ],
-              }
+          item.id === pendingMessageId
+            ? createTextMessage(
+                "system",
+                `Turn was ${event.reason === "timeout" ? "timed out" : "cancelled"}.`,
+              )
             : item,
         ),
       );
     }
+  }
 
-    updateProgress();
-    const interval = window.setInterval(updateProgress, 1000);
-    return () => window.clearInterval(interval);
-  }, [pendingTurn, selectedTaskId, selectedWorkspace?.name]);
-
-  async function refresh(workspaceId?: string) {
-    try {
-      const next = await getClientState(workspaceId);
-      setState(next);
-      setSelectedWorkspaceId(next.selectedWorkspaceId);
-      setMessages(next.transcript ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+  async function finalizeTurnResponse(
+    response: TurnResponse,
+    pendingMessageId: string,
+    cancelledByEvent: boolean,
+  ) {
+    if (response.status !== "cancelled") {
+      const assistantMessage = messageFromTurnResponse(response);
+      setMessages((items) =>
+        items.map((item) => (item.id === pendingMessageId ? assistantMessage : item)),
+      );
+      if (response.schedulerWake && !response.schedulerWake.ok) {
+        setError(
+          classifyTurnError(
+            response.schedulerWake.error ??
+              "Turn completed but the background scheduler could not be woken.",
+          ),
+        );
+      }
     }
+    await refresh(response.context.focus.workspaceId ?? selectedWorkspaceId);
+    if (cancelledByEvent) return;
+  }
+
+  function handleTurnFailure(err: unknown, pendingMessageId: string, cancelledByEvent: boolean) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      if (!cancelledByEvent) {
+        setMessages((items) =>
+          items.map((item) =>
+            item.id === pendingMessageId ? createTextMessage("system", "Turn was cancelled.") : item,
+          ),
+        );
+      }
+      return;
+    }
+    setError(classifyTurnError(err instanceof Error ? err.message : String(err)));
+    setMessages((items) =>
+      items.map((item) =>
+        item.id === pendingMessageId
+          ? createTextMessage(
+              "system",
+              classifyTurnError(err instanceof Error ? err.message : String(err)),
+            )
+          : item,
+      ),
+    );
   }
 
   async function submitTurn(event: FormEvent) {
@@ -148,6 +417,8 @@ export function App() {
     setMessage("");
     setBusy(true);
     setError(null);
+    const abortController = new AbortController();
+    setTurnAbortController(abortController);
     const userMessage = createTextMessage("user", text);
     const pendingStartedAt = new Date().toISOString();
     const pendingMessage = createPendingMessage(
@@ -162,8 +433,17 @@ export function App() {
       messageId: pendingMessage.id,
       startedAt: pendingStartedAt,
       phaseId: "prepare",
+      activities: [],
     });
     setMessages((items) => [...items, userMessage, pendingMessage]);
+    const turnState = {
+      messageId: pendingMessage.id,
+      startedAt: pendingStartedAt,
+      phaseId: "prepare" as ClientTurnProgressPhaseId | undefined,
+      detail: undefined as string | undefined,
+      activities: [] as ClientTurnActivity[],
+    };
+    let cancelledByEvent = false;
     try {
       const response = await runTurnStream(
         {
@@ -171,46 +451,40 @@ export function App() {
           workspaceId: selectedWorkspaceId,
           taskId: selectedTaskId,
         },
-        (event) => {
-          if (event.type === "turn.started") {
-            setPendingTurn({
-              messageId: pendingMessage.id,
-              startedAt: event.startedAt,
-              phaseId: event.phaseId,
-              detail: event.detail,
-            });
-          }
-          if (event.type === "turn.progress") {
-            setPendingTurn((current) =>
-              current?.messageId === pendingMessage.id
-                ? {
-                    ...current,
-                    phaseId: event.phaseId,
-                    detail: event.detail,
-                  }
-                : current,
-            );
-          }
+        (event, eventIndex) => {
+          processTurnStreamEvent({
+            event,
+            eventIndex,
+            turnState,
+            pendingMessageId: pendingMessage.id,
+            onCancelled: () => {
+              cancelledByEvent = true;
+            },
+          });
         },
+        abortController.signal,
       );
-      const assistantMessage = messageFromTurnResponse(response);
-      setMessages((items) =>
-        items.map((item) => (item.id === pendingMessage.id ? assistantMessage : item)),
-      );
-      await refresh(response.context.focus.workspaceId ?? selectedWorkspaceId);
+      await finalizeTurnResponse(response, pendingMessage.id, cancelledByEvent);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setMessages((items) =>
-        items.map((item) =>
-          item.id === pendingMessage.id
-            ? createTextMessage("system", err instanceof Error ? err.message : String(err))
-            : item,
-        ),
-      );
+      handleTurnFailure(err, pendingMessage.id, cancelledByEvent);
     } finally {
+      clearActiveTurnState();
+      setTurnAbortController(null);
       setPendingTurn(null);
       setBusy(false);
     }
+  }
+
+  function mergeTurnActivity(
+    current: ClientTurnActivity[],
+    next: ClientTurnActivity,
+  ): ClientTurnActivity[] {
+    const index = current.findIndex((item) => item.id === next.id);
+    const merged =
+      index >= 0
+        ? current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...next } : item))
+        : [...current, next];
+    return merged.slice(-18);
   }
 
   async function deleteMessage(messageId: string) {
@@ -261,21 +535,14 @@ export function App() {
           state={state}
           selectedWorkspaceId={selectedWorkspaceId}
           selectedTaskId={selectedTaskId}
-          onSelectWorkspace={(workspaceId) => {
-            setSelectedTaskId(undefined);
-            setMainView("chat");
-            setSelectedWorkspaceId(workspaceId);
-          }}
-          onSelectTask={(taskId) => {
-            setSelectedTaskId(taskId);
-            setMainView("task");
-          }}
+          onSelectWorkspace={navigateToWorkspace}
+          onSelectTask={navigateToTask}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
         <section className="sikong-pane flex min-h-0 min-w-0 flex-col border-x border-transparent lg:min-h-screen lg:border-l lg:border-border">
-          <header className="shrink-0 border-b border-divider bg-bg/95 px-4 py-2 backdrop-blur lg:sticky lg:top-0 lg:z-10">
-            <div className="mx-auto flex max-w-[840px] flex-col gap-2">
+          <header className="shrink-0 border-b border-divider bg-bg/95 backdrop-blur lg:sticky lg:top-0 lg:z-10">
+            <div className="mx-auto flex max-w-[840px] flex-col gap-2 px-4 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -283,14 +550,22 @@ export function App() {
                       <SquareTerminal />
                     </div>
                     <p className="truncate text-[15px] font-semibold">
-                      {selectedWorkspace?.name ?? "No workspace selected"}
+                      {mainView === "task" && selectedTask
+                        ? taskRequestPreview(selectedTask.request ?? selectedTask.nextAction.type, 48)
+                        : (selectedWorkspace?.name ?? "No workspace selected")}
                     </p>
-                    <Badge variant="outline">{activeTaskCount} active</Badge>
+                    {mainView !== "task" ? (
+                      <Badge variant="outline">{activeTaskCount} active</Badge>
+                    ) : selectedTask ? (
+                      <Badge variant={selectedTask.terminal ? "secondary" : "info"}>
+                        {selectedTask.terminal ? "Finished" : "In progress"}
+                      </Badge>
+                    ) : null}
                   </div>
-                  <p className="hidden truncate text-[12px] leading-5 text-muted-foreground lg:block">
+                  <p className="mt-0.5 truncate text-[12px] leading-5 text-muted-foreground">
                     {mainView === "task" && selectedTask
-                      ? (selectedTask.request ?? selectedTask.nextAction.type)
-                      : "Transcript is interface state. Context comes from source stores and focus."}
+                      ? selectedTask.taskId
+                      : "Chat with the Client Agent to manage workspaces and work items."}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -299,7 +574,7 @@ export function App() {
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={() => setMainView("chat")}
+                      onClick={() => navigateToChat()}
                     >
                       <ArrowLeft data-icon="inline-start" />
                       Chat
@@ -317,34 +592,51 @@ export function App() {
                   </Button>
                 </div>
               </div>
-              <div className="hidden flex-col gap-2 border-t border-divider pt-2 lg:flex lg:flex-row lg:items-end lg:justify-between">
-                <div className="min-w-0">
-                  <div className="mb-1 flex items-center gap-2">
-                    <span className="flex size-6 items-center justify-center rounded-[var(--radius-md)] border border-input bg-surface-2 text-primary">
-                      <CircleDot />
-                    </span>
-                    <h2 className="text-[15px] font-semibold">
+
+              <div className="hidden items-center justify-between gap-3 border-t border-divider pt-2 lg:flex">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="flex size-6 items-center justify-center rounded-[var(--radius-md)] border border-input bg-surface-2 text-primary">
+                    <CircleDot />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="text-[13px] font-semibold">
                       {mainView === "task" ? "Work Detail" : "Activity"}
                     </h2>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {mainView === "task"
+                        ? "Plan, stages, workers, and execution observations."
+                        : "Your conversation thread with the Client Agent."}
+                    </p>
                   </div>
-                  <p className="max-w-xl text-[12px] leading-5 text-muted-foreground">
-                    {mainView === "task"
-                      ? "Plan, stage, round, worker, and execution observations for the selected work item."
-                      : "One continuous operating thread for workspaces, work items, and durable progress."}
-                  </p>
                 </div>
-                <div className="flex gap-2 text-xs">
+                <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
                   {state.scheduler ? <SchedulerBadge scheduler={state.scheduler} /> : null}
                   <Badge variant="secondary">{state.workspaces.length} workspaces</Badge>
-                  <Badge variant="secondary">{terminalCount} finished</Badge>
+                  {terminalCount > 0 ? (
+                    <Badge variant="secondary">{terminalCount} finished</Badge>
+                  ) : null}
                 </div>
               </div>
             </div>
+
             {error ? (
-              <div className="mx-auto mt-2 max-w-[840px]">
-                <Badge variant="destructive">{error}</Badge>
+              <div className="mx-auto flex max-w-[840px] items-start gap-2 px-4 pb-2">
+                <Badge variant="destructive" className="h-auto min-h-[18px] max-w-full py-1 whitespace-normal">
+                  {error}
+                </Badge>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="size-6 shrink-0 text-muted-foreground"
+                  aria-label="Dismiss error"
+                  onClick={() => setError(null)}
+                >
+                  <X className="size-3.5" />
+                </Button>
               </div>
             ) : null}
+            <SystemDiagnosticsBar diagnostics={state.diagnostics} scheduler={state.scheduler} />
           </header>
 
           {mainView === "task" && selectedTask ? (
@@ -354,22 +646,21 @@ export function App() {
                 detail={taskDetail}
                 loading={taskDetailLoading}
                 scheduler={state?.scheduler}
-                onClose={() => setMainView("chat")}
+                onClose={navigateToChat}
+                onSendMessage={queueComposerMessage}
               />
             </div>
           ) : (
             <>
-              <div className="flex-1 overflow-auto px-4 py-4 scroll-smooth">
+              <div className="flex-1 overflow-auto px-4 py-4 scroll-smooth" data-activity-scroll>
                 <ActivityStream
                   messages={messages}
                   state={state}
                   onDeleteMessage={(messageId) => {
                     void deleteMessage(messageId);
                   }}
-                  onOpenTask={(taskId) => {
-                    setSelectedTaskId(taskId);
-                    setMainView("task");
-                  }}
+                  onOpenTask={navigateToTask}
+                  onSendMessage={queueComposerMessage}
                 />
               </div>
 
@@ -378,6 +669,7 @@ export function App() {
                 message={message}
                 onMessageChange={setMessage}
                 onSubmit={submitTurn}
+                onCancel={cancelTurn}
               />
             </>
           )}
@@ -390,14 +682,9 @@ export function App() {
         selectedWorkspaceId={selectedWorkspaceId}
         selectedTaskId={selectedTaskId}
         onClose={() => setMobileWorkOpen(false)}
-        onSelectWorkspace={(workspaceId) => {
-          setSelectedTaskId(undefined);
-          setMainView("chat");
-          setSelectedWorkspaceId(workspaceId);
-        }}
+        onSelectWorkspace={navigateToWorkspace}
         onSelectTask={(taskId) => {
-          setSelectedTaskId(taskId);
-          setMainView("task");
+          navigateToTask(taskId);
           setMobileWorkOpen(false);
         }}
         onOpenSettings={() => {

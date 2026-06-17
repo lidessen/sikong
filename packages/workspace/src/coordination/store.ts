@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { taskEventsFile, taskEventsLockFile, taskProjectionFile, withFileLock } from "../data-dir";
-import { reduceTaskEvents } from "./reducer";
+import { taskEventsFile, taskEventsLockFile, taskProjectionFile, touchSchedulerSignal, withFileLock } from "../data-dir";
+import { applyTaskEvent, reduceTaskEvents } from "./reducer";
 import type { TaskEvent, TaskProjection } from "./types";
 
 export interface TaskEventStore {
@@ -41,6 +41,17 @@ export class FileTaskEventStore implements TaskEventStore {
     return await this.withTaskEventsLock(events, async (workspaceId, taskId) => {
       await appendEventsFile(this.dataDir, events);
       const allEvents = await readEventsFile(this.dataDir, workspaceId, taskId);
+      const existing = await readProjectionFile(this.dataDir, workspaceId, taskId);
+      if (existing && existing.eventCount + events.length === allEvents.length) {
+        let projection = existing;
+        for (const event of events) {
+          projection = applyTaskEvent(projection, event);
+        }
+        if (projection.eventCount === allEvents.length) {
+          await writeProjectionFile(this.dataDir, projection);
+          return projection;
+        }
+      }
       const projection = reduceTaskEvents(allEvents);
       if (!projection) return null;
       await writeProjectionFile(this.dataDir, projection);
@@ -129,13 +140,34 @@ async function readEventsFile(
   return text
     .split("\n")
     .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as TaskEvent);
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as TaskEvent];
+      } catch {
+        return [];
+      }
+    });
+}
+
+async function readProjectionFile(
+  dataDir: string,
+  workspaceId: string,
+  taskId: string,
+): Promise<TaskProjection | null> {
+  const file = taskProjectionFile(dataDir, workspaceId, taskId);
+  try {
+    return JSON.parse(await readFile(file, "utf8")) as TaskProjection;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
 }
 
 async function writeProjectionFile(dataDir: string, projection: TaskProjection): Promise<void> {
   const file = taskProjectionFile(dataDir, projection.workspaceId, projection.taskId);
   await mkdir(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await writeFile(tmp, `${JSON.stringify(projection, null, 2)}\n`);
   await rename(tmp, file);
+  await touchSchedulerSignal(dataDir);
 }

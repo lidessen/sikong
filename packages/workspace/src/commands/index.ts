@@ -91,3 +91,4 @@ export type {
   TaskSummary,
   TaskTraceEntry,
 } from "./task-view";
+export { compactTaskView } from "./task-view";

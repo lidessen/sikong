@@ -8,6 +8,7 @@
     "build": "vite build",
     "dev": "vite --host 127.0.0.1",
     "preview": "vite preview --host 127.0.0.1",
+    "test": "bun test ./server",
     "typecheck": "tsgo --build tsconfig.json"
   },
   "dependencies": {

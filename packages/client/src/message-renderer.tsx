@@ -1,22 +1,33 @@
 import {
   AlertTriangle,
+  BrainCircuit,
   BotMessageSquare,
-  CheckCircle2,
   CircleDot,
   CircleUserRound,
+  Gauge,
   Loader2,
+  MessageSquareText,
+  TerminalSquare,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import type React from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
 import { MarkdownMessage } from "./markdown-message";
+import { TurnOutcomeCard } from "./outcome-card";
+import { buildClientTurnProgress } from "./turn-progress";
+import { taskRequestPreview } from "./task-request";
 import type {
   ClientMessage,
   ClientState,
+  ClientTurnActivity,
+  ClientTurnActivityKind,
+  ClientTurnActivityStatus,
   ClientTurnProgress,
-  ClientTurnProgressStatus,
+  ClientTurnProgressPhaseId,
   ClientWorkLogEntry,
   MessagePart,
   SikongUIAction,
@@ -41,6 +52,20 @@ type ConsoleBadgeVariant =
 export interface MessageRenderContext {
   state: ClientState;
   onAction?: (action: SikongUIAction) => void;
+  onSendMessage?: (text: string) => void;
+}
+
+function messageBubbleClass(message: ClientMessage): string {
+  if (message.pending) {
+    return "border-[color-mix(in_srgb,var(--info)_22%,transparent)] bg-[var(--info-soft)]/25";
+  }
+  if (message.role === "user") {
+    return "border-[var(--accent-dim)]/60 bg-[var(--accent-soft)]/20";
+  }
+  if (message.role === "system") {
+    return "border-[color-mix(in_srgb,var(--warn)_25%,transparent)] bg-[var(--warn-soft)]/20";
+  }
+  return "border-border-soft bg-card/92";
 }
 
 export function MessageView(props: {
@@ -49,7 +74,7 @@ export function MessageView(props: {
   onDelete?: (messageId: string) => void;
 }) {
   return (
-    <article className="grid grid-cols-[28px_minmax(0,1fr)] gap-3">
+    <article className="group/message grid grid-cols-[28px_minmax(0,1fr)] gap-3 animate-in">
       <MessageAvatar message={props.message} />
       <div className="min-w-0">
         <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -58,7 +83,10 @@ export function MessageView(props: {
               {messageLabel(props.message)}
             </p>
             <p className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
-              {new Date(props.message.createdAt).toLocaleTimeString()}
+              {new Date(props.message.createdAt).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
             </p>
           </div>
           {props.onDelete && !props.message.pending ? (
@@ -66,7 +94,7 @@ export function MessageView(props: {
               type="button"
               variant="ghost"
               size="icon"
-              className="size-[22px] shrink-0 text-muted-foreground hover:text-destructive"
+              className="size-[22px] shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/message:opacity-100 focus-visible:opacity-100"
               aria-label="Delete message"
               title="Delete message"
               onClick={() => props.onDelete?.(props.message.id)}
@@ -75,7 +103,9 @@ export function MessageView(props: {
             </Button>
           ) : null}
         </div>
-        <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] border bg-card/92 px-3 py-2.5 text-[13px] leading-5">
+        <div
+          className={`flex flex-col gap-2 rounded-[var(--radius-lg)] border px-3 py-2.5 text-[13px] leading-5 ${messageBubbleClass(props.message)}`}
+        >
           {props.message.parts.map((part, index) => (
             <MessagePartView
               // Message parts are immutable presentation records; index keeps duplicate text parts renderable.
@@ -124,6 +154,14 @@ function MessagePartView(props: { part: MessagePart; context: MessageRenderConte
           <MarkdownMessage text={props.part.text} />
         </div>
       );
+    case "outcome-card":
+      return (
+        <TurnOutcomeCard
+          outcome={props.part.outcome}
+          onOpenTask={(taskId) => props.context.onAction?.({ type: "focusTask", taskId })}
+          onSendMessage={props.context.onSendMessage}
+        />
+      );
     case "progress-card":
       return <TurnProgressCard progress={props.part.progress} />;
     case "task-card":
@@ -141,76 +179,107 @@ function MessagePartView(props: { part: MessagePart; context: MessageRenderConte
 }
 
 function TurnProgressCard(props: { progress: ClientTurnProgress }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+  const progress = useMemo(() => {
+    const activePhaseId = props.progress.phases.find((phase) => phase.status === "running")?.id;
+    return buildClientTurnProgress({
+      startedAt: props.progress.startedAt,
+      detail: props.progress.detail,
+      activities: props.progress.activities,
+      ...(activePhaseId ? { activePhaseId: activePhaseId as ClientTurnProgressPhaseId } : {}),
+      nowMs,
+    });
+  }, [nowMs, props.progress.activities, props.progress.detail, props.progress.phases, props.progress.startedAt]);
+  const activities = progress.activities.slice(-18);
   return (
-    <div className="rounded-[var(--radius-lg)] border border-border bg-background p-3">
-      <div className="mb-3 flex items-start justify-between gap-3">
+    <div className="min-w-0">
+      <div className="mb-2 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="flex items-center gap-2 text-[13px] font-medium">
+          <p className="flex items-center gap-2 text-[13px] font-medium text-foreground">
             <Loader2 className="animate-spin text-info" data-icon="inline-start" />
-            {props.progress.title}
+            Agent activity
           </p>
-          <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
-            {props.progress.detail}
-          </p>
+          <p className="mt-1 text-[12px] leading-5 text-muted-foreground">{progress.detail}</p>
         </div>
-        <Badge variant="info">{formatElapsed(props.progress.elapsedMs)}</Badge>
+        <Badge variant="info">{formatElapsed(progress.elapsedMs)}</Badge>
       </div>
 
-      <div className="flex flex-col gap-2">
-        {props.progress.phases.map((phase) => (
-          <div
-            key={phase.id}
-            className={`rounded-[var(--radius-md)] border p-2.5 ${
-              phase.status === "running"
-                ? "border-[var(--info)] bg-[var(--info-soft)]"
-                : "border-border bg-card/80"
-            }`}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 gap-2">
-                <ProgressStatusIcon status={phase.status} />
-                <div className="min-w-0">
-                  <p className="truncate text-[13px] font-medium">{phase.title}</p>
-                  <p className="text-[12px] leading-5 text-muted-foreground">{phase.detail}</p>
-                </div>
-              </div>
-              <Badge variant={progressBadgeVariant(phase.status)}>{phase.status}</Badge>
-            </div>
-
-            <div className="mt-2 grid gap-1 pl-6">
-              {phase.substeps.map((substep) => (
-                <div
-                  key={substep.label}
-                  className="flex min-w-0 items-center gap-2 text-[12px] text-muted-foreground"
-                >
-                  <ProgressStatusIcon status={substep.status} compact />
-                  <span className="truncate">{substep.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+      <div className="rounded-[var(--radius-md)] border border-border-soft bg-background/55">
+        {activities.map((activity, index) => (
+          <AgentActivityRow
+            key={activity.id}
+            activity={activity}
+            first={index === 0}
+            latest={index === activities.length - 1}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function ProgressStatusIcon(props: { status: ClientTurnProgressStatus; compact?: boolean }) {
-  const className = `${props.compact ? "opacity-80" : "mt-0.5"} ${
-    props.status === "done"
-      ? "text-ok"
-      : props.status === "running"
-        ? "text-info"
-        : "text-muted-foreground"
-  }`;
-  if (props.status === "done") return <CheckCircle2 className={className} />;
-  if (props.status === "running") return <Loader2 className={`${className} animate-spin`} />;
+function AgentActivityRow(props: {
+  activity: ClientTurnActivity;
+  first: boolean;
+  latest: boolean;
+}) {
+  return (
+    <div
+      className={`grid grid-cols-[22px_minmax(0,1fr)] gap-2 px-2.5 py-2 ${
+        props.first ? "" : "border-t border-border-soft"
+      } ${props.latest && props.activity.status === "running" ? "bg-[var(--info-soft)]" : ""}`}
+    >
+      <div className="flex justify-center pt-0.5">
+        <ActivityIcon kind={props.activity.kind} status={props.activity.status} />
+      </div>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="truncate text-[12px] font-medium text-foreground">{props.activity.title}</p>
+          <Badge variant={activityBadgeVariant(props.activity.status)}>
+            {props.activity.status}
+          </Badge>
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
+            {formatActivityTime(props.activity.at)}
+          </span>
+          <span className="shrink-0 rounded-[var(--radius-sm)] border border-border-soft px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+            {props.activity.phase}
+          </span>
+        </div>
+        {props.activity.detail ? (
+          <p className="mt-1 max-h-12 overflow-hidden break-words font-mono text-[11px] leading-4 text-muted-foreground">
+            {props.activity.detail}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ActivityIcon(props: { kind: ClientTurnActivityKind; status: ClientTurnActivityStatus }) {
+  const className =
+    props.status === "error"
+      ? "text-err"
+      : props.status === "done"
+        ? "text-ok"
+        : "animate-spin text-info";
+  if (props.status === "running") return <Loader2 className={className} />;
+  if (props.kind === "thinking") return <BrainCircuit className={className} />;
+  if (props.kind === "text") return <MessageSquareText className={className} />;
+  if (props.kind === "tool") return <Wrench className={className} />;
+  if (props.kind === "usage") return <Gauge className={className} />;
+  if (props.kind === "error") return <AlertTriangle className={className} />;
+  if (props.kind === "status") return <TerminalSquare className={className} />;
   return <CircleDot className={className} />;
 }
 
-function progressBadgeVariant(status: ClientTurnProgressStatus): ConsoleBadgeVariant {
+function activityBadgeVariant(status: ClientTurnActivityStatus): ConsoleBadgeVariant {
   if (status === "done") return "ok";
   if (status === "running") return "info";
+  if (status === "error") return "err";
   return "neutral";
 }
 
@@ -220,6 +289,12 @@ function formatElapsed(elapsedMs: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+function formatActivityTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function SikongUIRenderer(props: { spec: SikongUISpec; context: MessageRenderContext }) {
@@ -370,7 +445,7 @@ function TaskCardPart(props: { task?: TaskCard; onOpen?: (taskId: string) => voi
             {props.task.taskId}
           </p>
           <p className="mt-1 line-clamp-2 text-[13px] leading-5 text-muted-foreground">
-            {props.task.request ?? props.task.nextAction.type}
+            {taskRequestPreview(props.task.request ?? props.task.nextAction.type, 160)}
           </p>
         </div>
         <TaskStatusBadge task={props.task} />
@@ -394,10 +469,13 @@ function TaskCardPart(props: { task?: TaskCard; onOpen?: (taskId: string) => voi
     return (
       <button
         type="button"
-        className="w-full rounded-[var(--radius-lg)] border bg-background p-3 text-left outline-none transition-[background-color,border-color] hover:border-ring/25 hover:bg-hover focus-visible:border-ring"
+        className="group/task w-full rounded-[var(--radius-lg)] border bg-background p-3 text-left outline-none transition-[background-color,border-color,box-shadow] hover:border-ring/30 hover:bg-hover focus-visible:border-ring"
         onClick={() => props.onOpen?.(props.task!.taskId)}
       >
         {content}
+        <p className="mt-2 text-[11px] font-medium text-primary opacity-80 transition-opacity group-hover/task:opacity-100">
+          View work detail
+        </p>
       </button>
     );
   }
@@ -541,9 +619,9 @@ function ReviewResult(props: { props: Record<string, unknown> }) {
         <p className="font-medium">{stringProp(props.props, "title") || "Review result"}</p>
         <Badge variant="secondary">{stringProp(props.props, "outcome") || "pending"}</Badge>
       </div>
-      <p className="text-[13px] leading-5 text-muted-foreground">
-        {stringProp(props.props, "report") || "No report."}
-      </p>
+      <div className="text-[13px] leading-5 text-muted-foreground">
+        <MarkdownMessage text={stringProp(props.props, "report") || "No report."} />
+      </div>
     </div>
   );
 }

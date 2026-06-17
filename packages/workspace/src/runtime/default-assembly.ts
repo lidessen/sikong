@@ -5,6 +5,7 @@ export type RuntimeAssemblyProfile = "lead" | "planning" | "worker" | "review";
 
 const claudeInspectionTools = ["Read", "Glob", "Grep", "LS"];
 const claudeExecutionTools = ["Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "LS"];
+const claudeSikongDisabledTools = ["Task", "Agent", "ExitPlanMode", "TodoWrite", "TaskUpdate"];
 
 export function defaultRuntimeAssembly(
   runtime: DefaultAgentRuntime,
@@ -47,13 +48,17 @@ function runtimeOptions(
   if (profile !== "worker") {
     return {
       ...base,
+      builtinTools: claudeInspectionTools,
       allowedTools: claudeInspectionTools,
+      disallowedTools: claudeSikongDisabledTools,
     };
   }
 
   return {
     ...base,
     permissionMode: "bypassPermissions",
+    builtinTools: claudeExecutionTools,
     allowedTools: claudeExecutionTools,
+    disallowedTools: claudeSikongDisabledTools,
   };
 }

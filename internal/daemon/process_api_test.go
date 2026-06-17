@@ -13,7 +13,7 @@ func TestProcessAPIShutdownEndpoint(t *testing.T) {
 	t.Parallel()
 
 	done := make(chan struct{})
-	api := NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{}))
+	api := NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{}, ""))
 	api.SetShutdownFunc(func() {
 		close(done)
 	})
@@ -36,7 +36,7 @@ func TestProcessAPIShutdownEndpoint(t *testing.T) {
 func TestProcessAPISchedulerUnavailable(t *testing.T) {
 	t.Parallel()
 
-	api := NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{}))
+	api := NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{}, ""))
 
 	statusReq := httptest.NewRequest(http.MethodGet, "/scheduler/status", nil)
 	statusRec := httptest.NewRecorder()

@@ -23,6 +23,9 @@ export {
   formatClientAgentPrompt,
   formatClientAgentSettlementPrompt,
   runClientAgentTurn,
+  type ClientAgentActivity,
+  type ClientAgentActivityKind,
+  type ClientAgentActivityStatus,
   type RunClientAgentTurnInput,
   type RunClientAgentTurnResult,
 } from "./turn";

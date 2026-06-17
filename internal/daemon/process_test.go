@@ -191,7 +191,7 @@ func TestProcessRunSpecHasNoAgentRoleFields(t *testing.T) {
 
 func TestProcessSupervisorStoresResults(t *testing.T) {
 	t.Parallel()
-	supervisor := NewProcessSupervisor(ProcessRunnerOptions{})
+	supervisor := NewProcessSupervisor(ProcessRunnerOptions{}, "")
 	result, err := supervisor.Run(context.Background(), ProcessRunSpec{
 		RunID:       "run-stored",
 		WorkspaceID: "workspace",
@@ -212,7 +212,7 @@ func TestProcessSupervisorStoresResults(t *testing.T) {
 
 func TestProcessSupervisorStartWaitCancel(t *testing.T) {
 	t.Parallel()
-	supervisor := NewProcessSupervisor(ProcessRunnerOptions{})
+	supervisor := NewProcessSupervisor(ProcessRunnerOptions{}, "")
 
 	started, err := supervisor.Start(context.Background(), ProcessRunSpec{
 		RunID:       "run-async",
@@ -292,7 +292,7 @@ func TestProcessSupervisorStartWaitCancel(t *testing.T) {
 
 func TestProcessSupervisorReportsQueuedBeforeActualStart(t *testing.T) {
 	t.Parallel()
-	supervisor := NewProcessSupervisor(ProcessRunnerOptions{MaxConcurrent: 1})
+	supervisor := NewProcessSupervisor(ProcessRunnerOptions{MaxConcurrent: 1}, "")
 
 	first, err := supervisor.Start(context.Background(), ProcessRunSpec{
 		RunID:       "run-blocking",
@@ -349,7 +349,7 @@ func TestProcessSupervisorReportsQueuedBeforeActualStart(t *testing.T) {
 
 func TestProcessAPIRunLifecycle(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{})))
+	server := httptest.NewServer(NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{}, "")))
 	defer server.Close()
 
 	body, err := json.Marshal(ProcessRunSpec{
@@ -420,7 +420,7 @@ func TestProcessAPIRunLifecycle(t *testing.T) {
 
 func TestProcessAPICancel(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{})))
+	server := httptest.NewServer(NewProcessAPI(context.Background(), NewProcessSupervisor(ProcessRunnerOptions{}, "")))
 	defer server.Close()
 
 	body, err := json.Marshal(ProcessRunSpec{

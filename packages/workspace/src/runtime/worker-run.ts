@@ -241,10 +241,16 @@ export function buildStageWorkerPrompt(
     "Scope contract:",
     "- Do only the assigned work unit.",
     "- Do not complete unrelated work units, later stages, final verification, or the whole task unless they are explicitly listed below.",
-    "- If the work unit appears already done, verify it and report the evidence instead of expanding scope.",
+    "- If the work unit appears already done, inspect and report the evidence instead of expanding scope.",
     "- If completing this unit requires touching shared files, make the smallest change that satisfies this unit and preserve neighboring work.",
     "",
+    "Testing boundary:",
+    "- Do not run broad test, lint, typecheck, build, or full-check commands on your own.",
+    "- If a narrow smoke command is explicitly named in this work unit, you may run only that command.",
+    "- Otherwise, report the exact focused tests or checks a separate test work unit or reviewer should run.",
+    "",
     `Task: ${projection.request ?? projection.taskId}`,
+    ...stageWorkerWorkspaceContext(projection),
     `Stage: ${stage.title}`,
     "",
     "Objective:",
@@ -279,6 +285,19 @@ export function buildStageWorkerPrompt(
 
 export const buildWorkerGoal = buildStageWorkerPrompt;
 export const runTaskWorker = runWorkerTask;
+
+function stageWorkerWorkspaceContext(projection: TaskProjection): string[] {
+  if (!projection.runtime?.cwd && !projection.runtime?.repoPath) return [];
+  return [
+    "",
+    "Workspace context:",
+    ...(projection.runtime.cwd ? [`- Runtime cwd: ${projection.runtime.cwd}`] : []),
+    ...(projection.runtime.repoPath ? [`- Source repo: ${projection.runtime.repoPath}`] : []),
+    "- Treat these paths as authoritative; inspect nearby project files before searching broader user directories.",
+    "- Use available Sikong/workspace tools for fuller source records when needed instead of guessing workspace layout.",
+    "",
+  ];
+}
 
 function currentRunTarget(
   projection: TaskProjection,

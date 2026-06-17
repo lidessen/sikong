@@ -102,8 +102,21 @@ export function taskRuntimeDir(dataDir: string, workspaceId: string, taskId: str
   return join(taskRuntimeDirs(dataDir, workspaceId), safeWorkspaceSegment(taskId));
 }
 
+export function daemonDir(dataDir: string): string {
+  return join(dataDir, "daemon");
+}
+
+export function schedulerSignalFile(dataDir: string): string {
+  return join(daemonDir(dataDir), "scheduler.signal");
+}
+
+export function daemonProcessRunsDir(dataDir: string): string {
+  return join(daemonDir(dataDir), "process-runs");
+}
+
 export async function ensureDataDirLayout(dataDir: string): Promise<void> {
   await mkdir(join(dataDir, "state"), { recursive: true });
   await mkdir(join(dataDir, "workspaces"), { recursive: true });
   await mkdir(join(dataDir, "workers"), { recursive: true });
+  await mkdir(daemonDir(dataDir), { recursive: true });
 }

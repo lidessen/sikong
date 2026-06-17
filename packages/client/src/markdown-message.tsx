@@ -1,14 +1,19 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-export function MarkdownMessage(props: { text: string }) {
+export function MarkdownMessage(props: { text: string; compact?: boolean }) {
+  const compact = props.compact ?? false;
   return (
-    <div className="min-w-0 space-y-3 leading-6">
+    <div className={`min-w-0 ${compact ? "space-y-2 text-[12px] leading-5" : "space-y-3 leading-6"}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => (
-            <p className="min-w-0 break-words leading-6 [overflow-wrap:anywhere]">{children}</p>
+            <p
+              className={`min-w-0 break-words [overflow-wrap:anywhere] ${compact ? "leading-5" : "leading-6"}`}
+            >
+              {children}
+            </p>
           ),
           a: ({ children, href }) => (
             <a
@@ -20,12 +25,28 @@ export function MarkdownMessage(props: { text: string }) {
               {children}
             </a>
           ),
-          h1: ({ children }) => <h1 className="text-base font-semibold">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-[15px] font-semibold">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-sm font-semibold">{children}</h3>,
+          h1: ({ children }) => (
+            <h1 className={compact ? "text-sm font-semibold" : "text-base font-semibold"}>
+              {children}
+            </h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className={compact ? "text-[13px] font-semibold" : "text-[15px] font-semibold"}>
+              {children}
+            </h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className={compact ? "text-[12px] font-semibold" : "text-sm font-semibold"}>
+              {children}
+            </h3>
+          ),
           ul: ({ children }) => <ul className="ml-4 list-disc [&>li+li]:mt-1">{children}</ul>,
           ol: ({ children }) => <ol className="ml-4 list-decimal [&>li+li]:mt-1">{children}</ol>,
-          li: ({ children }) => <li className="pl-1">{children}</li>,
+          li: ({ children }) => (
+            <li className="pl-1 [&>input[type=checkbox]]:mr-1.5 [&>input[type=checkbox]]:accent-primary">
+              {children}
+            </li>
+          ),
           blockquote: ({ children }) => (
             <blockquote className="border-l-2 border-border-strong pl-3 text-muted-foreground">
               {children}

@@ -11,8 +11,9 @@ Sikong is initialized as a Go CLI and daemon project with a Bun workspace monore
 │   └── sikongd/  # daemon binary
 ├── internal/     # private Go packages shared by commands
 └── packages/     # Bun workspaces
-    ├── agent-loop/
-    └── workspace/
+    ├── agent-loop/   # LLM runtime abstraction
+    ├── client/       # React Web UI + Bun API server
+    └── workspace/    # coordination engine, orchestration, Client Agent
 ```
 
 ## Setup

@@ -28,6 +28,7 @@ import type {
 } from "../core/types";
 
 export type ClaudePermissionMode = NonNullable<ClaudeAgentOptions["permissionMode"]>;
+type ClaudeBuiltinTools = ClaudeAgentOptions["tools"];
 
 const z = ((zod as unknown as { z?: typeof zod }).z ?? zod) as typeof zod;
 
@@ -44,8 +45,12 @@ export interface ClaudeAdapterOptions {
   instructions?: string;
   /** Working directory for the agent. */
   cwd?: string;
-  /** Tool allow-list passed straight to the SDK. */
+  /** Tool names auto-allowed without a permission prompt. This is not an availability allow-list. */
   allowedTools?: string[];
+  /** Built-in Claude Code tools made visible to the model. */
+  builtinTools?: ClaudeBuiltinTools;
+  /** Built-in or MCP tools removed from the model context entirely. */
+  disallowedTools?: string[];
   /** Permission posture. "bypassPermissions" also skips dangerous-op prompts. */
   permissionMode?: ClaudePermissionMode;
   /** Extra environment variables for the agent subprocess. */
@@ -87,8 +92,12 @@ export interface ClaudeRuntimeOptions {
   /** Continue the most recent session. */
   continue?: boolean;
   permissionMode?: ClaudePermissionMode;
-  /** Extra `allowedTools` merged with the adapter's. */
+  /** Extra tool names auto-allowed without a permission prompt. */
   allowedTools?: string[];
+  /** Per-run override for built-in Claude Code tools made visible to the model. */
+  builtinTools?: ClaudeBuiltinTools;
+  /** Extra built-in or MCP tools removed from the model context entirely. */
+  disallowedTools?: string[];
   /** Extra environment variables merged with the adapter's. */
   env?: Record<string, string>;
 }
@@ -385,6 +394,12 @@ function buildOptions(args: {
           ]),
         ]
       : undefined;
+  const disallowedTools =
+    opts.disallowedTools || o.disallowedTools
+      ? [...new Set([...(opts.disallowedTools ?? []), ...(o.disallowedTools ?? [])])]
+      : undefined;
+  const builtinTools = o.builtinTools ??
+    opts.builtinTools ?? { type: "preset", preset: "claude_code" };
   // The SDK's Options.env REPLACES the child env entirely (it is NOT merged
   // with process.env). So whenever we inject anything we must also carry the
   // parent env (PATH/HOME/...) or the spawn fails — spread process.env first,
@@ -414,6 +429,7 @@ function buildOptions(args: {
     env,
     additionalDirectories: opts.allowedPaths,
     allowedTools,
+    disallowedTools,
     permissionMode,
     allowDangerouslySkipPermissions: permissionMode === "bypassPermissions",
     includePartialMessages: true,
@@ -429,7 +445,7 @@ function buildOptions(args: {
       preset: "claude_code",
       append,
     },
-    tools: { type: "preset", preset: "claude_code" },
+    tools: builtinTools,
     extraArgs: opts.extraArgs ? parseClaudeExtraArgs(opts.extraArgs) : undefined,
     pathToClaudeCodeExecutable: resolveClaudeExecutable(opts.pathToClaudeCodeExecutable),
   };

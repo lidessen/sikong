@@ -90,7 +90,7 @@ func NewScheduler(ctx context.Context, opts SchedulerOptions) *Scheduler {
 		opts.MaxConcurrent = DefaultDaemonTaskMaxConcurrent
 	}
 	if opts.PollInterval <= 0 {
-		opts.PollInterval = 2 * time.Second
+		opts.PollInterval = 15 * time.Second
 	}
 	if opts.DataDir == "" {
 		opts.DataDir = defaultSchedulerDataDir()
@@ -112,6 +112,7 @@ func NewScheduler(ctx context.Context, opts SchedulerOptions) *Scheduler {
 
 func (s *Scheduler) Start() {
 	go s.loop()
+	go s.signalWatchLoop()
 	s.Wake()
 }
 
@@ -178,6 +179,28 @@ func (s *Scheduler) loop() {
 	}
 }
 
+func (s *Scheduler) signalWatchLoop() {
+	signalPath := filepath.Join(s.opts.DataDir, "daemon", "scheduler.signal")
+	var lastMod time.Time
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			info, err := os.Stat(signalPath)
+			if err != nil {
+				continue
+			}
+			if info.ModTime().After(lastMod) {
+				lastMod = info.ModTime()
+				s.Wake()
+			}
+		}
+	}
+}
+
 func (s *Scheduler) scanAndStart() {
 	if s.isPaused() {
 		return
@@ -206,9 +229,10 @@ func (s *Scheduler) scanAndStart() {
 }
 
 func (s *Scheduler) runTick(key string, task runnableTask) {
+	var tickErr error
 	defer func() {
 		<-s.sem
-		s.finishActive(key, true, nil)
+		s.finishActive(key, tickErr == nil, tickErr)
 		s.Wake()
 	}()
 	_, stderr, err := s.runCLI(
@@ -230,6 +254,7 @@ func (s *Scheduler) runTick(key string, task runnableTask) {
 		if strings.TrimSpace(stderr) != "" {
 			err = errors.New(strings.TrimSpace(stderr))
 		}
+		tickErr = err
 		s.setError(err)
 		return
 	}

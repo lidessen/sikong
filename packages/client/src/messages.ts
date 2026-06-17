@@ -40,6 +40,16 @@ export function createPendingMessage(progress?: ClientTurnProgress): ClientMessa
 }
 
 export function messageFromTurnResponse(response: TurnResponse): ClientMessage {
+  if (response.status === "cancelled") {
+    if (response.message) return response.message;
+    return createTextMessage("system", "Turn was cancelled.");
+  }
+  if (response.outcome) {
+    return createClientMessage({
+      role: "assistant",
+      parts: [{ type: "outcome-card", outcome: response.outcome }],
+    });
+  }
   if (response.message) return response.message;
   return createTextMessage(
     "assistant",

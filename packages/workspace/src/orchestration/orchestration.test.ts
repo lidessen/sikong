@@ -149,9 +149,15 @@ describe("orchestration tick", () => {
         report: "Accepted.",
       });
       if (!accepted.ok) throw new Error("plan accept failed");
-      expect(next(accepted.data.projection)).toMatchObject({
+      const roundPlanning = next(accepted.data.projection);
+      expect(roundPlanning).toMatchObject({
         type: "start_lead_round_planning",
       });
+      if (roundPlanning.type !== "start_lead_round_planning") {
+        throw new Error("expected lead round planning");
+      }
+      expect(roundPlanning.spec.prompt).toContain("rough module/file area and acceptance boundary");
+      expect(roundPlanning.spec.prompt).toContain("create a separate test-focused work unit");
 
       const round = await planRound(context, taskId);
       const roundTask = await getTask(context, { taskId });

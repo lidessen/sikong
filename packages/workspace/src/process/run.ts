@@ -1,4 +1,5 @@
 import type { ProcessRunResult, ProcessRunSpec } from "./types";
+import { readLimitedStream } from "./limited-capture";
 
 export interface RunProcessOptions {
   now?: () => Date;
@@ -46,7 +47,12 @@ export async function runProcess(
     proc.stdin.end();
   }
 
-  const [stdout, stderr] = await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
+  const [stdoutCapture, stderrCapture] = await Promise.all([
+    readLimitedStream(proc.stdout),
+    readLimitedStream(proc.stderr),
+  ]);
+  const stdout = stdoutCapture.text;
+  const stderr = stderrCapture.text;
 
   let exitCode: number | undefined;
   try {
@@ -73,6 +79,8 @@ export async function runProcess(
     ...(exitCode !== undefined ? { exitCode } : {}),
     stdout,
     stderr,
+    ...(stdoutCapture.truncated ? { stdoutTruncated: true } : {}),
+    ...(stderrCapture.truncated ? { stderrTruncated: true } : {}),
     startedAt,
     finishedAt,
     durationMs: Math.max(0, Date.now() - startedMs),
@@ -102,8 +110,4 @@ function terminateProcessGroup(pid: number | undefined, signal: NodeJS.Signals):
   } catch {
     // The process may have exited between timeout scheduling and termination.
   }
-}
-
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
-  return await new Response(stream).text();
 }

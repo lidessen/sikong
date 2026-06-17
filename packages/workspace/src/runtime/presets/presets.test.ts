@@ -20,6 +20,7 @@ const projection: TaskProjection = {
   taskId: "task_1",
   workspaceId: "sikong",
   request: "Implement the worker preset model.",
+  runtime: { cwd: "/workspace/sikong-task", repoPath: "/workspace/sikong" },
   status: "running",
   plan: {
     id: "plan_1",
@@ -111,6 +112,11 @@ describe("worker preset wrappers", () => {
     });
     expect(preset.goal).toContain("You are Sikong's Stage Worker");
     expect(preset.goal).toContain("complete only this work unit");
+    expect(preset.goal).toContain("Testing boundary:");
+    expect(preset.goal).toContain("Do not run broad test, lint, typecheck, build, or full-check");
+    expect(preset.goal).toContain("Workspace context:");
+    expect(preset.goal).toContain("Runtime cwd: /workspace/sikong-task");
+    expect(preset.goal).toContain("Source repo: /workspace/sikong");
     expect(preset.goal).toContain("Work unit instructions:");
     expect(preset.goal).toContain("Expected deliverables:");
     expect(preset.goal).toContain("Out of scope:");

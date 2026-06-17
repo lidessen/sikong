@@ -26,6 +26,8 @@ export interface ProcessRunResult {
   signal?: string;
   stdout: string;
   stderr: string;
+  stdoutTruncated?: boolean;
+  stderrTruncated?: boolean;
   startedAt: string;
   finishedAt: string;
   durationMs: number;

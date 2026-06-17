@@ -5,7 +5,10 @@ export type DaemonProcessFetch = (input: string, init?: RequestInit) => Promise<
 export interface DaemonProcessClientOptions {
   baseUrl: string;
   fetch?: DaemonProcessFetch;
+  timeoutMs?: number;
 }
+
+const defaultDaemonRequestTimeoutMs = 15_000;
 
 export class DaemonProcessClientError extends Error {
   readonly status: number;
@@ -22,10 +25,12 @@ export class DaemonProcessClientError extends Error {
 export class DaemonProcessClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: DaemonProcessFetch;
+  private readonly timeoutMs: number;
 
   constructor(options: DaemonProcessClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetch ?? fetch;
+    this.timeoutMs = options.timeoutMs ?? defaultDaemonRequestTimeoutMs;
   }
 
   async health(): Promise<{ ok: boolean }> {
@@ -118,7 +123,13 @@ export class DaemonProcessClient {
   }
 
   private request(path: string, init?: RequestInit): Promise<Response> {
-    return this.fetchImpl(`${this.baseUrl}${path}`, init);
+    const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
+    const upstream = init?.signal;
+    const signal =
+      upstream !== undefined && upstream !== null
+        ? AbortSignal.any([upstream, timeoutSignal])
+        : timeoutSignal;
+    return this.fetchImpl(`${this.baseUrl}${path}`, { ...init, signal });
   }
 
   private async readJson<T>(responsePromise: Promise<Response>): Promise<T> {

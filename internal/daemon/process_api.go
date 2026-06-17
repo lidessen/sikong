@@ -24,7 +24,7 @@ func NewProcessAPI(ctx context.Context, supervisor *ProcessSupervisor) *ProcessA
 		ctx = context.Background()
 	}
 	if supervisor == nil {
-		supervisor = NewProcessSupervisor(ProcessRunnerOptions{})
+		supervisor = NewProcessSupervisor(ProcessRunnerOptions{}, "")
 	}
 	return &ProcessAPI{ctx: ctx, supervisor: supervisor}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -55,6 +56,8 @@ type ProcessRunResult struct {
 	Signal      string            `json:"signal,omitempty"`
 	Stdout      string            `json:"stdout"`
 	Stderr      string            `json:"stderr"`
+	StdoutTruncated bool          `json:"stdoutTruncated,omitempty"`
+	StderrTruncated bool          `json:"stderrTruncated,omitempty"`
 	StartedAt   string            `json:"startedAt"`
 	FinishedAt  string            `json:"finishedAt"`
 	DurationMS  int64             `json:"durationMs"`
@@ -173,10 +176,13 @@ func runProcess(ctx context.Context, spec ProcessRunSpec, started time.Time) (Pr
 		cmd.Stdin = bytes.NewBufferString(spec.Stdin)
 	}
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var stdoutCap, stderrCap *limitedCapture
+	stdoutCap, _ = newLimitedCapture(spec.RunID, 0, 0)
+	stderrCap, _ = newLimitedCapture(spec.RunID, 0, 0)
+	defer stdoutCap.Close()
+	defer stderrCap.Close()
+	cmd.Stdout = stdoutCap
+	cmd.Stderr = stderrCap
 
 	err := cmd.Run()
 	finished := time.Now()
@@ -206,6 +212,9 @@ func runProcess(ctx context.Context, spec ProcessRunSpec, started time.Time) (Pr
 		status = ProcessRunCancelled
 	}
 
+	stdoutText, _, stdoutTruncated := stdoutCap.Result()
+	stderrText, _, stderrTruncated := stderrCap.Result()
+
 	result := ProcessRunResult{
 		RunID:       spec.RunID,
 		WorkspaceID: spec.WorkspaceID,
@@ -217,8 +226,10 @@ func runProcess(ctx context.Context, spec ProcessRunSpec, started time.Time) (Pr
 		Labels:      cloneStringMap(spec.Labels),
 		ExitCode:    exitCode,
 		Signal:      signal,
-		Stdout:      stdout.String(),
-		Stderr:      stderr.String(),
+		Stdout:      stdoutText,
+		Stderr:      stderrText,
+		StdoutTruncated: stdoutTruncated,
+		StderrTruncated: stderrTruncated,
 		StartedAt:   started.UTC().Format(time.RFC3339Nano),
 		FinishedAt:  finished.UTC().Format(time.RFC3339Nano),
 		DurationMS:  maxInt64(0, finished.Sub(started).Milliseconds()),
@@ -274,9 +285,10 @@ func processSignal(state *os.ProcessState) string {
 }
 
 type ProcessSupervisor struct {
-	runner *ProcessRunner
-	mu     sync.Mutex
-	runs   map[string]*processRunRecord
+	runner  *ProcessRunner
+	mu      sync.Mutex
+	runs    map[string]*processRunRecord
+	journal *processJournal
 }
 
 type processRunRecord struct {
@@ -285,11 +297,55 @@ type processRunRecord struct {
 	done     chan struct{}
 }
 
-func NewProcessSupervisor(opts ProcessRunnerOptions) *ProcessSupervisor {
-	return &ProcessSupervisor{
-		runner: NewProcessRunner(opts),
-		runs:   map[string]*processRunRecord{},
+func NewProcessSupervisor(opts ProcessRunnerOptions, dataDir string) *ProcessSupervisor {
+	var journal *processJournal
+	if strings.TrimSpace(dataDir) != "" {
+		if j, err := newProcessJournal(dataDir); err == nil {
+			journal = j
+		}
 	}
+	supervisor := &ProcessSupervisor{
+		runner:  NewProcessRunner(opts),
+		runs:    map[string]*processRunRecord{},
+		journal: journal,
+	}
+	if journal != nil {
+		_ = supervisor.reconcileFromJournal()
+	}
+	return supervisor
+}
+
+func (s *ProcessSupervisor) reconcileFromJournal() error {
+	if s.journal == nil {
+		return nil
+	}
+	snapshots, err := s.journal.loadAll()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, snapshot := range snapshots {
+		if snapshot.RunID == "" {
+			continue
+		}
+		if snapshot.State == ProcessRunQueued || snapshot.State == ProcessRunRunning {
+			snapshot = reconcileJournalSnapshot(snapshot)
+			_ = s.journal.save(snapshot)
+		}
+		s.runs[snapshot.RunID] = &processRunRecord{
+			snapshot: snapshot,
+			done:     closedChannel(),
+		}
+	}
+	return nil
+}
+
+func (s *ProcessSupervisor) persist(snapshot ProcessRunSnapshot) {
+	if s.journal == nil {
+		return
+	}
+	_ = s.journal.save(snapshot)
 }
 
 func (s *ProcessSupervisor) Run(ctx context.Context, spec ProcessRunSpec) (ProcessRunResult, error) {
@@ -311,7 +367,9 @@ func (s *ProcessSupervisor) Run(ctx context.Context, spec ProcessRunSpec) (Proce
 			},
 			done: closedChannel(),
 		}
+		snapshot := s.cloneSnapshot(s.runs[result.RunID].snapshot)
 		s.mu.Unlock()
+		s.persist(snapshot)
 	}
 	return result, err
 }
@@ -353,14 +411,18 @@ func (s *ProcessSupervisor) Start(ctx context.Context, spec ProcessRunSpec) (Pro
 		return ProcessRunSnapshot{}, fmt.Errorf("process run %q already exists", spec.RunID)
 	}
 	s.runs[spec.RunID] = record
+	snapshot := s.cloneSnapshot(record.snapshot)
 	s.mu.Unlock()
+	s.persist(snapshot)
 
 	go func() {
 		result, err := s.runner.run(runCtx, spec, func(startedAt time.Time) {
 			s.mu.Lock()
 			record.snapshot.State = ProcessRunRunning
 			record.snapshot.StartedAt = startedAt.UTC().Format(time.RFC3339Nano)
+			runningSnapshot := s.cloneSnapshot(record.snapshot)
 			s.mu.Unlock()
+			s.persist(runningSnapshot)
 		})
 		if result.RunID == "" {
 			result = processResultFromStartFailure(spec, record.snapshot.QueuedAt, err, runCtx)
@@ -371,7 +433,9 @@ func (s *ProcessSupervisor) Start(ctx context.Context, spec ProcessRunSpec) (Pro
 		record.snapshot.Result = &result
 		record.snapshot.Error = errorString(err)
 		record.snapshot.FinishedAt = finishedAt
+		finishedSnapshot := s.cloneSnapshot(record.snapshot)
 		s.mu.Unlock()
+		s.persist(finishedSnapshot)
 		cancel()
 		close(record.done)
 	}()

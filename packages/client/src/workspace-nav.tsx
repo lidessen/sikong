@@ -1,4 +1,5 @@
-import { ChevronDown, Folder, GitBranch, Inbox, Settings, SquareTerminal, X } from "lucide-react";
+import { ChevronRight, Folder, GitBranch, Inbox, Settings, SquareTerminal, X } from "lucide-react";
+import { useState } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { EmptyPanel } from "./empty-panel";
@@ -8,6 +9,7 @@ import {
   statusBadgeVariant,
   taskPhaseLabel,
 } from "./task-labels";
+import { taskRequestPreview } from "./task-request";
 import type { ClientState, TaskCard, Workspace } from "./types";
 
 export function Sidebar(props: {
@@ -70,9 +72,12 @@ export function MobileWorkPanel(props: {
 }) {
   if (!props.open) return null;
   return (
-    <div className="fixed inset-0 z-20 bg-black/55 lg:hidden" onClick={props.onClose}>
+    <div
+      className="fixed inset-0 z-20 bg-black/55 backdrop-blur-[1px] animate-backdrop-in lg:hidden"
+      onClick={props.onClose}
+    >
       <aside
-        className="absolute inset-x-0 bottom-0 flex max-h-[80dvh] flex-col rounded-t-[var(--radius-xl)] border border-border bg-background shadow-[var(--shadow-sheet)]"
+        className="absolute inset-x-0 bottom-0 flex max-h-[80dvh] flex-col rounded-t-[var(--radius-xl)] border border-border bg-background shadow-[var(--shadow-sheet)] animate-sheet-up"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5">
@@ -121,6 +126,7 @@ function WorkspaceWorkList(props: {
 }) {
   const running = props.state.taskCards.filter((task) => !task.terminal);
   const finished = props.state.taskCards.filter((task) => task.terminal);
+  const [finishedOpen, setFinishedOpen] = useState(finished.length <= 3);
   return (
     <div className="flex min-h-0 flex-col gap-4">
       <section>
@@ -128,7 +134,7 @@ function WorkspaceWorkList(props: {
           <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
             Workspaces
           </p>
-          <ChevronDown className="text-muted-foreground" />
+          <Badge variant="outline">{props.state.workspaces.length}</Badge>
         </div>
         <div className="flex flex-col gap-1">
           {props.state.workspaces.map((workspace) => (
@@ -198,20 +204,32 @@ function WorkspaceWorkList(props: {
           ))}
           {finished.length > 0 ? (
             <div className="mt-2 border-t border-divider pt-2">
-              <div className="mb-1.5 flex items-center justify-between px-1">
-                <span className="text-[11px] text-muted-foreground">Finished</span>
-                <Badge variant="secondary">{finished.length}</Badge>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {finished.map((task) => (
-                  <TaskCardButton
-                    key={task.taskId}
-                    task={task}
-                    selected={task.taskId === props.selectedTaskId}
-                    onSelect={() => props.onSelectTask(task.taskId)}
+              <button
+                type="button"
+                className="mb-1.5 flex w-full items-center justify-between rounded-[var(--radius-sm)] px-1 py-0.5 text-left outline-none transition-colors hover:bg-hover focus-visible:bg-hover"
+                aria-expanded={finishedOpen}
+                onClick={() => setFinishedOpen((open) => !open)}
+              >
+                <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <ChevronRight
+                    className={`size-3 transition-transform ${finishedOpen ? "rotate-90" : ""}`}
                   />
-                ))}
-              </div>
+                  Finished
+                </span>
+                <Badge variant="secondary">{finished.length}</Badge>
+              </button>
+              {finishedOpen ? (
+                <div className="flex flex-col gap-1.5">
+                  {finished.map((task) => (
+                    <TaskCardButton
+                      key={task.taskId}
+                      task={task}
+                      selected={task.taskId === props.selectedTaskId}
+                      onSelect={() => props.onSelectTask(task.taskId)}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </div>
           ) : null}
           {props.state.taskCards.length === 0 ? (
@@ -238,21 +256,23 @@ function TaskCardButton(props: { task: TaskCard; selected: boolean; onSelect: ()
   return (
     <button
       type="button"
-      className={`rounded-[var(--radius-lg)] border bg-card p-2.5 text-left text-[13px] outline-none transition-[background-color,border-color,transform] active:translate-y-px focus-visible:border-ring ${
+      className={`rounded-[var(--radius-lg)] border bg-card p-2.5 text-left text-[13px] outline-none transition-[background-color,border-color,transform,box-shadow] active:translate-y-px focus-visible:border-ring ${
         props.selected
-          ? "border-[var(--accent-dim)] bg-[var(--accent-soft)]"
+          ? "border-[var(--accent-dim)] bg-[var(--accent-soft)] shadow-[inset_0_0_0_1px_var(--accent-dim)]"
           : "hover:border-ring/25 hover:bg-hover"
       }`}
       onClick={props.onSelect}
     >
       <div className="mb-1.5 flex items-start justify-between gap-2">
-        <span className="truncate font-mono text-[11px] text-muted-foreground">
-          {props.task.taskId}
+        <span className="truncate font-mono text-[11px] text-muted-foreground" title={props.task.taskId}>
+          {props.task.taskId.length > 22
+            ? `${props.task.taskId.slice(0, 20)}…`
+            : props.task.taskId}
         </span>
         <TaskStatusBadge task={props.task} />
       </div>
-      <p className="line-clamp-2 text-[13px] leading-5 text-muted-foreground">
-        {props.task.request ?? props.task.nextAction.type}
+      <p className="line-clamp-2 text-[13px] leading-5 text-foreground/90">
+        {taskRequestPreview(props.task.request ?? props.task.nextAction.type, 160)}
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <Badge variant={nextActionBadgeVariant(props.task)}>{nextActionLabel(props.task)}</Badge>

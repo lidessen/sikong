@@ -152,6 +152,13 @@ export interface ClientState {
   settings: SikongSettings;
   settingsOptions?: SikongSettingsOptions;
   scheduler?: SchedulerStatus;
+  diagnostics?: ClientDiagnostics;
+}
+
+export interface ClientDiagnostics {
+  clientApi: { ok: boolean; detail?: string };
+  daemon?: SchedulerStatus;
+  model?: { ok: boolean; detail?: string };
 }
 
 export interface SchedulerStatus {
@@ -488,6 +495,21 @@ export interface ClientMessage {
 
 export type ClientTurnProgressStatus = "pending" | "running" | "done";
 
+export type ClientTurnActivityKind = "status" | "thinking" | "text" | "tool" | "usage" | "error";
+
+export type ClientTurnActivityStatus = "running" | "done" | "error";
+
+export interface ClientTurnActivity {
+  id: string;
+  at: string;
+  phase: "work" | "settlement";
+  kind: ClientTurnActivityKind;
+  status: ClientTurnActivityStatus;
+  title: string;
+  detail?: string;
+  callId?: string;
+}
+
 export interface ClientTurnProgressSubstep {
   label: string;
   status: ClientTurnProgressStatus;
@@ -506,6 +528,7 @@ export interface ClientTurnProgress {
   detail: string;
   startedAt: string;
   elapsedMs: number;
+  activities: ClientTurnActivity[];
   phases: ClientTurnProgressPhase[];
 }
 
@@ -519,6 +542,7 @@ export type TurnStreamEvent =
       startedAt: string;
       phaseId: ClientTurnProgressPhaseId;
       detail?: string;
+      resumed?: boolean;
     }
   | {
       type: "turn.progress";
@@ -526,6 +550,13 @@ export type TurnStreamEvent =
       segmentId: string;
       phaseId: ClientTurnProgressPhaseId;
       detail?: string;
+      at: string;
+    }
+  | {
+      type: "turn.activity";
+      turnId: string;
+      segmentId: string;
+      activity: ClientTurnActivity;
       at: string;
     }
   | {
@@ -541,10 +572,18 @@ export type TurnStreamEvent =
       segmentId: string;
       message: string;
       at: string;
+    }
+  | {
+      type: "turn.cancelled";
+      turnId: string;
+      segmentId: string;
+      reason: "timeout" | "cancelled";
+      at: string;
     };
 
 export type MessagePart =
   | { type: "text"; text: string }
+  | { type: "outcome-card"; outcome: ClientTurnOutcome }
   | { type: "progress-card"; progress: ClientTurnProgress }
   | { type: "task-card"; taskId: string }
   | { type: "work-log-summary"; entries: ClientWorkLogEntry[] }
@@ -594,4 +633,10 @@ export interface TurnResponse {
   context: ClientAgentContextPacket;
   outcome?: ClientTurnOutcome;
   message?: ClientMessage;
+  schedulerWake?: SchedulerWakeResult;
+}
+
+export interface SchedulerWakeResult {
+  ok: boolean;
+  error?: string;
 }

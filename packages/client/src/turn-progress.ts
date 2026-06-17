@@ -1,4 +1,5 @@
 import type {
+  ClientTurnActivity,
   ClientTurnProgress,
   ClientTurnProgressPhase,
   ClientTurnProgressPhaseId,
@@ -11,6 +12,7 @@ interface TurnProgressInput {
   taskId?: string;
   activePhaseId?: ClientTurnProgressPhaseId;
   detail?: string;
+  activities?: ClientTurnActivity[];
   nowMs?: number;
 }
 
@@ -73,6 +75,7 @@ export function buildClientTurnProgress(input: TurnProgressInput): ClientTurnPro
     detail: input.detail ?? progressDetail(input),
     startedAt: input.startedAt,
     elapsedMs,
+    activities: input.activities ?? fallbackActivities(input, elapsedMs),
     phases: PHASES.map((phase, index) => phaseFromTemplate(phase, index, activeIndex, elapsedMs)),
   };
 }
@@ -80,7 +83,29 @@ export function buildClientTurnProgress(input: TurnProgressInput): ClientTurnPro
 function progressDetail(input: TurnProgressInput): string {
   const focus = input.workspaceName ? `Workspace: ${input.workspaceName}` : "No workspace selected";
   const task = input.taskId ? ` · Work item: ${input.taskId}` : "";
-  return `${focus}${task}. Coarse turn progress; detailed execution events stay in workspace context.`;
+  return `${focus}${task}. Showing live agent activity and tool calls for this turn.`;
+}
+
+function fallbackActivities(input: TurnProgressInput, elapsedMs: number): ClientTurnActivity[] {
+  const phaseId = input.activePhaseId ?? PHASES[findActivePhaseIndex(elapsedMs)]?.id ?? "prepare";
+  const titleByPhase: Record<ClientTurnProgressPhaseId, string> = {
+    prepare: "Preparing request",
+    context: "Loading workspace context",
+    agent: "Waiting for model/tool events",
+    workspace: "Applying agent result",
+    refresh: "Refreshing visible state",
+  };
+  return [
+    {
+      id: `fallback-${phaseId}`,
+      at: input.startedAt,
+      phase: phaseId === "agent" ? "work" : "settlement",
+      kind: "status",
+      status: phaseId === "refresh" ? "done" : "running",
+      title: titleByPhase[phaseId],
+      detail: input.detail,
+    },
+  ];
 }
 
 function findActivePhaseIndex(elapsedMs: number): number {

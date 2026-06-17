@@ -1,4 +1,4 @@
-import { configFile, ensureDataDirLayout, readYamlFile, writeYamlFile } from "../data-dir";
+import { configFile, ensureDataDirLayout, readYamlFile, writeYamlFile, withFileLock } from "../data-dir";
 
 export type DefaultAgentRuntimeKey = "clientAgent" | "lead" | "worker";
 
@@ -39,18 +39,20 @@ export class FileSettingsStore implements SettingsStore {
 
   async write(settings: SikongSettings): Promise<SikongSettings> {
     const normalized = normalizeSettings(settings);
-    const existing = await readYamlFile<unknown>(configFile(this.dataDir));
-    const document =
-      existing && typeof existing === "object" && !Array.isArray(existing)
-        ? (existing as Record<string, unknown>)
-        : {};
-    await ensureDataDirLayout(this.dataDir);
-    await writeYamlFile(configFile(this.dataDir), {
-      ...document,
-      version: normalized.version,
-      defaults: normalized.defaults,
+    return await withFileLock(`${configFile(this.dataDir)}.lock`, async () => {
+      const existing = await readYamlFile<unknown>(configFile(this.dataDir));
+      const document =
+        existing && typeof existing === "object" && !Array.isArray(existing)
+          ? (existing as Record<string, unknown>)
+          : {};
+      await ensureDataDirLayout(this.dataDir);
+      await writeYamlFile(configFile(this.dataDir), {
+        ...document,
+        version: normalized.version,
+        defaults: normalized.defaults,
+      });
+      return normalized;
     });
-    return normalized;
   }
 }
 

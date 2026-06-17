@@ -81,17 +81,26 @@ export function SettingsDialog(props: {
   onClose: () => void;
   onSaveSettings: (settings: SikongSettings) => Promise<void>;
 }) {
+  useEffect(() => {
+    if (!props.open) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") props.onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [props.open, props.onClose]);
+
   if (!props.open) return null;
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[1px]"
+      className="fixed inset-0 z-30 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[1px] animate-backdrop-in"
       onClick={props.onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-dialog-title"
-        className="relative flex max-h-[min(760px,calc(100dvh-2rem))] w-full max-w-[640px] flex-col overflow-hidden rounded-[var(--radius-xl)] border border-border bg-background shadow-[var(--shadow-sheet)]"
+        className="relative flex max-h-[min(760px,calc(100dvh-2rem))] w-full max-w-[640px] flex-col overflow-hidden rounded-[var(--radius-xl)] border border-border bg-background shadow-[var(--shadow-sheet)] animate-in"
         onClick={(event) => event.stopPropagation()}
       >
         <Button

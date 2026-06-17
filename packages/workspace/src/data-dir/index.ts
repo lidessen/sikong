@@ -22,3 +22,4 @@ export type { DataDirResolution, DataDirResolutionSource } from "./layout";
 
 export { withFileLock, type FileLockOptions } from "./file-lock";
 export { readYamlFile, writeYamlFile } from "./yaml";
+export { touchSchedulerSignal } from "./scheduler-signal";

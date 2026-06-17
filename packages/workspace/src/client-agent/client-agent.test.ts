@@ -106,7 +106,7 @@ describe("client agent context", () => {
 
       expect(result.context.policy.transcript).toBe("query_with_tools");
       expect(result.run.status).toBe("completed");
-      expect(result.settlement).toEqual({ used: true, fallbackUsed: true });
+      expect(result.settlement).toEqual({ used: false, fallbackUsed: false });
       expect(result.outcome.kind).toBe("report");
       expect(result.outcomeText).toContain("mock response to:");
       expect(result.run.text).toContain("Current user message:");
@@ -157,7 +157,7 @@ describe("client agent context", () => {
       const context = ctx(dir);
       await createWorkspace(context, { id: "sikong", name: "Sikong" });
       const loop = switchLoop([
-        mockLoop({ response: "I inspected the workspace but did not finish." }),
+        mockLoop({ response: "" }),
         mockLoop({
           callTool: {
             name: "finishClientTurn",
@@ -184,6 +184,30 @@ describe("client agent context", () => {
       });
       expect(result.settlementRun).toBeDefined();
       expect(result.settlementRun?.text).toContain("The previous client-agent pass ended without");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("uses work pass text directly when finishClientTurn was omitted", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const result = await runClientAgentTurn({
+        ctx: context,
+        loop: mockLoop({ response: "Workspace is idle. No action needed right now." }),
+        message: "Status update?",
+        focus: { workspaceId: "sikong" },
+      });
+
+      expect(result.settlement).toEqual({ used: false, fallbackUsed: false });
+      expect(result.outcome).toMatchObject({
+        kind: "report",
+        title: "Sikong response",
+        summary: "Workspace is idle. No action needed right now.",
+      });
+      expect(result.settlementRun).toBeUndefined();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

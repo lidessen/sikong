@@ -47,13 +47,15 @@ func RunWithOptions(ctx context.Context, out io.Writer, opts RunOptions) error {
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
 
+	dataDir := defaultSchedulerDataDir()
 	scheduler := NewScheduler(runCtx, SchedulerOptions{
 		Addr:          addr,
+		DataDir:       dataDir,
 		MaxConcurrent: schedulerMaxConcurrent,
 	})
 	api := NewProcessAPI(runCtx, NewProcessSupervisor(ProcessRunnerOptions{
 		MaxConcurrent: processMaxConcurrent,
-	}))
+	}, dataDir))
 	if !opts.DisableScheduler {
 		api.SetScheduler(scheduler)
 		scheduler.Start()

@@ -1,4 +1,7 @@
+import { useState } from "react";
 import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { formatToolName, groupObservationsForDisplay, ObservationView, UsageObservationGroup } from "./observation-view";
 import { actionTypeLabel } from "./task-labels";
 import {
   compactArgs,
@@ -22,6 +25,10 @@ import type {
 
 type ObservationGroup = TaskDetailView["observations"][number];
 
+function truncateId(value: string, max = 20): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
 export function RoundDetail(props: { round: TaskStageRoundView; workers: WorkerRunView[] }) {
   const workers = props.workers.filter((worker) => worker.roundId === props.round.id);
   const completed = workers.filter((worker) => worker.status === "completed").length;
@@ -34,7 +41,9 @@ export function RoundDetail(props: { round: TaskStageRoundView; workers: WorkerR
             <Badge variant={props.round.status === "completed" ? "ok" : "info"}>
               {props.round.status}
             </Badge>
-            <span className="font-mono text-[11px] text-muted-foreground">{props.round.id}</span>
+            <span className="font-mono text-[11px] text-muted-foreground" title={props.round.id}>
+              {truncateId(props.round.id)}
+            </span>
           </div>
           <p className="text-[13px] font-medium">{props.round.title ?? props.round.intent}</p>
           <p className="mt-1 text-[12px] leading-5 text-muted-foreground">{props.round.intent}</p>
@@ -74,31 +83,40 @@ export function RoundDetail(props: { round: TaskStageRoundView; workers: WorkerR
 export function WorkerRunRow(props: { worker: WorkerRunView; rounds: TaskStageRoundView[] }) {
   const round = props.rounds.find((item) => item.id === props.worker.roundId);
   const workUnit = round?.workUnits.find((item) => item.id === props.worker.workUnitId);
+  const title = workUnit?.title ?? props.worker.objective ?? "Worker";
+  const summary =
+    props.worker.result?.summary ?? props.worker.objective ?? "No result yet.";
+  const started = props.worker.startedAt ? formatTime(props.worker.startedAt) : "not started";
+  const finished = props.worker.finishedAt ? formatTime(props.worker.finishedAt) : "running";
+
   return (
-    <div className="grid grid-cols-[130px_120px_minmax(0,1fr)_140px] gap-2 py-2 text-[12px]">
-      <div className="min-w-0">
-        <Badge variant={workerStatusVariant(props.worker.status)}>{props.worker.status}</Badge>
-        <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-          {props.worker.runId}
-        </p>
+    <div className="rounded-[var(--radius-md)] border bg-background p-2.5 text-[12px]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+            <Badge variant={workerStatusVariant(props.worker.status)}>{props.worker.status}</Badge>
+            <span
+              className="font-mono text-[11px] text-muted-foreground"
+              title={props.worker.runId}
+            >
+              {truncateId(props.worker.runId)}
+            </span>
+          </div>
+          <p className="truncate font-medium text-foreground">{title}</p>
+          <p className="mt-1 line-clamp-3 text-[11px] leading-4 text-muted-foreground">{summary}</p>
+        </div>
+        <div className="shrink-0 text-right text-[11px] leading-4 text-muted-foreground tabular-nums">
+          <p>{started}</p>
+          <p className="text-muted-foreground/80">{finished}</p>
+        </div>
       </div>
-      <div className="min-w-0">
-        <p className="truncate text-muted-foreground">{round?.title ?? props.worker.roundId}</p>
-        <p className="truncate font-mono text-[11px] text-muted-foreground">
-          {props.worker.workUnitId}
-        </p>
-      </div>
-      <div className="min-w-0">
-        <p className="truncate font-medium">
-          {workUnit?.title ?? props.worker.objective ?? "Worker"}
-        </p>
-        <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
-          {props.worker.result?.summary ?? props.worker.objective ?? "No result yet."}
-        </p>
-      </div>
-      <div className="min-w-0 text-right text-[11px] text-muted-foreground">
-        <p>{props.worker.startedAt ? formatTime(props.worker.startedAt) : "not started"}</p>
-        <p>{props.worker.finishedAt ? formatTime(props.worker.finishedAt) : "running"}</p>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-t border-border-soft pt-2 text-[11px] text-muted-foreground">
+        <span className="truncate">{round?.title ?? truncateId(props.worker.roundId)}</span>
+        {workUnit ? (
+          <span className="truncate font-mono" title={props.worker.workUnitId}>
+            {truncateId(props.worker.workUnitId, 16)}
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -107,32 +125,10 @@ export function WorkerRunRow(props: { worker: WorkerRunView; rounds: TaskStageRo
 export function ObservationRow(props: { observation: WorkerRunObservation & { runId: string } }) {
   return (
     <div className="rounded-[var(--radius-md)] border bg-background p-2">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Badge variant={observationVariant(props.observation)}>
-            {observationLabel(props.observation)}
-          </Badge>
-          {props.observation.toolName ? (
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
-              {props.observation.toolName}
-            </span>
-          ) : null}
-        </div>
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {formatTime(props.observation.at)}
-        </span>
+      <ObservationHeader observation={props.observation} />
+      <div className="mt-1.5">
+        <ObservationView observation={props.observation} />
       </div>
-      <p className="text-[12px] leading-5 text-muted-foreground">{props.observation.summary}</p>
-      {props.observation.argsSummary ? (
-        <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-          args {props.observation.argsSummary}
-        </p>
-      ) : null}
-      {props.observation.resultSummary ? (
-        <p className="mt-1 line-clamp-2 font-mono text-[11px] leading-4 text-muted-foreground">
-          result {props.observation.resultSummary}
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -147,6 +143,8 @@ export function AgentActivityGroup(props: {
   const recent = [...props.group.observations]
     .sort((a, b) => String(b.at).localeCompare(String(a.at)))
     .slice(0, 8);
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? recent : recent.slice(0, 3);
   const last = recent[0];
 
   return (
@@ -176,40 +174,61 @@ export function AgentActivityGroup(props: {
       </div>
 
       <div className="mt-2.5 flex flex-col gap-1.5">
-        {recent.map((observation) => (
-          <div
-            key={observation.id}
-            className="rounded-[var(--radius-sm)] border border-border-soft bg-surface px-2 py-1.5"
-          >
-            <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <Badge variant={observationVariant(observation)}>
-                  {observationLabel(observation)}
-                </Badge>
-                {observation.toolName ? (
-                  <span className="truncate font-mono text-[11px] text-muted-foreground">
-                    {observation.toolName}
-                  </span>
-                ) : null}
+        {groupObservationsForDisplay(visible).map((item) =>
+          item.kind === "usage_group" ? (
+            <UsageObservationGroup key={item.id} observations={item.observations} />
+          ) : (
+            <div
+              key={item.observation.id}
+              className="rounded-[var(--radius-sm)] border border-border-soft bg-surface px-2 py-1.5"
+            >
+              <ObservationHeader observation={item.observation} />
+              <div className="mt-1.5">
+                <ObservationView observation={item.observation} />
               </div>
-              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                {formatTime(observation.at)}
-              </span>
             </div>
-            <p className="text-[12px] leading-5 text-foreground/90">{observation.summary}</p>
-            {observation.argsSummary ? (
-              <p className="mt-1 line-clamp-2 font-mono text-[11px] leading-4 text-muted-foreground">
-                args {observation.argsSummary}
-              </p>
-            ) : null}
-            {observation.resultSummary ? (
-              <p className="mt-1 line-clamp-2 font-mono text-[11px] leading-4 text-muted-foreground">
-                result {observation.resultSummary}
-              </p>
-            ) : null}
-          </div>
-        ))}
+          ),
+        )}
+        {recent.length > 3 ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 self-start px-2 text-[11px] text-muted-foreground"
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "Show less" : `Show ${recent.length - 3} more`}
+          </Button>
+        ) : null}
       </div>
+    </div>
+  );
+}
+
+function ObservationHeader(props: { observation: WorkerRunObservation }) {
+  const toolLabel =
+    props.observation.kind === "tool_call" && props.observation.toolName
+      ? formatToolName(props.observation.toolName)
+      : undefined;
+
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Badge variant={observationVariant(props.observation)}>
+          {observationLabel(props.observation)}
+        </Badge>
+        {toolLabel ? (
+          <span
+            className="truncate text-[12px] font-medium text-foreground"
+            title={props.observation.toolName}
+          >
+            {toolLabel}
+          </span>
+        ) : null}
+      </div>
+      <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
+        {formatTime(props.observation.at)}
+      </span>
     </div>
   );
 }
