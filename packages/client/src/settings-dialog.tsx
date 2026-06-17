@@ -132,11 +132,12 @@ function SettingsForm(props: {
   const [draft, setDraft] = useState<SikongSettings>(props.settings);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(props.settings);
+  const dirty = !editableSettingsEqual(draft, props.settings);
 
   useEffect(() => {
+    if (dirty) return;
     setDraft(props.settings);
-  }, [props.settings]);
+  }, [dirty, props.settings]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -352,6 +353,17 @@ function normalizeDraftDefault(
     backend,
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
+  };
+}
+
+function editableSettingsEqual(left: SikongSettings, right: SikongSettings): boolean {
+  return JSON.stringify(editableSettings(left)) === JSON.stringify(editableSettings(right));
+}
+
+function editableSettings(settings: SikongSettings): Pick<SikongSettings, "version" | "defaults"> {
+  return {
+    version: settings.version,
+    defaults: settings.defaults,
   };
 }
 
