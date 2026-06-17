@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseProductOptionsJSON(t *testing.T) {
@@ -118,9 +119,11 @@ func TestResolveLogPathsUsesStateAndFallback(t *testing.T) {
 func TestParseAndFormatLogLine(t *testing.T) {
 	t.Parallel()
 
-	entry := parseLogLine("ui", "2026-06-17T04:05:06+08:00 @sikong/client api: sikong client api listening on http://127.0.0.1:8776")
+	localTime := time.Date(2026, 6, 17, 4, 5, 6, 0, time.Local)
+	timestamp := localTime.Format(time.RFC3339)
+	entry := parseLogLine("ui", timestamp+" @sikong/client api: sikong client api listening on http://127.0.0.1:8776")
 	if entry.Source != "ui" ||
-		entry.Time != "2026-06-17T04:05:06+08:00" ||
+		entry.Time != timestamp ||
 		entry.Level != "INFO" ||
 		entry.Component != "client api" {
 		t.Fatalf("entry = %#v", entry)
