@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -54,7 +55,7 @@ func TestFormatProductOutputIsHumanReadable(t *testing.T) {
 func TestParseLogsOptions(t *testing.T) {
 	t.Parallel()
 
-	opts, err := parseLogsOptions([]string{"--ui", "--lines", "50", "--follow"})
+	opts, err := parseLogsOptions([]string{"--ui", "--lines", "50", "--follow", "--raw"})
 	if err != nil {
 		t.Fatalf("parseLogsOptions returned error: %v", err)
 	}
@@ -69,6 +70,9 @@ func TestParseLogsOptions(t *testing.T) {
 	}
 	if !opts.follow {
 		t.Fatal("follow = false")
+	}
+	if !opts.raw {
+		t.Fatal("raw = false")
 	}
 }
 
@@ -108,5 +112,68 @@ func TestResolveLogPathsUsesStateAndFallback(t *testing.T) {
 	}
 	if paths[1].Name != "ui" || paths[1].Path != "/tmp/sikong-ui.log" {
 		t.Fatalf("ui path = %#v", paths[1])
+	}
+}
+
+func TestParseAndFormatLogLine(t *testing.T) {
+	t.Parallel()
+
+	entry := parseLogLine("ui", "2026-06-17T04:05:06+08:00 @sikong/client api: sikong client api listening on http://127.0.0.1:8776")
+	if entry.Source != "ui" ||
+		entry.Time != "2026-06-17T04:05:06+08:00" ||
+		entry.Level != "INFO" ||
+		entry.Component != "client api" {
+		t.Fatalf("entry = %#v", entry)
+	}
+	formatted := formatLogLine(entry)
+	if !strings.Contains(formatted, "04:05:06") ||
+		!strings.Contains(formatted, "ui") ||
+		!strings.Contains(formatted, "INFO") ||
+		!strings.Contains(formatted, "client api") ||
+		!strings.Contains(formatted, "sikong client api listening") {
+		t.Fatalf("formatted = %q", formatted)
+	}
+
+	failed := parseLogLine("ui", "@sikong/client api: Error: Failed to start server")
+	if failed.Level != "ERROR" {
+		t.Fatalf("failed level = %q", failed.Level)
+	}
+
+	command := parseLogLine("ui", "$ go run ./cmd/sikong ui --no-build")
+	if command.Level != "CMD" || command.Component != "shell" {
+		t.Fatalf("command = %#v", command)
+	}
+	if !strings.HasPrefix(formatLogLine(command), "--:--:--") {
+		t.Fatalf("untimed command formatted = %q", formatLogLine(command))
+	}
+}
+
+func TestTimestampedLogWriterPrefixesLines(t *testing.T) {
+	t.Parallel()
+
+	file, err := os.CreateTemp(t.TempDir(), "log-*.txt")
+	if err != nil {
+		t.Fatalf("CreateTemp returned error: %v", err)
+	}
+	defer file.Close()
+	sink := &timestampedLogSink{file: file}
+	writer := &timestampedLogWriter{sink: sink}
+	if _, err := writer.Write([]byte("first\nsecond")); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	writer.Flush()
+	data, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines = %#v", lines)
+	}
+	for _, line := range lines {
+		timestamp, rest := splitLogTimestamp(line)
+		if timestamp == "" || rest == "" {
+			t.Fatalf("line missing timestamp = %q", line)
+		}
 	}
 }

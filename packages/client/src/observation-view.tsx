@@ -71,9 +71,10 @@ export function UsageObservationGroup(props: { observations: WorkerRunObservatio
     input: observation.usage?.inputTokens,
     output: observation.usage?.outputTokens,
   }));
-  const totalTokens = snapshots.reduce((sum, item) => sum + item.total, 0);
-  const latest = snapshots[0];
-  const earliest = snapshots.at(-1);
+  const uniqueSnapshots = uniqueUsageSnapshots(snapshots);
+  const totalTokens = Math.max(...snapshots.map((item) => item.total), 0);
+  const latest = snapshots.at(-1);
+  const earliest = snapshots[0];
   const multi = snapshots.length > 1;
 
   return (
@@ -86,12 +87,12 @@ export function UsageObservationGroup(props: { observations: WorkerRunObservatio
           </span>
           <span className="font-mono text-[12px] font-medium tabular-nums text-foreground">
             {formatTokenCount(totalTokens)}
-            {multi ? " total" : ""}
+            {multi ? " current" : ""}
           </span>
         </div>
         {multi ? (
           <div className="mt-1 flex flex-wrap gap-1">
-            {snapshots.map((snapshot) => (
+            {uniqueSnapshots.map((snapshot) => (
               <span
                 key={snapshot.id}
                 className="inline-flex items-center gap-1 rounded-[var(--radius-sm)] bg-muted/80 px-1.5 py-px font-mono text-[10px] tabular-nums text-muted-foreground"
@@ -135,8 +136,12 @@ export function UsageObservationGroup(props: { observations: WorkerRunObservatio
 function ToolCallBody(props: { observation: WorkerRunObservation }) {
   const args = parseJsonRecord(props.observation.argsSummary);
   const result = parseJsonRecord(props.observation.resultSummary);
-  const reportFromArgs = stringField(args, "report") ?? extractReportFromBrokenJson(props.observation.argsSummary);
-  const showSummary = !isRedundantToolSummary(props.observation.summary, props.observation.toolName);
+  const reportFromArgs =
+    stringField(args, "report") ?? extractReportFromBrokenJson(props.observation.argsSummary);
+  const showSummary = !isRedundantToolSummary(
+    props.observation.summary,
+    props.observation.toolName,
+  );
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -185,6 +190,18 @@ function ToolCallBody(props: { observation: WorkerRunObservation }) {
   );
 }
 
+function uniqueUsageSnapshots<T extends { total: number; input?: number; output?: number }>(
+  snapshots: T[],
+): T[] {
+  const seen = new Set<string>();
+  return snapshots.filter((snapshot) => {
+    const key = `${snapshot.total}:${snapshot.input ?? ""}:${snapshot.output ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function RoundEndBody(props: { summary: string }) {
   const split = splitRoundEndSummary(props.summary);
   if (!split) {
@@ -212,11 +229,7 @@ function ObservationMarkdown(props: { text: string }) {
   return <p className="text-[12px] leading-5 text-foreground/90">{props.text}</p>;
 }
 
-function JsonFields(props: {
-  record: Record<string, unknown>;
-  label: string;
-  omit?: Set<string>;
-}) {
+function JsonFields(props: { record: Record<string, unknown>; label: string; omit?: Set<string> }) {
   const entries = Object.entries(props.record).filter(([key]) => !props.omit?.has(key));
   if (entries.length === 0) return null;
   return (

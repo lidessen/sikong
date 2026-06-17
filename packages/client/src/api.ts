@@ -50,7 +50,9 @@ export async function getTaskDetail(input: {
   return await request<TaskDetailView>(`/api/task-detail?${query.toString()}`);
 }
 
-export async function getSettings(): Promise<SikongSettings & { options?: SikongSettings["options"] }> {
+export async function getSettings(): Promise<
+  SikongSettings & { options?: SikongSettings["options"] }
+> {
   return await request("/api/settings");
 }
 

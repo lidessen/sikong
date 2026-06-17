@@ -1,7 +1,4 @@
-import {
-  createDefaultRuntimeAssemblyRegistry,
-  type DefaultAgentRuntime,
-} from "@sikong/workspace";
+import { createDefaultRuntimeAssemblyRegistry, type DefaultAgentRuntime } from "@sikong/workspace";
 import type { AgentLoop } from "agent-loop";
 
 interface PooledRuntime {
@@ -33,9 +30,7 @@ async function disposePooled(): Promise<void> {
   await loop.dispose?.().catch(() => {});
 }
 
-export async function borrowClientAgentLoop(
-  runtime: DefaultAgentRuntime,
-): Promise<AgentLoop> {
+export async function borrowClientAgentLoop(runtime: DefaultAgentRuntime): Promise<AgentLoop> {
   const key = runtimeKey(runtime);
   if (pooled?.key === key) return pooled.loop;
 

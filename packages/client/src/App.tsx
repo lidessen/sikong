@@ -391,7 +391,9 @@ export function App() {
       if (!cancelledByEvent) {
         setMessages((items) =>
           items.map((item) =>
-            item.id === pendingMessageId ? createTextMessage("system", "Turn was cancelled.") : item,
+            item.id === pendingMessageId
+              ? createTextMessage("system", "Turn was cancelled.")
+              : item,
           ),
         );
       }
@@ -551,7 +553,10 @@ export function App() {
                     </div>
                     <p className="truncate text-[15px] font-semibold">
                       {mainView === "task" && selectedTask
-                        ? taskRequestPreview(selectedTask.request ?? selectedTask.nextAction.type, 48)
+                        ? taskRequestPreview(
+                            selectedTask.request ?? selectedTask.nextAction.type,
+                            48,
+                          )
                         : (selectedWorkspace?.name ?? "No workspace selected")}
                     </p>
                     {mainView !== "task" ? (
@@ -621,7 +626,10 @@ export function App() {
 
             {error ? (
               <div className="mx-auto flex max-w-[840px] items-start gap-2 px-4 pb-2">
-                <Badge variant="destructive" className="h-auto min-h-[18px] max-w-full py-1 whitespace-normal">
+                <Badge
+                  variant="destructive"
+                  className="h-auto min-h-[18px] max-w-full py-1 whitespace-normal"
+                >
                   {error}
                 </Badge>
                 <Button

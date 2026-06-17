@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type React from "react";
 import { Badge } from "./components/ui/badge";
 
@@ -12,6 +12,14 @@ export function DetailSection(props: {
 }) {
   const hasContent = props.count === undefined || props.count > 0;
   const [open, setOpen] = useState(props.defaultOpen ?? hasContent);
+  const hadContent = useRef(hasContent);
+
+  useEffect(() => {
+    if (!hadContent.current && hasContent) {
+      setOpen(props.defaultOpen ?? true);
+    }
+    hadContent.current = hasContent;
+  }, [hasContent, props.defaultOpen]);
 
   if (!hasContent) {
     return (

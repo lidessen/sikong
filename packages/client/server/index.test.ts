@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -128,6 +128,13 @@ describe("Turn cancellation via AbortSignal", () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "sikong-client-api-"));
     __testSetDataDir(tempDir);
+  });
+
+  afterEach(async () => {
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+      tempDir = "";
+    }
   });
 
   test("runTurnWorkflow with already-aborted signal returns cancelled status", async () => {

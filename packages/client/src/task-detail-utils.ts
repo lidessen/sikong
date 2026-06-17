@@ -54,7 +54,10 @@ export function observationVariant(observation: WorkerRunObservation): ConsoleBa
 }
 
 export function observationLabel(observation: WorkerRunObservation): string {
-  if (observation.kind === "tool_call") return observation.status ?? "tool";
+  if (observation.kind === "tool_call") return "tool";
+  if (observation.kind === "thinking") return "think";
+  if (observation.kind === "text") return "text";
+  if (observation.kind === "usage") return "tokens";
   if (observation.kind === "round_start") return "round start";
   if (observation.kind === "round_end") return "round end";
   return observation.kind.replaceAll("_", " ");

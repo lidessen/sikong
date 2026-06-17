@@ -28,6 +28,7 @@ import type {
   ClientTurnActivityStatus,
   ClientTurnProgress,
   ClientTurnProgressPhaseId,
+  ClientTurnProgressStatus,
   ClientWorkLogEntry,
   MessagePart,
   SikongUIAction,
@@ -193,30 +194,82 @@ function TurnProgressCard(props: { progress: ClientTurnProgress }) {
       ...(activePhaseId ? { activePhaseId: activePhaseId as ClientTurnProgressPhaseId } : {}),
       nowMs,
     });
-  }, [nowMs, props.progress.activities, props.progress.detail, props.progress.phases, props.progress.startedAt]);
+  }, [
+    nowMs,
+    props.progress.activities,
+    props.progress.detail,
+    props.progress.phases,
+    props.progress.startedAt,
+  ]);
   const activities = progress.activities.slice(-18);
+  const currentPhase =
+    progress.phases.find((phase) => phase.status === "running") ??
+    progress.phases.findLast((phase) => phase.status === "done") ??
+    progress.phases[0];
+  const latestActivity = activities.at(-1);
   return (
     <div className="min-w-0">
       <div className="mb-2 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="flex items-center gap-2 text-[13px] font-medium text-foreground">
             <Loader2 className="animate-spin text-info" data-icon="inline-start" />
-            Agent activity
+            Client Agent is working
           </p>
-          <p className="mt-1 text-[12px] leading-5 text-muted-foreground">{progress.detail}</p>
+          <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+            {currentPhase?.detail ?? progress.detail}
+          </p>
         </div>
         <Badge variant="info">{formatElapsed(progress.elapsedMs)}</Badge>
       </div>
 
-      <div className="rounded-[var(--radius-md)] border border-border-soft bg-background/55">
-        {activities.map((activity, index) => (
-          <AgentActivityRow
-            key={activity.id}
-            activity={activity}
-            first={index === 0}
-            latest={index === activities.length - 1}
-          />
-        ))}
+      <div className="rounded-[var(--radius-md)] border border-border-soft bg-background/55 p-2.5">
+        <div className="grid gap-1.5 sm:grid-cols-5">
+          {progress.phases.map((phase) => (
+            <div
+              key={phase.id}
+              className={`rounded-[var(--radius-sm)] border px-2 py-1.5 ${
+                phase.status === "running"
+                  ? "border-info/35 bg-[var(--info-soft)]"
+                  : "border-border-soft bg-surface/70"
+              }`}
+            >
+              <div className="mb-1 flex items-center justify-between gap-1">
+                <span className="truncate text-[11px] font-medium">{phase.title}</span>
+                <Badge variant={activityBadgeVariant(phase.status)}>{phase.status}</Badge>
+              </div>
+              <p className="line-clamp-2 text-[10px] leading-4 text-muted-foreground">
+                {phase.substeps.find((step) => step.status === "running")?.label ??
+                  phase.substeps.at(-1)?.label}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-2 rounded-[var(--radius-sm)] border border-border-soft bg-background/60 px-2 py-1.5 text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground">{currentPhase?.title ?? "Working"}</span>
+          {latestActivity ? (
+            <>
+              <span> · Latest: </span>
+              <span className="font-mono">{latestActivity.title}</span>
+            </>
+          ) : null}
+        </div>
+
+        <details className="group mt-2">
+          <summary className="cursor-pointer list-none rounded-[var(--radius-sm)] px-1 py-1 text-[11px] text-muted-foreground marker:content-none hover:text-foreground [&::-webkit-details-marker]:hidden">
+            Agent/tool details · {activities.length} events
+          </summary>
+          <div className="mt-1.5 rounded-[var(--radius-md)] border border-border-soft bg-background/55">
+            {activities.map((activity, index) => (
+              <AgentActivityRow
+                key={activity.id}
+                activity={activity}
+                first={index === 0}
+                latest={index === activities.length - 1}
+              />
+            ))}
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -276,7 +329,9 @@ function ActivityIcon(props: { kind: ClientTurnActivityKind; status: ClientTurnA
   return <CircleDot className={className} />;
 }
 
-function activityBadgeVariant(status: ClientTurnActivityStatus): ConsoleBadgeVariant {
+function activityBadgeVariant(
+  status: ClientTurnActivityStatus | ClientTurnProgressStatus,
+): ConsoleBadgeVariant {
   if (status === "done") return "ok";
   if (status === "running") return "info";
   if (status === "error") return "err";

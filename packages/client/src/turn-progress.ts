@@ -27,38 +27,38 @@ interface TurnProgressPhaseTemplate {
 const PHASES: TurnProgressPhaseTemplate[] = [
   {
     id: "prepare",
-    title: "Prepare turn",
-    detail: "Capture the request and current UI focus.",
+    title: "Understand request",
+    detail: "Read your instruction and decide what kind of response or action is needed.",
     startsAtMs: 0,
-    substeps: ["Record user message", "Attach focused workspace", "Queue client turn"],
+    substeps: ["Record request", "Identify intent", "Prepare work context"],
   },
   {
     id: "context",
-    title: "Load context",
-    detail: "Read the workspace, saved notes, and runtime settings.",
+    title: "Check work state",
+    detail: "Review current work, decisions, and recent task state before answering.",
     startsAtMs: 1200,
-    substeps: ["Read saved notes", "Read workspace summaries", "Apply runtime settings"],
+    substeps: ["Read saved notes", "Check active work", "Review recent results"],
   },
   {
     id: "agent",
-    title: "Run client agent",
-    detail: "Send the focused context packet through the model/tool loop.",
+    title: "Prepare answer",
+    detail: "Ask the Client Agent to produce the next useful answer or action.",
     startsAtMs: 3500,
-    substeps: ["Send context packet", "Run model/tool loop", "Collect assistant result"],
+    substeps: ["Reason over request", "Draft response", "Collect result"],
   },
   {
     id: "workspace",
-    title: "Update workspace",
-    detail: "Persist durable changes and start newly created work when needed.",
+    title: "Update work state",
+    detail: "Persist any requested changes and start or update work items when needed.",
     startsAtMs: 12000,
-    substeps: ["Persist workspace changes", "Start new work items", "Summarize results"],
+    substeps: ["Persist changes", "Queue work if needed", "Summarize result"],
   },
   {
     id: "refresh",
-    title: "Refresh UI",
-    detail: "Reload the visible workspace projection before showing the final reply.",
+    title: "Refresh dashboard",
+    detail: "Reload the visible work state before showing the final reply.",
     startsAtMs: 24000,
-    substeps: ["Refresh work items", "Refresh saved notes", "Replace progress card"],
+    substeps: ["Refresh work items", "Refresh notes", "Show final reply"],
   },
 ];
 
@@ -81,19 +81,19 @@ export function buildClientTurnProgress(input: TurnProgressInput): ClientTurnPro
 }
 
 function progressDetail(input: TurnProgressInput): string {
-  const focus = input.workspaceName ? `Workspace: ${input.workspaceName}` : "No workspace selected";
-  const task = input.taskId ? ` · Work item: ${input.taskId}` : "";
-  return `${focus}${task}. Showing live agent activity and tool calls for this turn.`;
+  return input.taskId
+    ? "Sikong is checking the selected work item and preparing the next useful answer."
+    : "Sikong is checking the overall work state and preparing the next useful answer.";
 }
 
 function fallbackActivities(input: TurnProgressInput, elapsedMs: number): ClientTurnActivity[] {
   const phaseId = input.activePhaseId ?? PHASES[findActivePhaseIndex(elapsedMs)]?.id ?? "prepare";
   const titleByPhase: Record<ClientTurnProgressPhaseId, string> = {
     prepare: "Preparing request",
-    context: "Loading workspace context",
-    agent: "Waiting for model/tool events",
-    workspace: "Applying agent result",
-    refresh: "Refreshing visible state",
+    context: "Checking work state",
+    agent: "Preparing answer",
+    workspace: "Updating work state",
+    refresh: "Refreshing dashboard",
   };
   return [
     {

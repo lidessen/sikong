@@ -1,4 +1,10 @@
-import { configFile, ensureDataDirLayout, readYamlFile, writeYamlFile, withFileLock } from "../data-dir";
+import {
+  configFile,
+  ensureDataDirLayout,
+  readYamlFile,
+  writeYamlFile,
+  withFileLock,
+} from "../data-dir";
 
 export type DefaultAgentRuntimeKey = "clientAgent" | "lead" | "worker";
 

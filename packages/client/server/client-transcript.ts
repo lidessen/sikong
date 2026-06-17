@@ -27,10 +27,7 @@ export async function readTranscript(transcriptPath: string): Promise<ClientMess
   }
 }
 
-export async function withTranscriptLock<T>(
-  lockPath: string,
-  fn: () => Promise<T>,
-): Promise<T> {
+export async function withTranscriptLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
   return await withFileLock(lockPath, fn);
 }
 

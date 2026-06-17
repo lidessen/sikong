@@ -151,11 +151,21 @@ if (import.meta.main) {
           const input = parseTurnRequest(body);
           return startTurnStreamResponse(input, request.signal);
         }
-        if (request.method === "GET" && url.pathname.startsWith("/api/turn/") && url.pathname.endsWith("/stream")) {
+        if (
+          request.method === "GET" &&
+          url.pathname.startsWith("/api/turn/") &&
+          url.pathname.endsWith("/stream")
+        ) {
           server.timeout(request, 0);
-          const turnId = decodeURIComponent(url.pathname.slice("/api/turn/".length, -"/stream".length));
+          const turnId = decodeURIComponent(
+            url.pathname.slice("/api/turn/".length, -"/stream".length),
+          );
           const after = Number(url.searchParams.get("after") ?? "-1");
-          return resumeTurnStreamResponse(turnId, Number.isFinite(after) ? after : -1, request.signal);
+          return resumeTurnStreamResponse(
+            turnId,
+            Number.isFinite(after) ? after : -1,
+            request.signal,
+          );
         }
         if (request.method === "POST" && url.pathname === "/api/turn") {
           server.timeout(request, 0);
@@ -165,11 +175,9 @@ if (import.meta.main) {
           const timeoutId = setTimeout(() => {
             if (!abortController.signal.aborted) abortController.abort("timeout");
           }, turnTimeoutMs);
-          request.signal.addEventListener(
-            "abort",
-            () => abortController.abort("cancelled"),
-            { once: true },
-          );
+          request.signal.addEventListener("abort", () => abortController.abort("cancelled"), {
+            once: true,
+          });
           try {
             return json(await runTurnWorkflow(input, undefined, abortController.signal));
           } finally {
@@ -394,7 +402,11 @@ function startTurnStreamResponse(input: TurnRequestInput, signal: AbortSignal): 
   });
 }
 
-function resumeTurnStreamResponse(turnId: string, afterIndex: number, signal: AbortSignal): Response {
+function resumeTurnStreamResponse(
+  turnId: string,
+  afterIndex: number,
+  signal: AbortSignal,
+): Response {
   const session = resumeTurnSession(turnId);
   if (!session) {
     return json({ message: `turn ${turnId} is not active or resumable` }, 404);
@@ -589,7 +601,10 @@ function assistantMessageFromTurn(
       parts: [{ type: "outcome-card", outcome: result.outcome }],
     };
   }
-  return textMessage("assistant", fallbackText || `Turn finished with status ${result.run.status}.`);
+  return textMessage(
+    "assistant",
+    fallbackText || `Turn finished with status ${result.run.status}.`,
+  );
 }
 
 async function settingsResponse(settings: SikongSettings) {

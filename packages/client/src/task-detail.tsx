@@ -1,33 +1,25 @@
 import {
-  Bot,
   CheckCircle2,
-  CircleDot,
-  Clock3,
   Copy,
   FileText,
-  GitBranch,
-  Hammer,
-  Layers3,
   Loader2,
   MessageSquare,
   PlayCircle,
-  Wrench,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
-import {
-  CollapsibleMarkdown,
-  DetailSection,
-  EmptyInline,
-  FactRow,
-  Metric,
-} from "./task-detail-primitives";
+import { DetailSection, EmptyInline, FactRow } from "./task-detail-primitives";
 import { MarkdownMessage } from "./markdown-message";
-import { taskRequestTitle } from "./task-request";
+import { taskRequestPreview, taskRequestTitle } from "./task-request";
 import { LeadDecisionPendingCard } from "./outcome-card";
-import { AgentActivityGroup, RoundDetail, RuntimeRunRow, WorkerRunRow } from "./task-detail-rows";
+import {
+  RuntimeRunRow,
+  StageRoundCard,
+  WorkUnitExecutionDrawer,
+  type WorkUnitExecutionTarget,
+} from "./task-detail-rows";
 import { TaskTimeline } from "./task-timeline";
 import { stageBadgeVariant, stageLabel, taskStageSummary } from "./task-detail-utils";
 import {
@@ -36,7 +28,14 @@ import {
   statusBadgeVariant,
   taskPhaseLabel,
 } from "./task-labels";
-import type { SchedulerStatus, TaskCard, TaskDetailView, TaskPlanStageView } from "./types";
+import type {
+  SchedulerStatus,
+  TaskCard,
+  TaskDetailView,
+  TaskPlanStageView,
+  TaskStageRoundView,
+  WorkerRunView,
+} from "./types";
 
 function truncateId(value: string, max = 22): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -71,9 +70,7 @@ function TerminalBanner(props: { task: TaskCard }) {
   return (
     <div
       className={`flex items-start gap-2.5 rounded-[var(--radius-lg)] border px-3 py-2.5 ${
-        accepted
-          ? "border-ok/30 bg-[var(--ok-soft)]/40"
-          : "border-err/30 bg-[var(--err-soft)]/40"
+        accepted ? "border-ok/30 bg-[var(--ok-soft)]/40" : "border-err/30 bg-[var(--err-soft)]/40"
       }`}
     >
       {accepted ? (
@@ -93,6 +90,31 @@ function TerminalBanner(props: { task: TaskCard }) {
   );
 }
 
+function TaskRequestCompact(props: { task: TaskCard }) {
+  if (!props.task.request) {
+    return <h2 className="text-[15px] font-semibold leading-6">{props.task.nextAction.type}</h2>;
+  }
+  return (
+    <details className="group rounded-[var(--radius-md)] border border-border-soft bg-background/70">
+      <summary className="cursor-pointer list-none px-3 py-2 marker:content-none [&::-webkit-details-marker]:hidden">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="min-w-0">
+            <h2 className="sr-only">{taskRequestTitle(props.task.request)}</h2>
+            <p className="text-[12px] font-medium text-foreground">Request</p>
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground group-open:hidden">
+              {taskRequestPreview(props.task.request, 180)}
+            </p>
+          </div>
+          <span className="shrink-0 text-[11px] text-primary group-open:hidden">Show full</span>
+        </div>
+      </summary>
+      <div className="border-t border-border-soft px-3 py-3">
+        <MarkdownMessage text={props.task.request} />
+      </div>
+    </details>
+  );
+}
+
 export function TaskDetailMain(props: {
   task: TaskCard;
   detail: TaskDetailView | null;
@@ -101,6 +123,7 @@ export function TaskDetailMain(props: {
   onClose: () => void;
   onSendMessage?: (text: string) => void;
 }) {
+  const [workUnitDetail, setWorkUnitDetail] = useState<WorkUnitExecutionTarget | null>(null);
   const projection = props.detail?.projection;
   const stages = projection?.plan?.stages ?? [];
   const rounds = Object.values(projection?.stageRounds ?? {}).sort((a, b) =>
@@ -120,6 +143,9 @@ export function TaskDetailMain(props: {
     const lastB = b.observations.at(-1)?.at ?? "";
     return lastB.localeCompare(lastA);
   });
+  const observationGroupsByRunId = new Map(
+    observationGroups.map((group) => [group.runId, group] as const),
+  );
   const round = props.task.activeRound;
   const roundPercent = round
     ? Math.round((round.completedWorkUnits / Math.max(round.workUnits, 1)) * 100)
@@ -143,6 +169,15 @@ export function TaskDetailMain(props: {
           ? "watching"
           : "unavailable";
 
+  useEffect(() => {
+    if (!workUnitDetail) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setWorkUnitDetail(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [workUnitDetail]);
+
   return (
     <div className="mx-auto flex max-w-[1080px] flex-col gap-3">
       <TerminalBanner task={props.task} />
@@ -159,20 +194,22 @@ export function TaskDetailMain(props: {
           ) : null}
         </div>
 
-        {props.task.request ? (
-          <div className="min-w-0">
-            <h2 className="sr-only">{taskRequestTitle(props.task.request)}</h2>
-            <CollapsibleMarkdown title="Request" text={props.task.request}>
-              <MarkdownMessage text={props.task.request} />
-            </CollapsibleMarkdown>
-          </div>
-        ) : (
-          <h2 className="text-[15px] font-semibold leading-6">{props.task.nextAction.type}</h2>
-        )}
+        <TaskRequestCompact task={props.task} />
 
-        <p className="mt-2 text-[12px] leading-5 text-muted-foreground">
-          {nextActionLabel(props.task)} · {currentOperatorLabel(props.task)}
-        </p>
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+          <Badge variant="outline">Owner · {currentOperatorLabel(props.task)}</Badge>
+          <Badge variant="outline">Next · {nextActionLabel(props.task)}</Badge>
+          <Badge variant="outline">
+            Runtime · {props.task.runtimeProcesses.running} running /{" "}
+            {props.task.runtimeProcesses.queued} queued
+          </Badge>
+          <Badge variant="outline">
+            Plan ·{" "}
+            {props.task.plan
+              ? `${props.task.plan.status ?? "draft"} / ${props.task.plan.stageCount} stages`
+              : "none"}
+          </Badge>
+        </div>
 
         {props.task.terminal?.report ? (
           <details className="group mt-3 rounded-[var(--radius-md)] border border-border-soft bg-background/70">
@@ -186,26 +223,7 @@ export function TaskDetailMain(props: {
           </details>
         ) : null}
 
-        <dl className="mt-3 grid grid-cols-2 gap-2 text-xs lg:grid-cols-4">
-          <Metric icon={<Bot />} label="Owner" value={currentOperatorLabel(props.task)} />
-          <Metric
-            icon={<Clock3 />}
-            label="Runtime"
-            value={`${props.task.runtimeProcesses.running} running · ${props.task.runtimeProcesses.queued} queued`}
-          />
-          <Metric
-            icon={<Layers3 />}
-            label="Plan"
-            value={
-              props.task.plan
-                ? `${props.task.plan.status ?? "draft"} · ${props.task.plan.stageCount} stages`
-                : "none"
-            }
-          />
-          <Metric icon={<CircleDot />} label="Next" value={nextActionLabel(props.task)} />
-        </dl>
-
-        <div className="mt-3 rounded-[var(--radius-md)] border border-border bg-background p-2.5">
+        <div className="mt-3 rounded-[var(--radius-md)] border border-border bg-background/75 p-2.5">
           <FactRow label="Scheduler" value={schedulerLabel} />
           <FactRow label="Stage" value={taskStageSummary(props.task, props.detail)} />
           {round ? (
@@ -246,29 +264,7 @@ export function TaskDetailMain(props: {
       <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-3">
           <DetailSection
-            title="Agent activity"
-            icon={<Wrench />}
-            count={observationGroups.length}
-            defaultOpen={observationGroups.length > 0}
-          >
-            {observationGroups.length > 0 ? (
-              <div className="flex flex-col gap-2">
-                {observationGroups.map((group) => (
-                  <AgentActivityGroup
-                    key={group.runId}
-                    group={group}
-                    worker={workers.find((worker) => worker.runId === group.runId)}
-                    rounds={rounds}
-                  />
-                ))}
-              </div>
-            ) : (
-              <EmptyInline text="No live thinking, text, or tool activity has been recorded yet." />
-            )}
-          </DetailSection>
-
-          <DetailSection
-            title="Plan"
+            title="Plan roadmap"
             icon={<FileText />}
             count={stages.length}
             defaultOpen={stages.length > 0}
@@ -276,66 +272,23 @@ export function TaskDetailMain(props: {
             {stages.length > 0 ? (
               <>
                 <PlanStageStepper detail={props.detail} stages={stages} />
-                <div className="mt-3 flex flex-col divide-y divide-divider">
-                {stages.map((stage, index) => (
-                  <div
-                    key={stage.id}
-                    className="grid gap-2 py-2.5 sm:grid-cols-[120px_minmax(0,1fr)]"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Badge variant={stageBadgeVariant(props.detail, stage.id)}>
-                        {stageLabel(props.detail, stage.id, index)}
-                      </Badge>
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-[13px] font-medium">{stage.title}</p>
-                      <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
-                        {stage.objective}
-                      </p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        {stage.acceptance.length} acceptance items
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                <div className="mt-3 flex flex-col gap-3">
+                  {stages.map((stage, index) => (
+                    <PlanStagePanel
+                      key={stage.id}
+                      detail={props.detail}
+                      stage={stage}
+                      index={index}
+                      rounds={rounds.filter((item) => item.stageId === stage.id)}
+                      workers={workers.filter((worker) => worker.stageId === stage.id)}
+                      observationGroups={observationGroupsByRunId}
+                      onOpenWorkUnitDetail={setWorkUnitDetail}
+                    />
+                  ))}
                 </div>
               </>
             ) : (
               <EmptyInline text="No submitted plan yet." />
-            )}
-          </DetailSection>
-
-          <DetailSection
-            title="Rounds"
-            icon={<GitBranch />}
-            count={rounds.length}
-            defaultOpen={rounds.length > 0}
-          >
-            {rounds.length > 0 ? (
-              <div className="flex flex-col gap-2">
-                {rounds.map((item) => (
-                  <RoundDetail key={item.id} round={item} workers={workers} />
-                ))}
-              </div>
-            ) : (
-              <EmptyInline text="No stage rounds planned yet." />
-            )}
-          </DetailSection>
-
-          <DetailSection
-            title="Workers"
-            icon={<Hammer />}
-            count={workers.length}
-            defaultOpen={workers.length > 0}
-          >
-            {workers.length > 0 ? (
-              <div className="flex flex-col gap-2">
-                {workers.map((worker) => (
-                  <WorkerRunRow key={worker.runId} worker={worker} rounds={rounds} />
-                ))}
-              </div>
-            ) : (
-              <EmptyInline text="No worker runs have started." />
             )}
           </DetailSection>
         </div>
@@ -386,14 +339,117 @@ export function TaskDetailMain(props: {
           </DetailSection>
         </div>
       </section>
+      <WorkUnitExecutionDrawer target={workUnitDetail} onClose={() => setWorkUnitDetail(null)} />
     </div>
   );
 }
 
-function PlanStageStepper(props: {
+function PlanStagePanel(props: {
   detail: TaskDetailView | null;
-  stages: TaskPlanStageView[];
+  stage: TaskPlanStageView;
+  index: number;
+  rounds: TaskStageRoundView[];
+  workers: WorkerRunView[];
+  observationGroups: Map<string, TaskDetailView["observations"][number]>;
+  onOpenWorkUnitDetail: (target: WorkUnitExecutionTarget) => void;
 }) {
+  const variant = stageBadgeVariant(props.detail, props.stage.id);
+  const completedWorkers = props.workers.filter((worker) => worker.status === "completed").length;
+  const runningWorkers = props.workers.filter((worker) => worker.status === "running").length;
+  const reviews = Object.values(props.detail?.projection.stageReviews ?? {})
+    .filter((review) => review.stageId === props.stage.id)
+    .sort((a, b) =>
+      String(b.finishedAt ?? b.startedAt ?? "").localeCompare(
+        String(a.finishedAt ?? a.startedAt ?? ""),
+      ),
+    );
+  const latestReview = reviews[0];
+
+  return (
+    <article className="rounded-[var(--radius-lg)] border border-border bg-card/75">
+      <div className="grid gap-3 border-b border-divider px-3 py-3 lg:grid-cols-[140px_minmax(0,1fr)]">
+        <div className="flex items-start gap-2 lg:flex-col lg:gap-1.5">
+          <Badge variant={variant}>{stageLabel(props.detail, props.stage.id, props.index)}</Badge>
+          <span className="font-mono text-[11px] text-muted-foreground" title={props.stage.id}>
+            {truncateId(props.stage.id)}
+          </span>
+        </div>
+        <div className="min-w-0">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <h3 className="truncate text-[14px] font-semibold">{props.stage.title}</h3>
+              <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
+                {props.stage.objective}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-1.5">
+              <Badge variant="outline">{props.rounds.length} rounds</Badge>
+              <Badge
+                variant={runningWorkers > 0 ? "info" : completedWorkers > 0 ? "ok" : "outline"}
+              >
+                {completedWorkers}/{props.workers.length} workers
+              </Badge>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.45fr)]">
+            <div className="rounded-[var(--radius-md)] border border-border-soft bg-background/70 px-2.5 py-2">
+              <p className="text-[11px] font-medium text-muted-foreground">Acceptance</p>
+              <ul className="mt-1 space-y-1 text-[11px] leading-4 text-muted-foreground">
+                {props.stage.acceptance.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="rounded-[var(--radius-md)] border border-border-soft bg-background/70 px-2.5 py-2">
+              <p className="text-[11px] font-medium text-muted-foreground">Review</p>
+              {latestReview ? (
+                <div className="mt-1 space-y-1">
+                  <Badge
+                    variant={
+                      latestReview.status === "accepted"
+                        ? "ok"
+                        : latestReview.status === "rejected"
+                          ? "err"
+                          : "accent"
+                    }
+                  >
+                    {latestReview.status}
+                  </Badge>
+                  {latestReview.report ? (
+                    <p className="line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                      {latestReview.report}
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="mt-1 text-[11px] text-muted-foreground">No stage review yet.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2 px-3 py-3">
+        {props.rounds.length > 0 ? (
+          props.rounds.map((round) => (
+            <StageRoundCard
+              key={round.id}
+              round={round}
+              workers={props.workers}
+              observationGroups={props.observationGroups}
+              onOpenWorkUnitDetail={props.onOpenWorkUnitDetail}
+            />
+          ))
+        ) : (
+          <EmptyInline text="No rounds planned for this stage yet." />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function PlanStageStepper(props: { detail: TaskDetailView | null; stages: TaskPlanStageView[] }) {
   return (
     <div className="flex items-center gap-1 overflow-x-auto pb-1">
       {props.stages.map((stage, index) => {

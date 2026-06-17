@@ -2,11 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  appendTranscriptMessage,
-  readTranscript,
-  transcriptPaths,
-} from "../client-transcript";
+import { appendTranscriptMessage, readTranscript, transcriptPaths } from "../client-transcript";
 
 describe("client transcript locking", () => {
   let dataDir = "";

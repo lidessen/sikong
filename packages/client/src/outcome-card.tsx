@@ -60,7 +60,10 @@ export function TurnOutcomeCard(props: {
         {props.outcome.options?.length ? (
           <ul className="mt-2 space-y-1 border-t border-border-soft pt-2 text-[12px]">
             {props.outcome.options.map((option) => (
-              <li key={option} className="rounded-[var(--radius-sm)] border bg-background px-2 py-1.5">
+              <li
+                key={option}
+                className="rounded-[var(--radius-sm)] border bg-background px-2 py-1.5"
+              >
                 {option}
               </li>
             ))}
@@ -98,10 +101,20 @@ export function TurnOutcomeCard(props: {
       </div>
       {suggestedReply && props.onSendMessage ? (
         <div className="mt-2 flex flex-wrap gap-2 border-t border-border-soft pt-2">
-          <Button type="button" size="sm" variant="outline" onClick={() => props.onSendMessage?.(suggestedReply.accept)}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => props.onSendMessage?.(suggestedReply.accept)}
+          >
             Accept
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => props.onSendMessage?.(suggestedReply.reject)}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => props.onSendMessage?.(suggestedReply.reject)}
+          >
             Reject with reason
           </Button>
         </div>
@@ -208,9 +221,9 @@ export function LeadDecisionPendingCard(props: {
   );
 }
 
-function leadPendingKind(nextActionType: string):
-  | { title: string; detail: string; prompts: { label: string; text: string }[] }
-  | undefined {
+function leadPendingKind(
+  nextActionType: string,
+): { title: string; detail: string; prompts: { label: string; text: string }[] } | undefined {
   if (nextActionType === "start_lead_plan_decision") {
     return {
       title: "Plan review required",
@@ -235,18 +248,14 @@ function leadPendingKind(nextActionType: string):
     return {
       title: "Requirement spec required",
       detail: "Lead needs a requirement spec before planning can continue.",
-      prompts: [
-        { label: "Provide spec", text: "Here is the requirement spec for this task: " },
-      ],
+      prompts: [{ label: "Provide spec", text: "Here is the requirement spec for this task: " }],
     };
   }
   if (nextActionType === "start_lead_round_planning") {
     return {
       title: "Round planning required",
       detail: "Lead needs to plan the next stage round before workers can continue.",
-      prompts: [
-        { label: "Plan round", text: "Plan the next stage round for this task." },
-      ],
+      prompts: [{ label: "Plan round", text: "Plan the next stage round for this task." }],
     };
   }
   return undefined;

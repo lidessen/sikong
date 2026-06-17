@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,6 +39,7 @@ type logsOptions struct {
 	lines         int
 	follow        bool
 	json          bool
+	raw           bool
 }
 
 type managedRuntime struct {
@@ -219,17 +221,27 @@ func runLogs(args []string) error {
 		payload := map[string]any{"ok": true, "data": map[string]any{"logs": paths}}
 		return printJSON(payload)
 	}
-	for index, log := range paths {
-		if index > 0 {
-			fmt.Println()
+	if opts.raw {
+		for index, log := range paths {
+			if index > 0 {
+				fmt.Println()
+			}
+			fmt.Printf("==> %s (%s) <==\n", log.Name, log.Path)
+			if err := printRawLogTail(log.Path, opts.lines); err != nil {
+				fmt.Fprintf(os.Stderr, "could not read %s log: %v\n", log.Name, err)
+			}
 		}
-		fmt.Printf("==> %s (%s) <==\n", log.Name, log.Path)
-		if err := printLogTail(log.Path, opts.lines); err != nil {
-			fmt.Fprintf(os.Stderr, "could not read %s log: %v\n", log.Name, err)
+	} else {
+		fmt.Printf("Sikong logs - last %d lines per source\n", opts.lines)
+		fmt.Println("TIME     SOURCE LEVEL COMPONENT          MESSAGE")
+		for _, log := range paths {
+			if err := printFormattedLogTail(log, opts.lines); err != nil {
+				fmt.Fprintf(os.Stderr, "could not read %s log: %v\n", log.Name, err)
+			}
 		}
 	}
 	if opts.follow {
-		return followLogs(paths)
+		return followLogs(paths, opts.raw)
 	}
 	return nil
 }
@@ -302,6 +314,8 @@ func parseLogsOptions(args []string) (logsOptions, error) {
 			opts.follow = true
 		case arg == "--json":
 			opts.json = true
+		case arg == "--raw":
+			opts.raw = true
 		case arg == "--lines" || arg == "-n":
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("%s requires a value", arg)
@@ -430,14 +444,22 @@ func startManagedProcess(command string, args []string, cwd string, env []string
 	cmd := exec.Command(command, args...)
 	cmd.Dir = cwd
 	cmd.Env = env
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = logFile.Close()
+		return processState{}, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = logFile.Close()
+		return processState{}, err
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return processState{}, err
 	}
-	_ = logFile.Close()
+	copyManagedProcessLogs(cmd, logFile, stdout, stderr)
 	return processState{
 		PID:       cmd.Process.Pid,
 		URL:       url,
@@ -445,6 +467,72 @@ func startManagedProcess(command string, args []string, cwd string, env []string
 		LogPath:   logPath,
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func copyManagedProcessLogs(cmd *exec.Cmd, logFile *os.File, stdout io.Reader, stderr io.Reader) {
+	sink := &timestampedLogSink{file: logFile}
+	var copies sync.WaitGroup
+	copies.Add(2)
+	go func() {
+		defer copies.Done()
+		writer := &timestampedLogWriter{sink: sink}
+		_, _ = io.Copy(writer, stdout)
+		writer.Flush()
+	}()
+	go func() {
+		defer copies.Done()
+		writer := &timestampedLogWriter{sink: sink}
+		_, _ = io.Copy(writer, stderr)
+		writer.Flush()
+	}()
+	go func() {
+		copies.Wait()
+		_ = cmd.Wait()
+		_ = logFile.Close()
+	}()
+}
+
+type timestampedLogSink struct {
+	file *os.File
+	mu   sync.Mutex
+}
+
+func (s *timestampedLogSink) WriteLine(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, _ = fmt.Fprintf(s.file, "%s %s\n", time.Now().UTC().Format(time.RFC3339), text)
+}
+
+type timestampedLogWriter struct {
+	sink   logLineSink
+	buffer []byte
+}
+
+type logLineSink interface {
+	WriteLine(text string)
+}
+
+func (w *timestampedLogWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == '\n' {
+			w.Flush()
+			continue
+		}
+		w.buffer = append(w.buffer, b)
+	}
+	return len(p), nil
+}
+
+func (w *timestampedLogWriter) Flush() {
+	if len(w.buffer) == 0 {
+		return
+	}
+	w.sink.WriteLine(string(w.buffer))
+	w.buffer = w.buffer[:0]
 }
 
 func daemonBaseURL(addr string) string {
@@ -604,7 +692,7 @@ func resolveLogPaths(state sikongState, opts logsOptions) ([]namedLogPath, error
 	return paths, nil
 }
 
-func printLogTail(path string, lines int) error {
+func printRawLogTail(path string, lines int) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -622,6 +710,136 @@ func printLogTail(path string, lines int) error {
 		fmt.Println()
 	}
 	return err
+}
+
+func printFormattedLogTail(log namedLogPath, lines int) error {
+	data, err := os.ReadFile(log.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println(formatLogLine(logLine{Source: log.Name, Level: "WARN", Component: "log", Message: "log file does not exist: " + log.Path}))
+			return nil
+		}
+		return err
+	}
+	if lines > 0 {
+		data = tailLines(data, lines)
+	} else {
+		data = nil
+	}
+	entries := parseLogData(log.Name, data)
+	if len(entries) == 0 {
+		fmt.Println(formatLogLine(logLine{Source: log.Name, Level: "INFO", Component: "log", Message: "no log entries: " + log.Path}))
+		return nil
+	}
+	for _, entry := range entries {
+		fmt.Println(formatLogLine(entry))
+	}
+	return nil
+}
+
+type logLine struct {
+	Source    string
+	Time      string
+	Level     string
+	Component string
+	Message   string
+}
+
+func parseLogData(source string, data []byte) []logLine {
+	lines := bytes.Split(data, []byte{'\n'})
+	entries := make([]logLine, 0, len(lines))
+	for _, raw := range lines {
+		text := strings.TrimSpace(string(raw))
+		if text == "" {
+			continue
+		}
+		entries = append(entries, parseLogLine(source, text))
+	}
+	return entries
+}
+
+func parseLogLine(source string, text string) logLine {
+	timestamp, text := splitLogTimestamp(text)
+	component := source
+	message := text
+	if strings.HasPrefix(text, "$ ") {
+		return logLine{Source: source, Time: timestamp, Level: "CMD", Component: "shell", Message: strings.TrimPrefix(text, "$ ")}
+	}
+	if strings.HasPrefix(text, "@") {
+		if prefix, rest, ok := strings.Cut(text, ":"); ok {
+			component = strings.TrimPrefix(prefix, "@sikong/")
+			message = strings.TrimSpace(rest)
+		}
+	}
+	return logLine{
+		Source:    source,
+		Time:      timestamp,
+		Level:     inferLogLevel(text),
+		Component: component,
+		Message:   message,
+	}
+}
+
+func inferLogLevel(text string) string {
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "error") ||
+		strings.Contains(lower, "failed") ||
+		strings.Contains(lower, "panic") ||
+		strings.Contains(lower, "uncaughtexception") ||
+		strings.Contains(lower, "unhandledrejection"):
+		return "ERROR"
+	case strings.Contains(lower, "warn") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "cancelled") ||
+		strings.Contains(lower, "stopped"):
+		return "WARN"
+	default:
+		return "INFO"
+	}
+}
+
+func formatLogLine(entry logLine) string {
+	return fmt.Sprintf(
+		"%-8s %-6s %-5s %-18s %s",
+		formatLogTime(entry.Time),
+		truncateLogField(entry.Source, 6),
+		truncateLogField(entry.Level, 5),
+		truncateLogField(entry.Component, 18),
+		entry.Message,
+	)
+}
+
+func splitLogTimestamp(text string) (string, string) {
+	candidate, rest, ok := strings.Cut(text, " ")
+	if !ok {
+		return "", text
+	}
+	if _, err := time.Parse(time.RFC3339, candidate); err != nil {
+		return "", text
+	}
+	return candidate, strings.TrimSpace(rest)
+}
+
+func formatLogTime(value string) string {
+	if value == "" {
+		return "--:--:--"
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "--:--:--"
+	}
+	return parsed.Local().Format("15:04:05")
+}
+
+func truncateLogField(value string, width int) string {
+	if len(value) <= width {
+		return value
+	}
+	if width <= 3 {
+		return value[:width]
+	}
+	return value[:width-3] + "..."
 }
 
 func tailLines(data []byte, lines int) []byte {
@@ -643,7 +861,7 @@ func tailLines(data []byte, lines int) []byte {
 	return data
 }
 
-func followLogs(paths []namedLogPath) error {
+func followLogs(paths []namedLogPath, raw bool) error {
 	positions := map[string]int64{}
 	for _, log := range paths {
 		info, err := os.Stat(log.Path)
@@ -654,7 +872,7 @@ func followLogs(paths []namedLogPath) error {
 	for {
 		for _, log := range paths {
 			pos := positions[log.Path]
-			next, err := copyLogFrom(log, pos)
+			next, err := copyLogFrom(log, pos, raw)
 			if err != nil {
 				continue
 			}
@@ -664,7 +882,7 @@ func followLogs(paths []namedLogPath) error {
 	}
 }
 
-func copyLogFrom(log namedLogPath, offset int64) (int64, error) {
+func copyLogFrom(log namedLogPath, offset int64, raw bool) (int64, error) {
 	file, err := os.Open(log.Path)
 	if err != nil {
 		return offset, err
@@ -673,15 +891,47 @@ func copyLogFrom(log namedLogPath, offset int64) (int64, error) {
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return offset, err
 	}
-	wrapped := &prefixedWriter{prefix: []byte("[" + log.Name + "] "), atLineStart: true}
-	if _, err := io.Copy(wrapped, file); err != nil {
-		return offset, err
+	if raw {
+		wrapped := &prefixedWriter{prefix: []byte("[" + log.Name + "] "), atLineStart: true}
+		if _, err := io.Copy(wrapped, file); err != nil {
+			return offset, err
+		}
+	} else {
+		wrapped := &formattedLogWriter{source: log.Name}
+		if _, err := io.Copy(wrapped, file); err != nil {
+			return offset, err
+		}
 	}
 	pos, err := file.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return offset, err
 	}
 	return pos, nil
+}
+
+type formattedLogWriter struct {
+	source string
+	buffer []byte
+}
+
+func (w *formattedLogWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		if b == '\n' {
+			w.flush()
+			continue
+		}
+		w.buffer = append(w.buffer, b)
+	}
+	return len(p), nil
+}
+
+func (w *formattedLogWriter) flush() {
+	text := strings.TrimSpace(string(w.buffer))
+	w.buffer = w.buffer[:0]
+	if text == "" {
+		return
+	}
+	fmt.Println(formatLogLine(parseLogLine(w.source, text)))
 }
 
 type prefixedWriter struct {

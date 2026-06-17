@@ -28,7 +28,12 @@ export function SystemDiagnosticsBar(props: {
 function buildDiagnosticItems(input: {
   diagnostics?: ClientDiagnostics;
   scheduler?: SchedulerStatus;
-}): { label: string; value: string; variant: "ok" | "warn" | "err" | "outline"; detail?: string }[] {
+}): {
+  label: string;
+  value: string;
+  variant: "ok" | "warn" | "err" | "outline";
+  detail?: string;
+}[] {
   const items: {
     label: string;
     value: string;

@@ -264,10 +264,11 @@ function TaskCardButton(props: { task: TaskCard; selected: boolean; onSelect: ()
       onClick={props.onSelect}
     >
       <div className="mb-1.5 flex items-start justify-between gap-2">
-        <span className="truncate font-mono text-[11px] text-muted-foreground" title={props.task.taskId}>
-          {props.task.taskId.length > 22
-            ? `${props.task.taskId.slice(0, 20)}…`
-            : props.task.taskId}
+        <span
+          className="truncate font-mono text-[11px] text-muted-foreground"
+          title={props.task.taskId}
+        >
+          {props.task.taskId.length > 22 ? `${props.task.taskId.slice(0, 20)}…` : props.task.taskId}
         </span>
         <TaskStatusBadge task={props.task} />
       </div>

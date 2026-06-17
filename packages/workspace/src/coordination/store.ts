@@ -1,6 +1,12 @@
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { taskEventsFile, taskEventsLockFile, taskProjectionFile, touchSchedulerSignal, withFileLock } from "../data-dir";
+import {
+  taskEventsFile,
+  taskEventsLockFile,
+  taskProjectionFile,
+  touchSchedulerSignal,
+  withFileLock,
+} from "../data-dir";
 import { applyTaskEvent, reduceTaskEvents } from "./reducer";
 import type { TaskEvent, TaskProjection } from "./types";
 

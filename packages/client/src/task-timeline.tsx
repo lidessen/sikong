@@ -36,7 +36,8 @@ export function TaskTimeline(props: { entries: TaskTraceEntry[] }) {
     return sorted.filter((entry) => {
       if (filter !== "all" && timelineCategory(entry.type) !== filter) return false;
       if (!normalized) return true;
-      const haystack = `${traceEventLabel(entry.type)} ${entry.summary} ${entry.type}`.toLowerCase();
+      const haystack =
+        `${traceEventLabel(entry.type)} ${entry.summary} ${entry.type}`.toLowerCase();
       return haystack.includes(normalized);
     });
   }, [filter, query, sorted]);

@@ -4,7 +4,9 @@ import remarkGfm from "remark-gfm";
 export function MarkdownMessage(props: { text: string; compact?: boolean }) {
   const compact = props.compact ?? false;
   return (
-    <div className={`min-w-0 ${compact ? "space-y-2 text-[12px] leading-5" : "space-y-3 leading-6"}`}>
+    <div
+      className={`min-w-0 ${compact ? "space-y-2 text-[12px] leading-5" : "space-y-3 leading-6"}`}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

@@ -54,15 +54,12 @@ export async function loadWorkspaceProjectionSnapshot(
     return cached.snapshot;
   }
 
-  const snapshot = await scanWorkspaceProjections(dir, workspaceId);
+  const snapshot = await scanWorkspaceProjections(dir);
   cache.set(workspaceId, { mtimeMs, snapshot });
   return snapshot;
 }
 
-async function scanWorkspaceProjections(
-  dir: string,
-  workspaceId: string,
-): Promise<WorkspaceProjectionSnapshot> {
+async function scanWorkspaceProjections(dir: string): Promise<WorkspaceProjectionSnapshot> {
   let entries: string[];
   try {
     entries = await readdir(dir);

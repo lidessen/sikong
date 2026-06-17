@@ -493,7 +493,11 @@ async function waitClientAgentRun(
       })
     : undefined;
 
-  const racers = [run.result, ...(timeoutResult ? [timeoutResult] : []), ...(abortResult ? [abortResult] : [])];
+  const racers = [
+    run.result,
+    ...(timeoutResult ? [timeoutResult] : []),
+    ...(abortResult ? [abortResult] : []),
+  ];
   const result = await Promise.race(racers);
   if (timeout) clearTimeout(timeout);
   if (signal && abortListener) signal.removeEventListener("abort", abortListener);

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -35,17 +35,15 @@ export async function withFileLock<T>(
   await mkdir(dirname(lockFile), { recursive: true });
 
   for (;;) {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      handle = await open(lockFile, "wx");
-      await handle.writeFile(
+      await writeFile(
+        lockFile,
         JSON.stringify({
           pid: process.pid,
           createdAt: new Date().toISOString(),
         }),
+        { flag: "wx" },
       );
-      await handle.close();
-      handle = undefined;
 
       try {
         return await fn();
@@ -53,7 +51,6 @@ export async function withFileLock<T>(
         await rm(lockFile, { force: true });
       }
     } catch (err) {
-      if (handle) await handle.close();
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       if (await isStaleLock(lockFile)) {
         await rm(lockFile, { force: true });

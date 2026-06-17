@@ -1,10 +1,12 @@
 import { ArrowUp, Bot, Loader2, Sparkles, SquareX } from "lucide-react";
 import { useCallback, useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
 import { EmptyPanel } from "./empty-panel";
 import { MessageView } from "./message-renderer";
-import type { ClientMessage, ClientState } from "./types";
+import { taskRequestPreview } from "./task-request";
+import type { ClientMessage, ClientState, TaskCard } from "./types";
 
 const SUGGESTED_PROMPTS = [
   "Create a workspace for a new project",
@@ -100,10 +102,10 @@ export function ActivityStream(props: {
 
   return (
     <div ref={containerRef} className="mx-auto flex max-w-[840px] flex-col gap-4">
+      <WorkOverviewStrip state={props.state} onOpenTask={props.onOpenTask} />
       {props.messages.map((item, index) => {
         const prev = index > 0 ? props.messages[index - 1] : undefined;
-        const showDate =
-          !prev || !isSameDay(prev.createdAt, item.createdAt);
+        const showDate = !prev || !isSameDay(prev.createdAt, item.createdAt);
         return (
           <div key={item.id}>
             {showDate ? (
@@ -131,6 +133,96 @@ export function ActivityStream(props: {
       })}
       <div ref={bottomRef} className="h-px shrink-0" aria-hidden="true" />
     </div>
+  );
+}
+
+function WorkOverviewStrip(props: { state: ClientState; onOpenTask: (taskId: string) => void }) {
+  const needsDecision = props.state.taskCards.filter((task) => task.waitingForLead);
+  const running = props.state.taskCards.filter((task) => !task.terminal && !task.waitingForLead);
+  const issues = props.state.taskCards.filter(
+    (task) =>
+      task.terminal?.outcome === "rejected" ||
+      task.latestWorkerResult?.status === "failed" ||
+      task.latestWorkerResult?.status === "budget_exceeded",
+  );
+  const completed = props.state.taskCards.filter((task) => task.terminal?.outcome === "accepted");
+  return (
+    <section className="sticky top-0 z-10 rounded-[var(--radius-lg)] border border-border-soft bg-card/95 p-2.5 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.6)] backdrop-blur">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-[12px] font-medium text-foreground">Work overview</p>
+        <span className="text-[11px] text-muted-foreground">
+          {props.state.taskCards.length} total
+        </span>
+      </div>
+      <div className="grid gap-1.5 sm:grid-cols-4">
+        <OverviewTile
+          label="Needs decision"
+          count={needsDecision.length}
+          variant={needsDecision.length ? "warn" : "outline"}
+          task={needsDecision[0]}
+          onOpenTask={props.onOpenTask}
+        />
+        <OverviewTile
+          label="Running"
+          count={running.length}
+          variant={running.length ? "info" : "outline"}
+          task={running[0]}
+          onOpenTask={props.onOpenTask}
+        />
+        <OverviewTile
+          label="Issues"
+          count={issues.length}
+          variant={issues.length ? "err" : "outline"}
+          task={issues[0]}
+          onOpenTask={props.onOpenTask}
+        />
+        <OverviewTile
+          label="Completed"
+          count={completed.length}
+          variant={completed.length ? "ok" : "outline"}
+          task={completed[0]}
+          onOpenTask={props.onOpenTask}
+        />
+      </div>
+    </section>
+  );
+}
+
+function OverviewTile(props: {
+  label: string;
+  count: number;
+  variant: "warn" | "info" | "err" | "ok" | "outline";
+  task?: TaskCard;
+  onOpenTask: (taskId: string) => void;
+}) {
+  const content = (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-[11px] text-muted-foreground">{props.label}</span>
+        <Badge variant={props.variant}>{props.count}</Badge>
+      </div>
+      <p className="mt-1 truncate text-[12px] font-medium text-foreground">
+        {props.task
+          ? taskRequestPreview(props.task.request ?? props.task.nextAction.type, 42)
+          : "None"}
+      </p>
+    </>
+  );
+  if (!props.task) {
+    return (
+      <div className="rounded-[var(--radius-md)] border border-border-soft bg-background/60 px-2 py-1.5">
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="rounded-[var(--radius-md)] border border-border-soft bg-background/60 px-2 py-1.5 text-left outline-none transition-[background-color,border-color] hover:border-border-strong hover:bg-hover focus-visible:border-ring"
+      onClick={() => props.onOpenTask(props.task!.taskId)}
+    >
+      {content}
+    </button>
   );
 }
 
@@ -168,7 +260,7 @@ export function Composer(props: {
         <Textarea
           ref={textareaRef}
           className="min-h-11 max-h-40 border-0 bg-transparent px-2.5 py-2 text-[13px] shadow-none focus-visible:outline-none"
-          placeholder="Message Sikong…"
+          placeholder="Ask Sikong to plan, check progress, unblock work, or summarize results…"
           rows={1}
           value={props.message}
           onChange={(event) => props.onMessageChange(event.target.value)}

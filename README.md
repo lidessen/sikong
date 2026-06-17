@@ -37,6 +37,7 @@ If the UI reports a network error, collect the local daemon/UI logs with:
 ```bash
 sikong logs --lines 200
 sikong logs --ui --follow
+sikong logs --raw --lines 200
 ```
 
 ## Development
