@@ -13,6 +13,7 @@ import {
   type CommandContext,
   type CommandResult,
 } from "../commands";
+import type { TaskProjection, WorkerRunProjection } from "../coordination";
 import type { ProcessRunSnapshot, ProcessRunSpec } from "../process";
 import type { RuntimeAssemblyConfig } from "../runtime";
 import type { OrchestrationExecutionResult, OrchestrationWorkerRunSummary } from "./execute";
@@ -147,6 +148,7 @@ export async function executeOrchestrationActionProcess(
       const monitored = await runningMonitor;
       if (monitored && !monitored.ok) return monitored;
     }
+    let markedFailure: ProcessActionFailureResult | undefined;
     if (taskId && finished.result) {
       const recorded = await recordRuntimeProcessFinished(input.ctx, {
         workspaceId,
@@ -166,6 +168,7 @@ export async function executeOrchestrationActionProcess(
           stderr: finished.result.stderr,
         });
         if (!marked.ok) return marked;
+        markedFailure = marked.data;
       }
     }
 
@@ -173,6 +176,13 @@ export async function executeOrchestrationActionProcess(
       return fail("internal_error", "Orchestration process did not finish.", { runId });
     }
     if (finished.result.status !== "succeeded") {
+      if (input.action.type === "start_stage_worker" && markedFailure?.run) {
+        return ok({
+          resultType: "worker_task_completed",
+          run: failedWorkerRunSummary(markedFailure.run),
+          projection: markedFailure.projection,
+        });
+      }
       return fail("internal_error", "Orchestration process failed.", {
         runId,
         status: finished.result.status,
@@ -262,6 +272,7 @@ async function executeStageWorkerProcesses(
         );
         const monitored = await item.data.runningMonitor;
         if (monitored && !monitored.ok) return { ...item.data, snapshot, error: monitored };
+        let markedFailure: ProcessActionFailureResult | undefined;
         if (snapshot.result) {
           const recorded = await recordRuntimeProcessFinished(input.ctx, {
             workspaceId,
@@ -286,9 +297,10 @@ async function executeStageWorkerProcesses(
               },
             );
             if (!marked.ok) return { ...item.data, snapshot, error: marked };
+            markedFailure = marked.data;
           }
         }
-        return { ...item.data, snapshot };
+        return { ...item.data, snapshot, markedFailure };
       }),
     );
 
@@ -302,12 +314,21 @@ async function executeStageWorkerProcesses(
         });
       }
       if (item.snapshot.result.status !== "succeeded") {
-        return fail("internal_error", "Orchestration process failed.", {
-          runId: item.runId,
-          status: item.snapshot.result.status,
-          exitCode: item.snapshot.result.exitCode,
-          stderr: item.snapshot.result.stderr,
-        });
+        const markedFailure = "markedFailure" in item ? item.markedFailure : undefined;
+        if (markedFailure?.run) {
+          outputs.push(failedWorkerRunSummary(markedFailure.run));
+          continue;
+        }
+        return fail(
+          "internal_error",
+          "Stage worker process failed before a worker run was recorded.",
+          {
+            runId: item.runId,
+            status: item.snapshot.result.status,
+            exitCode: item.snapshot.result.exitCode,
+            stderr: item.snapshot.result.stderr,
+          },
+        );
       }
 
       const parsed = parseRunnerOutput(item.snapshot.result.stdout, item.runId);
@@ -367,8 +388,15 @@ async function recordProcessActionFailure(
     exitCode?: number;
     stderr?: string;
   },
-): Promise<CommandResult<unknown>> {
-  if (input.action.type !== "start_stage_worker") return ok({});
+): Promise<CommandResult<ProcessActionFailureResult>> {
+  if (input.action.type !== "start_stage_worker") {
+    const task = await getTask(input.ctx, {
+      workspaceId: result.workspaceId,
+      taskId: result.taskId,
+    });
+    if (!task.ok) return task;
+    return ok({ projection: task.data.projection });
+  }
   const actionInput = input.action.input;
 
   const task = await getTask(input.ctx, {
@@ -385,23 +413,56 @@ async function recordProcessActionFailure(
         candidate.workUnitId === actionInput.workUnitId,
     )
     .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0];
-  if (!run) return ok({});
+  if (!run) return ok({ projection: task.data.projection });
 
-  const detail = [
-    `Orchestration process ${result.runId} ended with ${result.status}.`,
-    result.exitCode === undefined ? undefined : `Exit code: ${result.exitCode}.`,
-    result.stderr?.trim() ? `stderr: ${result.stderr.trim()}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const detail = processFailureDetail(result);
 
-  return await failWorkerRun(input.ctx, {
+  const failed = await failWorkerRun(input.ctx, {
     workspaceId: result.workspaceId,
     taskId: result.taskId,
     runId: run.runId,
     summary: detail,
     report: detail,
   });
+  if (!failed.ok) return failed;
+  return ok({
+    projection: failed.data.projection,
+    run: failed.data.projection.workerRuns[run.runId],
+  });
+}
+
+interface ProcessActionFailureResult {
+  projection: TaskProjection;
+  run?: WorkerRunProjection;
+}
+
+function failedWorkerRunSummary(run: WorkerRunProjection): OrchestrationWorkerRunSummary {
+  return {
+    runId: run.runId,
+    taskResult: {
+      status: "failed",
+      ...(run.result?.report ? { report: truncateText(run.result.report, 2_000) } : {}),
+    },
+  };
+}
+
+function processFailureDetail(result: {
+  runId: string;
+  status: string;
+  exitCode?: number;
+  stderr?: string;
+}): string {
+  return [
+    `Orchestration process ${result.runId} ended with ${result.status}.`,
+    result.exitCode === undefined ? undefined : `Exit code: ${result.exitCode}.`,
+    result.stderr?.trim() ? `stderr: ${truncateText(result.stderr.trim(), 1_000)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function truncateText(text: string, maxLength: number): string {
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}...`;
 }
 
 function parseRunnerOutput(

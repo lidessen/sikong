@@ -1,9 +1,11 @@
 import type { Skill, TaskInput, ToolSet } from "agent-loop";
-import type {
-  StageReviewProjection,
-  StageRoundProjection,
-  TaskProjection,
-  WorkerRunProjection,
+import type { StageRoundProjection, TaskProjection } from "../coordination";
+import {
+  activeRound,
+  describeRound,
+  runsForRound,
+  latestRoundForStage,
+  latestStageReview,
 } from "../coordination";
 import {
   createFinalVerificationPreset,
@@ -172,13 +174,12 @@ function planRunningAction(input: OrchestrationInput): OrchestrationAction {
     return startLeadRoundPlanning(input);
   }
 
-  const activeRound = projection.activeRoundId
-    ? projection.stageRounds[projection.activeRoundId]
-    : undefined;
+  const round = activeRound(projection);
   const latestRound = latestRoundForStage(projection, stageId);
 
-  if (!activeRound) {
+  if (!round) {
     if (latestRound?.status === "completed") {
+      if (roundNeedsLeadDecision(projection, latestRound)) return startLeadRoundPlanning(input);
       return {
         type: "start_stage_review",
         taskId: projection.taskId,
@@ -189,32 +190,25 @@ function planRunningAction(input: OrchestrationInput): OrchestrationAction {
     return startLeadRoundPlanning(input);
   }
 
-  const unstartedWorkUnits = activeRound.workUnits.filter(
-    (workUnit) =>
-      !Object.values(projection.workerRuns).some(
-        (run) => run.roundId === activeRound.id && run.workUnitId === workUnit.id,
-      ),
-  );
-  if (unstartedWorkUnits.length === 1) {
-    return startStageWorker(input, activeRound, unstartedWorkUnits[0]!.id);
+  const roundState = describeRound(projection, round);
+  if (roundState.unstartedWorkUnits.length === 1) {
+    return startStageWorker(input, round, roundState.unstartedWorkUnits[0]!.id);
   }
-  if (unstartedWorkUnits.length > 1) {
+  if (roundState.unstartedWorkUnits.length > 1) {
     return startStageWorkers(
       input,
-      activeRound,
-      unstartedWorkUnits.map((workUnit) => workUnit.id),
+      round,
+      roundState.unstartedWorkUnits.map((workUnit) => workUnit.id),
     );
   }
 
-  const allRuns = runsForRound(projection, activeRound.id);
-  const terminalRuns = terminalRunsForRound(projection, activeRound.id);
-  if (terminalRuns.length < activeRound.workUnits.length) {
+  if (!roundState.readyToComplete) {
     return {
       type: "await_worker_results",
       taskId: projection.taskId,
       stageId,
-      runningRuns: allRuns.length - terminalRuns.length,
-      targetRuns: activeRound.workUnits.length,
+      runningRuns: roundState.runningRuns,
+      targetRuns: roundState.workUnits,
     };
   }
 
@@ -222,7 +216,7 @@ function planRunningAction(input: OrchestrationInput): OrchestrationAction {
     type: "complete_stage_round",
     taskId: projection.taskId,
     workspaceId: projection.workspaceId,
-    roundId: activeRound.id,
+    roundId: round.id,
   };
 }
 
@@ -390,6 +384,8 @@ function leadPhaseGuidance(
       return [
         "Phase responsibility:",
         "- Plan only the next useful round for the active stage.",
+        "- If the latest completed round contains failed or budget-exceeded work, decide whether to plan a follow-up round or send the stage to review.",
+        "- Use start_stage_review only when the failed work is irrelevant, already covered by successful work, or should be judged by the reviewer instead of reworked.",
         "- Split the round into one or more work units that can be executed independently.",
         "- For each work unit, define explicit instructions, deliverables, and out-of-scope boundaries so the worker knows what to do and what not to do.",
         "- Describe each work unit's rough module/file area and acceptance boundary, but do not over-specify exact file lists unless the boundary is already obvious.",
@@ -425,6 +421,7 @@ function leadProjectionContext(projection: TaskProjection): string[] {
         ]
       : []),
     ...(projection.currentStageId ? [`Current stage id: ${projection.currentStageId}`, ""] : []),
+    ...leadRoundEvidenceContext(projection),
     ...(projection.finalReview?.status
       ? [
           "Final review:",
@@ -440,32 +437,34 @@ function leadProjectionContext(projection: TaskProjection): string[] {
   ];
 }
 
-function terminalRunsForRound(projection: TaskProjection, roundId: string): WorkerRunProjection[] {
-  return runsForRound(projection, roundId).filter((run) => run.status !== "running");
+function roundNeedsLeadDecision(projection: TaskProjection, round: StageRoundProjection): boolean {
+  const roundState = describeRound(projection, round);
+  return roundState.failedRuns > 0 || roundState.budgetExceededRuns > 0;
 }
 
-function runsForRound(projection: TaskProjection, roundId: string): WorkerRunProjection[] {
-  return Object.values(projection.workerRuns).filter((run) => run.roundId === roundId);
-}
-
-function latestRoundForStage(
-  projection: TaskProjection,
-  stageId: string,
-): StageRoundProjection | undefined {
-  return Object.values(projection.stageRounds)
-    .filter((round) => round.stageId === stageId)
+function leadRoundEvidenceContext(projection: TaskProjection): string[] {
+  if (!projection.currentStageId) return [];
+  const rounds = Object.values(projection.stageRounds)
+    .filter((round) => round.stageId === projection.currentStageId)
     .sort((a, b) =>
       String(b.completedAt ?? b.startedAt).localeCompare(String(a.completedAt ?? a.startedAt)),
-    )[0];
-}
+    )
+    .slice(0, 3);
+  if (rounds.length === 0) return [];
 
-function latestStageReview(
-  projection: TaskProjection,
-  stageId: string,
-): StageReviewProjection | undefined {
-  return Object.values(projection.stageReviews)
-    .filter((review) => review.stageId === stageId)
-    .sort((a, b) =>
-      String(b.finishedAt ?? b.startedAt).localeCompare(String(a.finishedAt ?? a.startedAt)),
-    )[0];
+  const lines: string[] = ["Recent round evidence:"];
+  for (const round of rounds) {
+    lines.push(`- ${round.id} (${round.status}): ${round.intent}`);
+    const runs = runsForRound(projection, round.id).sort((a, b) =>
+      String(a.startedAt ?? "").localeCompare(String(b.startedAt ?? "")),
+    );
+    for (const run of runs) {
+      const workUnit = round.workUnits.find((candidate) => candidate.id === run.workUnitId);
+      const title = workUnit?.title ?? run.workUnitId;
+      const summary = run.result?.summary ?? run.objective ?? "No result summary.";
+      lines.push(`  - ${run.status}: ${title} - ${summary}`);
+    }
+  }
+  lines.push("");
+  return lines;
 }

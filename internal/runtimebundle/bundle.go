@@ -18,6 +18,7 @@ type Paths struct {
 	ClientAPI           string
 	OrchestrationRunner string
 	ProcessRunner       string
+	AgentHost           string
 	ClientDist          string
 }
 
@@ -63,6 +64,7 @@ func Extract(version string) (Paths, bool, error) {
 		ClientAPI:           filepath.Join(root, "bin", "sikong-client-api"),
 		OrchestrationRunner: filepath.Join(root, "bin", "sikong-orchestration-runner"),
 		ProcessRunner:       filepath.Join(root, "bin", "sikong-process-runner"),
+		AgentHost:           filepath.Join(root, "bin", "siko-agent-host"),
 		ClientDist:          filepath.Join(root, "client-dist"),
 	}, true, nil
 }

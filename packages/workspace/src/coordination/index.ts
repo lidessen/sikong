@@ -1,4 +1,17 @@
 export { applyTaskEvent, reduceTaskEvents } from "./reducer";
+export {
+  activeRound,
+  currentStage,
+  deriveTaskPhase,
+  describeRound,
+  isTerminalWorkerRunStatus,
+  isWorkerRunTerminal,
+  latestRoundForStage,
+  latestStageReview,
+  runsForRound,
+  type RoundState,
+  type TaskPhase,
+} from "./state-machine";
 export { FileTaskEventStore, FileTaskProjectionStore } from "./store";
 export type { TaskEventStore, TaskProjectionStore } from "./store";
 export type {

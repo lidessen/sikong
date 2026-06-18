@@ -151,6 +151,87 @@ TypeScript to execute one orchestration tick at a time. The daemon does not
 choose planner, worker, review, or lead actions itself; TypeScript computes the
 next action from durable state for every tick.
 
+## Core State Machine
+
+The core state machine must stay small and projection-derived. Process state,
+UI state, and agent narrative text are not workflow states.
+
+Task phase is a derived scheduling view:
+
+```ts
+type TaskPhase =
+  | "specifying"
+  | "planning"
+  | "plan_review"
+  | "executing"
+  | "final_review"
+  | "completed"
+  | "rejected";
+```
+
+The durable projection still records protocol status such as `created`,
+`planning`, `plan_submitted`, `running`, and `reviewing`, but orchestration
+should reason from the derived phase plus these stable pointers:
+
+```ts
+currentStageId?: string;
+activeRoundId?: string;
+finalReview?: FinalReviewProjection;
+terminal?: { outcome: "accepted" | "rejected" };
+```
+
+The only normal execution loop inside a stage is:
+
+```text
+executing + no active round + no pending review
+  -> lead plans the next stage round
+  -> engine starts one worker run per unstarted work unit
+  -> engine waits until every work unit has a terminal worker run
+  -> engine completes the round
+  -> engine starts stage review
+  -> accepted review advances stage
+  -> rejected review keeps the same stage and returns to lead round planning
+```
+
+Worker run status is intentionally tiny:
+
+```ts
+type WorkerRunStatus = "running" | "completed" | "failed" | "budget_exceeded";
+```
+
+`completed`, `failed`, and `budget_exceeded` are all terminal for round
+completion. Failed or budget-exceeded work does not imply stage failure. It is
+evidence for stage review and the next lead decision.
+
+Round completion is the central invariant:
+
+```ts
+const roundReady = round.workUnits.every((unit) =>
+  Object.values(projection.workerRuns).some(
+    (run) => run.roundId === round.id && run.workUnitId === unit.id && run.status !== "running",
+  ),
+);
+```
+
+If a worker subprocess times out, is cancelled, or crashes after a worker run
+was recorded, Sikong records a `worker_run.failed` result and lets the stage
+round proceed to review once all work units are terminal. Runtime process facts
+remain inspection and cancellation evidence; they do not replace worker
+terminal results.
+
+The state machine invariants are:
+
+- a task has at most one `currentStageId`;
+- a task has at most one `activeRoundId`;
+- a round has one or more work units;
+- each work unit has at most one worker run;
+- a round can complete only after every work unit has a terminal worker run;
+- rejected stage review keeps `currentStageId` unchanged and permits the lead
+  to plan another round;
+- daemon restart, UI refresh, and process restart must be recoverable by
+  reloading events, rebuilding projection, and deriving the next action again;
+- the daemon and scheduler wake work but never choose business transitions.
+
 ## Plan Lifecycle
 
 Planning is engine-triggered and planner-produced after the lead submits a

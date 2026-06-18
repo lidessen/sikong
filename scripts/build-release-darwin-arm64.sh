@@ -34,6 +34,8 @@ bun build --compile packages/workspace/src/orchestration/runner.ts \
   --outfile "$ASSETS_DIR/bin/sikong-orchestration-runner"
 bun build --compile packages/workspace/src/process/runner.ts \
   --outfile "$ASSETS_DIR/bin/sikong-process-runner"
+bun build --compile packages/agent-host/src/runtime-host.ts \
+  --outfile "$ASSETS_DIR/bin/siko-agent-host"
 
 go build -o "$ASSETS_DIR/bin/sikongd" ./cmd/sikongd
 cp -R packages/client/dist "$ASSETS_DIR/client-dist"

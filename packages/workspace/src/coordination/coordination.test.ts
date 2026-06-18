@@ -5,6 +5,8 @@ import { join } from "node:path";
 import {
   FileTaskEventStore,
   FileTaskProjectionStore,
+  deriveTaskPhase,
+  describeRound,
   reduceTaskEvents,
   type PlanDef,
   type TaskEvent,
@@ -157,6 +159,78 @@ describe("coordination reducer", () => {
         status: "rejected",
         requestedChanges: "Use fewer stages.",
       },
+    });
+  });
+
+  test("derives a simple execution state machine from projection facts", () => {
+    counter = 0;
+    const round = {
+      id: "round_1",
+      stageId: "stage_research",
+      intent: "Collect stage evidence.",
+      workUnits: [
+        {
+          id: "work_unit_1",
+          title: "Inspect",
+          objective: "Inspect relevant files.",
+          instructions: ["Inspect only the relevant files."],
+          deliverables: ["Inspection summary."],
+          outOfScope: ["Implementation."],
+        },
+        {
+          id: "work_unit_2",
+          title: "Probe",
+          objective: "Probe a risky path.",
+          instructions: ["Probe only the risky path."],
+          deliverables: ["Probe summary."],
+          outOfScope: ["Implementation."],
+        },
+      ],
+    };
+    const projection = reduceTaskEvents([
+      event({ type: "task.created", request: "Execute a stable round." }),
+      event({ type: "plan.requested" }),
+      event({ type: "plan.submitted", plan }),
+      event({ type: "plan.accepted", planId: "plan_1", version: 1, report: "Plan accepted." }),
+      event({ type: "stage.started", stageId: "stage_research" }),
+      event({ type: "stage_round.planned", round }),
+      event({
+        type: "worker_run.started",
+        runId: "run_1",
+        stageId: "stage_research",
+        roundId: "round_1",
+        workUnitId: "work_unit_1",
+      }),
+      event({
+        type: "worker_run.completed",
+        runId: "run_1",
+        stageId: "stage_research",
+        result: { summary: "Inspection complete." },
+      }),
+      event({
+        type: "worker_run.started",
+        runId: "run_2",
+        stageId: "stage_research",
+        roundId: "round_1",
+        workUnitId: "work_unit_2",
+      }),
+      event({
+        type: "worker_run.failed",
+        runId: "run_2",
+        stageId: "stage_research",
+        result: { summary: "Probe failed.", report: "Probe failed." },
+      }),
+    ]);
+
+    if (!projection) throw new Error("projection missing");
+    expect(deriveTaskPhase(projection)).toBe("executing");
+    expect(describeRound(projection, projection.stageRounds.round_1!)).toMatchObject({
+      workUnits: 2,
+      startedRuns: 2,
+      terminalRuns: 2,
+      completedRuns: 1,
+      failedRuns: 1,
+      readyToComplete: true,
     });
   });
 

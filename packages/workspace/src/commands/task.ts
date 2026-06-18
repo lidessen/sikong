@@ -12,6 +12,7 @@ import {
   type TaskProjection,
   type TaskRunResult,
   type RuntimeProcessStatus,
+  describeRound,
 } from "../coordination";
 import type { ProcessRunSnapshot } from "../process";
 import { taskObservationsFile, taskProjectionsDir } from "../data-dir";
@@ -498,15 +499,14 @@ export async function completeStageRound(
       activeRoundId: projection.activeRoundId,
     });
   }
-  const runs = Object.values(projection.workerRuns).filter((run) => run.roundId === round.id);
-  const terminalRuns = runs.filter((run) => run.status !== "running");
-  if (runs.length !== round.workUnits.length || terminalRuns.length !== round.workUnits.length) {
+  const roundState = describeRound(projection, round);
+  if (!roundState.readyToComplete) {
     return fail("invalid_state", "Stage round cannot complete until all work units are terminal.", {
       taskId: input.taskId,
       roundId: input.roundId,
-      startedRuns: runs.length,
-      terminalRuns: terminalRuns.length,
-      workUnits: round.workUnits.length,
+      startedRuns: roundState.startedRuns,
+      terminalRuns: roundState.terminalRuns,
+      workUnits: roundState.workUnits,
     });
   }
   return await appendAndProject(ctx, {

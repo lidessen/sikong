@@ -2,6 +2,7 @@ import {
   summarizeProjectionNextAction,
   type OrchestrationActionSummary,
 } from "../orchestration/summary";
+import { activeRound as getActiveRound, describeRound } from "../coordination";
 import type {
   PlanDecisionProjection,
   TaskEvent,
@@ -126,12 +127,8 @@ export function compactTaskView(projection: TaskProjection): TaskCompactView {
   const runtimeProcesses = Object.values(projection.runtimeProcessRuns ?? {});
   const latestRuntimeProcess = latestRuntimeProcessRun(projection);
   const latestReview = latestReviewProjection(projection);
-  const activeRound = projection.activeRoundId
-    ? projection.stageRounds[projection.activeRoundId]
-    : undefined;
-  const activeRoundRuns = activeRound
-    ? Object.values(projection.workerRuns).filter((run) => run.roundId === activeRound.id)
-    : [];
+  const activeRound = getActiveRound(projection);
+  const activeRoundState = activeRound ? describeRound(projection, activeRound) : undefined;
   return {
     taskId: projection.taskId,
     workspaceId: projection.workspaceId,
@@ -144,10 +141,10 @@ export function compactTaskView(projection: TaskProjection): TaskCompactView {
             id: activeRound.id,
             ...(activeRound.title ? { title: activeRound.title } : {}),
             intent: activeRound.intent,
-            workUnits: activeRound.workUnits.length,
-            startedWorkUnits: activeRoundRuns.length,
-            runningWorkUnits: activeRoundRuns.filter((run) => run.status === "running").length,
-            completedWorkUnits: activeRoundRuns.filter((run) => run.status === "completed").length,
+            workUnits: activeRoundState?.workUnits ?? 0,
+            startedWorkUnits: activeRoundState?.startedRuns ?? 0,
+            runningWorkUnits: activeRoundState?.runningRuns ?? 0,
+            completedWorkUnits: activeRoundState?.completedRuns ?? 0,
           },
         }
       : {}),

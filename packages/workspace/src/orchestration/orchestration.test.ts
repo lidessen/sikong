@@ -10,6 +10,7 @@ import {
   completeWorkerRun,
   createTask,
   createWorkspace,
+  failWorkerRun,
   getTask,
   planStageRound,
   recommendFinalReview,
@@ -317,6 +318,81 @@ describe("orchestration tick", () => {
       if (!secondDone.ok) throw new Error("second worker complete failed");
       expect(next(secondDone.data.projection)).toMatchObject({
         type: "complete_stage_round",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("treats failed work units as terminal so lead can decide the round outcome", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Let lead decide after a worker fails.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
+      const submitted = await submitPlan(context, {
+        taskId: created.data.taskId,
+        stages: [
+          {
+            title: "Implement",
+            objective: "Run two work units and report failures.",
+            acceptance: ["Lead receives all work results."],
+          },
+        ],
+      });
+      if (!submitted.ok) throw new Error("plan submit failed");
+      const accepted = await acceptPlan(context, {
+        taskId: created.data.taskId,
+        planId: submitted.data.plan.id,
+        version: submitted.data.plan.version,
+        report: "Accepted.",
+      });
+      if (!accepted.ok) throw new Error("plan accept failed");
+
+      const round = await planRound(context, created.data.taskId, 2);
+      const first = await startWorkerRun(context, {
+        taskId: created.data.taskId,
+        roundId: round.id,
+        workUnitId: round.workUnits[0]!.id,
+      });
+      if (!first.ok) throw new Error("first worker start failed");
+      const second = await startWorkerRun(context, {
+        taskId: created.data.taskId,
+        roundId: round.id,
+        workUnitId: round.workUnits[1]!.id,
+      });
+      if (!second.ok) throw new Error("second worker start failed");
+
+      const completed = await completeWorkerRun(context, {
+        taskId: created.data.taskId,
+        runId: first.data.runId,
+        summary: "First worker completed.",
+      });
+      if (!completed.ok) throw new Error("first worker complete failed");
+      const failed = await failWorkerRun(context, {
+        taskId: created.data.taskId,
+        runId: second.data.runId,
+        summary: "Second worker hit a blocking error.",
+        report: "Second worker hit a blocking error.",
+      });
+      if (!failed.ok) throw new Error("second worker fail failed");
+
+      expect(next(failed.data.projection)).toMatchObject({
+        type: "complete_stage_round",
+        roundId: round.id,
+      });
+      const completedRound = await completeStageRound(context, {
+        taskId: created.data.taskId,
+        roundId: round.id,
+      });
+      if (!completedRound.ok) throw new Error("round complete failed");
+      expect(next(completedRound.data.projection)).toMatchObject({
+        type: "start_lead_round_planning",
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -741,8 +817,11 @@ describe("orchestration process executor", () => {
       });
 
       expect(result).toMatchObject({
-        ok: false,
-        error: { code: "internal_error" },
+        ok: true,
+        data: {
+          resultType: "worker_task_completed",
+          run: { runId: workerRunId, taskResult: { status: "failed" } },
+        },
       });
       const fresh = await getTask(context, { taskId: created.data.taskId });
       if (!fresh.ok) throw new Error("task get failed");
@@ -756,6 +835,7 @@ describe("orchestration process executor", () => {
           exitCode: 143,
         },
       });
+      expect(next(fresh.data.projection)).toMatchObject({ type: "complete_stage_round" });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -891,6 +971,175 @@ describe("orchestration process executor", () => {
         Object.values(fresh.data.projection.workerRuns).filter((run) => run.roundId === round.id),
       ).toHaveLength(2);
       expect(next(fresh.data.projection)).toMatchObject({ type: "complete_stage_round" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("continues a parallel stage round when one daemon worker process fails", async () => {
+    const dir = await tmp();
+    try {
+      const context = ctx(dir);
+      await createWorkspace(context, { id: "sikong", name: "Sikong" });
+      const created = await createTask(context, {
+        request: "Execute mixed parallel work units through process client.",
+        cwd: dir,
+      });
+      if (!created.ok) throw new Error("task create failed");
+      await submitSpec(context, created.data.taskId);
+      const submitted = await submitPlan(context, {
+        taskId: created.data.taskId,
+        stages: [
+          {
+            title: "Implement",
+            objective: "Run two independent worker units.",
+            acceptance: ["Lead receives both successful and failed worker results."],
+          },
+        ],
+      });
+      if (!submitted.ok) throw new Error("plan submit failed");
+      const accepted = await acceptPlan(context, {
+        taskId: created.data.taskId,
+        planId: submitted.data.plan.id,
+        version: submitted.data.plan.version,
+        report: "Accepted.",
+      });
+      if (!accepted.ok) throw new Error("plan accept failed");
+      const round = await planRound(context, created.data.taskId, 2);
+
+      const ready = await getTask(context, { taskId: created.data.taskId });
+      if (!ready.ok) throw new Error("task get failed");
+      const action = next(ready.data.projection);
+      if (action.type !== "start_stage_workers") throw new Error("expected stage workers action");
+
+      const specs = new Map<string, { args?: string[]; runId: string }>();
+      const result = await executeOrchestrationActionProcess({
+        ctx: context,
+        action,
+        packageCwd: join(import.meta.dir, "../.."),
+        runtimeAssembly: { backend: "mock" },
+        client: {
+          async startProcess(spec) {
+            specs.set(spec.runId, { runId: spec.runId, args: spec.args });
+            return {
+              runId: spec.runId,
+              workspaceId: spec.workspaceId,
+              taskId: spec.taskId,
+              state: "queued",
+              spec,
+              queuedAt: "2026-06-14T00:00:00Z",
+            };
+          },
+          async waitProcessRun(runId) {
+            const spec = specs.get(runId);
+            const requestPath = spec?.args?.[2];
+            if (!spec || !requestPath) throw new Error("request path missing");
+            const request = JSON.parse(await Bun.file(requestPath).text()) as {
+              action: { input: { roundId: string; workUnitId: string } };
+            };
+            const started = await startWorkerRun(context, {
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              roundId: request.action.input.roundId,
+              workUnitId: request.action.input.workUnitId,
+            });
+            if (!started.ok) throw new Error("worker start failed");
+            const shouldFail = request.action.input.workUnitId === round.workUnits[1]!.id;
+            if (!shouldFail) {
+              const completed = await completeWorkerRun(context, {
+                workspaceId: "sikong",
+                taskId: created.data.taskId,
+                runId: started.data.runId,
+                summary: `Completed ${request.action.input.workUnitId}.`,
+              });
+              if (!completed.ok) throw new Error("worker complete failed");
+              return {
+                runId,
+                workspaceId: "sikong",
+                taskId: created.data.taskId,
+                state: "finished",
+                spec: spec as never,
+                startedAt: "2026-06-14T00:00:00Z",
+                finishedAt: "2026-06-14T00:00:01Z",
+                result: {
+                  runId,
+                  workspaceId: "sikong",
+                  taskId: created.data.taskId,
+                  status: "succeeded",
+                  command: "bun",
+                  args: [],
+                  stdout:
+                    JSON.stringify({
+                      ok: true,
+                      data: {
+                        resultType: "worker_task_completed",
+                        run: {
+                          runId: started.data.runId,
+                          taskResult: { status: "completed", report: "done" },
+                        },
+                        projection: completed.data.projection,
+                      },
+                    }) + "\n",
+                  stderr: "",
+                  exitCode: 0,
+                  startedAt: "2026-06-14T00:00:00Z",
+                  finishedAt: "2026-06-14T00:00:01Z",
+                  durationMs: 1,
+                },
+              };
+            }
+
+            return {
+              runId,
+              workspaceId: "sikong",
+              taskId: created.data.taskId,
+              state: "finished",
+              spec: spec as never,
+              startedAt: "2026-06-14T00:00:00Z",
+              finishedAt: "2026-06-14T00:00:02Z",
+              result: {
+                runId,
+                workspaceId: "sikong",
+                taskId: created.data.taskId,
+                status: "failed",
+                command: "bun",
+                args: [],
+                stdout: "",
+                stderr: "worker crashed",
+                exitCode: 1,
+                startedAt: "2026-06-14T00:00:00Z",
+                finishedAt: "2026-06-14T00:00:02Z",
+                durationMs: 2,
+              },
+            };
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        data: {
+          resultType: "worker_tasks_completed",
+          runs: [{ taskResult: { status: "completed" } }, { taskResult: { status: "failed" } }],
+        },
+      });
+      const fresh = await getTask(context, { taskId: created.data.taskId });
+      if (!fresh.ok) throw new Error("task get failed");
+      expect(
+        Object.values(fresh.data.projection.workerRuns)
+          .filter((run) => run.roundId === round.id)
+          .map((run) => run.status)
+          .sort(),
+      ).toEqual(["completed", "failed"]);
+      expect(next(fresh.data.projection)).toMatchObject({ type: "complete_stage_round" });
+      const completedRound = await completeStageRound(context, {
+        taskId: created.data.taskId,
+        roundId: round.id,
+      });
+      if (!completedRound.ok) throw new Error("round complete failed");
+      expect(next(completedRound.data.projection)).toMatchObject({
+        type: "start_lead_round_planning",
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1188,6 +1437,7 @@ function input(projection: TaskProjection): OrchestrationInput {
         ...tool("accept_plan"),
         ...tool("reject_plan"),
         ...tool("plan_stage_round"),
+        ...tool("start_stage_review"),
         ...tool("accept_task"),
         ...tool("reject_task"),
       },

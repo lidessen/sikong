@@ -9,6 +9,7 @@ import {
   rejectPlan,
   rejectStageReview,
   rejectTask,
+  startStageReview,
   submitRequirementSpec,
   submitPlan,
   type CommandContext,
@@ -107,6 +108,21 @@ export function createLeadProtocolTools(context: ProtocolToolContext): ToolSet {
           workspaceId: target.data.workspaceId,
           taskId: target.data.taskId,
           ...input.data,
+        });
+      },
+    }),
+    start_stage_review: defineTool({
+      description:
+        "Send the current stage to review from lead round planning when no further work round is needed.",
+      inputSchema: startStageReviewSchema,
+      execute: async (args) => {
+        const target = leadTarget(context, "start_lead_round_planning");
+        if (!target.ok) return target;
+        const stageId = optionalString(args.stageId);
+        return await startStageReview(commandContext(context), {
+          workspaceId: target.data.workspaceId,
+          taskId: target.data.taskId,
+          ...(stageId ? { stageId } : {}),
         });
       },
     }),
@@ -601,6 +617,13 @@ const stageRoundSchema = {
         },
       },
     },
+  },
+} as const;
+
+const startStageReviewSchema = {
+  type: "object",
+  properties: {
+    stageId: { type: "string" },
   },
 } as const;
 

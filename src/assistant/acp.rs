@@ -1,0 +1,229 @@
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::io::{BufRead, Write};
+
+use super::session::{AssistantLoop, AssistantSession};
+use super::store::TaskStore;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AcpRequest {
+    pub jsonrpc: String,
+    pub id: Option<Value>,
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AcpResponse {
+    pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcError>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct JsonRpcError {
+    pub code: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpServerConfig {
+    pub agent_name: String,
+    pub protocol_version: u32,
+}
+
+impl Default for AcpServerConfig {
+    fn default() -> Self {
+        Self {
+            agent_name: "siko".to_string(),
+            protocol_version: 1,
+        }
+    }
+}
+
+pub struct AcpServer<S: TaskStore, L: AssistantLoop> {
+    store: S,
+    session: AssistantSession<L>,
+    config: AcpServerConfig,
+    initialized: bool,
+    session_id: Option<String>,
+}
+
+impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
+    pub fn new(store: S, session: AssistantSession<L>) -> Self {
+        Self {
+            store,
+            session,
+            config: AcpServerConfig::default(),
+            initialized: false,
+            session_id: None,
+        }
+    }
+
+    pub fn with_config(store: S, session: AssistantSession<L>, config: AcpServerConfig) -> Self {
+        Self {
+            store,
+            session,
+            config,
+            initialized: false,
+            session_id: None,
+        }
+    }
+
+    pub async fn handle_request(&mut self, request: AcpRequest) -> AcpResponse {
+        if request.jsonrpc != "2.0" {
+            return error(request.id, -32600, "jsonrpc must be 2.0");
+        }
+
+        match request.method.as_str() {
+            "initialize" => {
+                self.initialized = true;
+                ok(
+                    request.id,
+                    json!({
+                        "protocolVersion": self.config.protocol_version,
+                        "agent": { "name": self.config.agent_name },
+                        "capabilities": {
+                            "sessions": true,
+                            "prompt": true,
+                            "cancel": true,
+                        },
+                    }),
+                )
+            }
+            "session/new" => {
+                if !self.initialized {
+                    return error(request.id, -32002, "server is not initialized");
+                }
+                let session_id = "session_1".to_string();
+                self.session_id = Some(session_id.clone());
+                ok(request.id, json!({ "sessionId": session_id }))
+            }
+            "session/prompt" => {
+                if let Err(message) = self.require_session(&request.params) {
+                    return error(request.id, -32001, message);
+                }
+                let Some(prompt) = prompt_text(&request.params) else {
+                    return error(request.id, -32602, "prompt text is required");
+                };
+                let reply = self.session.handle_message(&mut self.store, prompt).await;
+                ok(
+                    request.id,
+                    json!({
+                        "stopReason": "end_turn",
+                        "content": [
+                            { "type": "text", "text": reply.text }
+                        ],
+                        "metadata": {
+                            "taskId": reply.task_id,
+                        },
+                    }),
+                )
+            }
+            "session/cancel" => {
+                if let Err(message) = self.require_session(&request.params) {
+                    return error(request.id, -32001, message);
+                }
+                let reply = self.session.cancel(&mut self.store).await;
+                ok(
+                    request.id,
+                    json!({
+                        "cancelled": true,
+                        "content": [
+                            { "type": "text", "text": reply.text }
+                        ],
+                    }),
+                )
+            }
+            _ => error(request.id, -32601, "method not found"),
+        }
+    }
+
+    fn require_session(&self, params: &Value) -> Result<(), String> {
+        if !self.initialized {
+            return Err("server is not initialized".to_string());
+        }
+        let Some(expected) = &self.session_id else {
+            return Err("session has not been created".to_string());
+        };
+        let actual = params
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "sessionId is required".to_string())?;
+        if actual != expected {
+            return Err("unknown sessionId".to_string());
+        }
+        Ok(())
+    }
+}
+
+pub async fn run_acp_stdio_server<S, L>(
+    mut server: AcpServer<S, L>,
+    input: impl BufRead,
+    mut output: impl Write,
+) -> std::io::Result<()>
+where
+    S: TaskStore,
+    L: AssistantLoop,
+{
+    for line in input.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<AcpRequest>(&line) {
+            Ok(request) => server.handle_request(request).await,
+            Err(err) => error(None, -32700, format!("parse error: {err}")),
+        };
+        serde_json::to_writer(&mut output, &response)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+    }
+    Ok(())
+}
+
+fn prompt_text(params: &Value) -> Option<String> {
+    if let Some(text) = params.get("prompt").and_then(Value::as_str) {
+        return Some(text.to_string());
+    }
+    params
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| {
+            content.iter().find_map(|part| {
+                if part.get("type").and_then(Value::as_str) == Some("text") {
+                    part.get("text")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn ok(id: Option<Value>, result: Value) -> AcpResponse {
+    AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: Some(result),
+        error: None,
+    }
+}
+
+fn error(id: Option<Value>, code: i64, message: impl Into<String>) -> AcpResponse {
+    AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: None,
+        error: Some(JsonRpcError {
+            code,
+            message: message.into(),
+        }),
+    }
+}

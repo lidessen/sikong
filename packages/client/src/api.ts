@@ -101,7 +101,7 @@ export async function runTurnStream(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
-    signal: inputSignal(signal),
+    signal,
   });
   return await consumeTurnStream(response, onEvent);
 }
@@ -115,7 +115,7 @@ export async function resumeTurnStream(
   const response = await fetch(
     `${API_BASE}/api/turn/${encodeURIComponent(turnId)}/stream?after=${afterIndex}`,
     {
-      signal: inputSignal(signal),
+      signal,
     },
   );
   if (response.status === 404) {
@@ -207,12 +207,6 @@ function cancelledTurnResponse(reason: string): TurnResponse {
       recentTranscript: [],
     },
   };
-}
-
-function inputSignal(signal?: AbortSignal): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  if (signal) return AbortSignal.any([signal, timeoutSignal]);
-  return timeoutSignal;
 }
 
 function parseSseFrame(frame: string): TurnStreamEvent | undefined {

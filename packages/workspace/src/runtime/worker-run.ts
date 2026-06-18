@@ -194,6 +194,7 @@ const terminalProtocolToolNames = new Set([
   "accept_plan",
   "reject_plan",
   "plan_stage_round",
+  "start_stage_review",
   "accept_task",
   "reject_task",
   "accept_stage_review",

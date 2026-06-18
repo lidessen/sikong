@@ -82,6 +82,11 @@ function TerminalBanner(props: { task: TaskCard }) {
         <p className="text-[13px] font-medium">
           {accepted ? "Task completed successfully" : `Task ${terminal.outcome}`}
         </p>
+        {terminal.report ? (
+          <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+            {terminal.report}
+          </p>
+        ) : null}
       </div>
       <Badge variant={accepted ? "ok" : "err"} className="ml-auto shrink-0">
         {terminal.outcome}
@@ -112,6 +117,101 @@ function TaskRequestCompact(props: { task: TaskCard }) {
         <MarkdownMessage text={props.task.request} />
       </div>
     </details>
+  );
+}
+
+function PlanOverviewCard(props: {
+  task: TaskCard;
+  detail: TaskDetailView | null;
+  stages: TaskPlanStageView[];
+}) {
+  const plan = props.detail?.projection.plan;
+  const acceptedStages = props.detail?.projection.acceptedStageIds.length ?? 0;
+  const currentStage =
+    props.stages.find((stage) => stage.id === props.detail?.projection.currentStageId) ??
+    props.stages[0];
+  const planStatus = props.task.plan?.status ?? props.detail?.projection.planDecision?.status;
+  const objective =
+    plan?.summary ??
+    props.task.request ??
+    (props.task.currentStage ? props.task.currentStage.title : props.task.nextAction.type);
+  const activeRound = props.task.activeRound;
+  const runningWorkers = Object.values(props.detail?.projection.workerRuns ?? {}).filter(
+    (worker) => worker.status === "running",
+  ).length;
+
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-border bg-background/75 p-3">
+      <div className="flex flex-col gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_260px]">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <Badge variant={plan ? "info" : "outline"}>{plan ? "Plan" : "Plan pending"}</Badge>
+            <Badge variant="outline">
+              {planStatus ? planStatus.replaceAll("_", " ") : "not submitted"}
+            </Badge>
+            {props.stages.length > 0 ? (
+              <Badge variant="outline">
+                {acceptedStages}/{props.stages.length} stages accepted
+              </Badge>
+            ) : null}
+          </div>
+          <h2 className="line-clamp-2 text-[15px] font-semibold leading-6">
+            {taskRequestPreview(objective, 180)}
+          </h2>
+          {currentStage ? (
+            <div className="mt-3 rounded-[var(--radius-md)] border border-border-soft bg-surface px-2.5 py-2">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <p className="truncate text-[12px] font-medium">{currentStage.title}</p>
+                <Badge variant={stageBadgeVariant(props.detail, currentStage.id)}>
+                  {props.detail?.projection.currentStageId === currentStage.id
+                    ? "current"
+                    : props.detail?.projection.acceptedStageIds.includes(currentStage.id)
+                      ? "done"
+                      : "next"}
+                </Badge>
+              </div>
+              <p className="line-clamp-2 text-[12px] leading-5 text-muted-foreground">
+                {currentStage.objective}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2 text-[12px] leading-5 text-muted-foreground">
+              Sikong has not submitted a stage plan yet.
+            </p>
+          )}
+        </div>
+
+        <div className="grid gap-2 text-[12px]">
+          <div className="rounded-[var(--radius-md)] border border-border-soft bg-surface px-2.5 py-2">
+            <FactRow label="Next" value={nextActionLabel(props.task)} />
+            <FactRow label="Owner" value={currentOperatorLabel(props.task)} />
+            <FactRow label="Workers" value={`${runningWorkers} running`} />
+          </div>
+          {activeRound ? (
+            <div className="rounded-[var(--radius-md)] border border-border-soft bg-surface px-2.5 py-2">
+              <FactRow label="Round" value={activeRound.title ?? activeRound.intent} />
+              <FactRow
+                label="Units"
+                value={`${activeRound.completedWorkUnits}/${activeRound.workUnits} done`}
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {currentStage?.acceptance.length ? (
+        <div className="mt-3 rounded-[var(--radius-md)] border border-border-soft bg-surface px-2.5 py-2">
+          <p className="mb-1 text-[11px] font-medium text-muted-foreground">Acceptance scope</p>
+          <ul className="grid gap-1 text-[11px] leading-4 text-muted-foreground sm:grid-cols-2">
+            {currentStage.acceptance.slice(0, 4).map((item) => (
+              <li key={item} className="min-w-0">
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -194,7 +294,11 @@ export function TaskDetailMain(props: {
           ) : null}
         </div>
 
-        <TaskRequestCompact task={props.task} />
+        <PlanOverviewCard task={props.task} detail={props.detail} stages={stages} />
+
+        <div className="mt-3">
+          <TaskRequestCompact task={props.task} />
+        </div>
 
         <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
           <Badge variant="outline">Owner · {currentOperatorLabel(props.task)}</Badge>
@@ -264,7 +368,7 @@ export function TaskDetailMain(props: {
       <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="flex min-w-0 flex-col gap-3">
           <DetailSection
-            title="Plan roadmap"
+            title="Stages"
             icon={<FileText />}
             count={stages.length}
             defaultOpen={stages.length > 0}

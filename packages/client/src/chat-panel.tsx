@@ -1,4 +1,4 @@
-import { ArrowUp, Bot, Loader2, Sparkles, SquareX } from "lucide-react";
+import { ArrowUp, Bot, Sparkles, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -147,48 +147,48 @@ function WorkOverviewStrip(props: { state: ClientState; onOpenTask: (taskId: str
   );
   const completed = props.state.taskCards.filter((task) => task.terminal?.outcome === "accepted");
   return (
-    <section className="sticky top-0 z-10 rounded-[var(--radius-lg)] border border-border-soft bg-card/95 p-2.5 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.6)] backdrop-blur">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-[12px] font-medium text-foreground">Work overview</p>
-        <span className="text-[11px] text-muted-foreground">
-          {props.state.taskCards.length} total
+    <section className="border-b border-divider pb-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 shrink-0 text-[11px] font-medium text-muted-foreground">
+          Work summary
         </span>
-      </div>
-      <div className="grid gap-1.5 sm:grid-cols-4">
-        <OverviewTile
+        <OverviewChip
           label="Needs decision"
           count={needsDecision.length}
           variant={needsDecision.length ? "warn" : "outline"}
           task={needsDecision[0]}
           onOpenTask={props.onOpenTask}
         />
-        <OverviewTile
+        <OverviewChip
           label="Running"
           count={running.length}
           variant={running.length ? "info" : "outline"}
           task={running[0]}
           onOpenTask={props.onOpenTask}
         />
-        <OverviewTile
+        <OverviewChip
           label="Issues"
           count={issues.length}
           variant={issues.length ? "err" : "outline"}
           task={issues[0]}
           onOpenTask={props.onOpenTask}
         />
-        <OverviewTile
+        <OverviewChip
           label="Completed"
           count={completed.length}
           variant={completed.length ? "ok" : "outline"}
           task={completed[0]}
           onOpenTask={props.onOpenTask}
         />
+        <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+          {props.state.taskCards.length} total
+        </span>
       </div>
     </section>
   );
 }
 
-function OverviewTile(props: {
+function OverviewChip(props: {
   label: string;
   count: number;
   variant: "warn" | "info" | "err" | "ok" | "outline";
@@ -197,20 +197,18 @@ function OverviewTile(props: {
 }) {
   const content = (
     <>
-      <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-[11px] text-muted-foreground">{props.label}</span>
-        <Badge variant={props.variant}>{props.count}</Badge>
-      </div>
-      <p className="mt-1 truncate text-[12px] font-medium text-foreground">
-        {props.task
-          ? taskRequestPreview(props.task.request ?? props.task.nextAction.type, 42)
-          : "None"}
-      </p>
+      <span className="text-[11px] text-muted-foreground">{props.label}</span>
+      <Badge variant={props.variant}>{props.count}</Badge>
+      {props.task ? (
+        <span className="hidden max-w-[180px] truncate text-[11px] font-medium text-foreground md:inline">
+          {taskRequestPreview(props.task.request ?? props.task.nextAction.type, 32)}
+        </span>
+      ) : null}
     </>
   );
   if (!props.task) {
     return (
-      <div className="rounded-[var(--radius-md)] border border-border-soft bg-background/60 px-2 py-1.5">
+      <div className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] border border-border-soft bg-background/45 px-2">
         {content}
       </div>
     );
@@ -218,7 +216,7 @@ function OverviewTile(props: {
   return (
     <button
       type="button"
-      className="rounded-[var(--radius-md)] border border-border-soft bg-background/60 px-2 py-1.5 text-left outline-none transition-[background-color,border-color] hover:border-border-strong hover:bg-hover focus-visible:border-ring"
+      className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-[var(--radius-md)] border border-border-soft bg-background/45 px-2 text-left outline-none transition-[background-color,border-color] hover:border-border-strong hover:bg-hover focus-visible:border-ring"
       onClick={() => props.onOpenTask(props.task!.taskId)}
     >
       {content}
@@ -244,10 +242,9 @@ export function Composer(props: {
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      if (props.busy) return;
       event.preventDefault();
-      if (!props.busy && props.message.trim()) {
-        props.onSubmit(event as unknown as FormEvent);
-      }
+      if (props.message.trim()) props.onSubmit(event as unknown as FormEvent);
     }
   }
 
@@ -265,30 +262,36 @@ export function Composer(props: {
           value={props.message}
           onChange={(event) => props.onMessageChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          disabled={props.busy}
         />
         <div className="flex items-center justify-between gap-2 border-t border-divider px-1.5 pt-2">
-          <p className="hidden text-[11px] text-muted-foreground sm:block">
-            <kbd className="rounded-[var(--radius-sm)] border border-border-soft bg-background px-1 py-px font-mono text-[10px]">
-              Enter
-            </kbd>{" "}
-            to send ·{" "}
-            <kbd className="rounded-[var(--radius-sm)] border border-border-soft bg-background px-1 py-px font-mono text-[10px]">
-              Shift+Enter
-            </kbd>{" "}
-            for newline
-          </p>
+          {props.busy ? (
+            <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="size-1.5 rounded-full bg-info" aria-hidden="true" />
+              Turn running
+            </p>
+          ) : (
+            <p className="hidden text-[11px] text-muted-foreground sm:block">
+              <kbd className="rounded-[var(--radius-sm)] border border-border-soft bg-background px-1 py-px font-mono text-[10px]">
+                Enter
+              </kbd>{" "}
+              to send ·{" "}
+              <kbd className="rounded-[var(--radius-sm)] border border-border-soft bg-background px-1 py-px font-mono text-[10px]">
+                Shift+Enter
+              </kbd>{" "}
+              for newline
+            </p>
+          )}
           <div className="ml-auto flex items-center gap-2">
             {props.busy && props.onCancel ? (
               <Button
                 type="button"
-                size="sm"
+                size="icon"
                 variant="outline"
                 className="rounded-[var(--radius-md)] text-destructive hover:bg-destructive/10"
                 onClick={props.onCancel}
+                aria-label="Cancel current turn"
               >
-                <SquareX data-icon="inline-start" />
-                Cancel
+                <Square data-icon="inline-start" />
               </Button>
             ) : null}
             <Button
@@ -297,13 +300,9 @@ export function Composer(props: {
               variant="primary"
               className="rounded-[var(--radius-md)] disabled:bg-secondary disabled:text-muted-foreground disabled:opacity-100"
               disabled={props.busy || !props.message.trim()}
-              aria-label={props.busy ? "Sending…" : "Send message"}
+              aria-label={props.busy ? "Wait for current turn to finish" : "Send message"}
             >
-              {props.busy ? (
-                <Loader2 className="animate-spin" data-icon="inline-start" />
-              ) : (
-                <ArrowUp data-icon="inline-start" />
-              )}
+              <ArrowUp data-icon="inline-start" />
             </Button>
           </div>
         </div>

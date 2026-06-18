@@ -7,11 +7,12 @@
   "type": "module",
   "scripts": {
     "build": "bun run build:go",
+    "build:agent-host": "bun --filter @sikong/agent-host build:runtime-host",
     "build:go": "go build -o dist/sikong ./cmd/sikong && go build -o dist/sikongd ./cmd/sikongd",
     "release:darwin-arm64": "bash scripts/build-release-darwin-arm64.sh",
     "check": "bun run check:go && bun run typecheck && bun run lint && bun run fmt:check && bun run check:js",
     "check:go": "go test ./...",
-    "check:js": "SIKONG_ORCHESTRATION_RUNNER_COMMAND= bun --filter agent-loop test; al_exit=$?; SIKONG_ORCHESTRATION_RUNNER_COMMAND= bun --filter @sikong/workspace test; ws_exit=$?; bun --filter @sikong/client test; cl_exit=$?; bun --filter @sikong/client build; build_exit=$?; exit $((al_exit + ws_exit + cl_exit + build_exit))",
+    "check:js": "SIKONG_ORCHESTRATION_RUNNER_COMMAND= bun --filter agent-loop test; al_exit=$?; bun --filter @sikong/agent-host test; ah_exit=$?; SIKONG_ORCHESTRATION_RUNNER_COMMAND= bun --filter @sikong/workspace test; ws_exit=$?; bun --filter @sikong/client test; cl_exit=$?; bun --filter @sikong/client build; build_exit=$?; exit $((al_exit + ah_exit + ws_exit + cl_exit + build_exit))",
     "dev:client": "bun --filter @sikong/client dev",
     "dev:client-api": "bun --filter @sikong/client api",
     "dev:sync-client": "bash scripts/sync-client-dist.sh",
@@ -22,7 +23,7 @@
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "typecheck": "bun --filter agent-loop typecheck && bun --filter @sikong/workspace typecheck && bun --filter @sikong/client typecheck"
+    "typecheck": "bun --filter agent-loop typecheck && bun --filter @sikong/agent-host typecheck && bun --filter @sikong/workspace typecheck && bun --filter @sikong/client typecheck"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

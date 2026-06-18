@@ -1,8 +1,9 @@
-import type {
-  StageReviewProjection,
-  StageRoundProjection,
-  TaskProjection,
-  WorkerRunProjection,
+import type { TaskProjection } from "../coordination";
+import {
+  activeRound,
+  describeRound,
+  latestRoundForStage,
+  latestStageReview,
 } from "../coordination";
 
 export type OrchestrationActionSummary =
@@ -64,51 +65,55 @@ function summarizeRunningAction(projection: TaskProjection): OrchestrationAction
   const latestReview = latestStageReview(projection, stageId);
   if (latestReview?.status === "rejected") return { type: "start_lead_round_planning", stageId };
 
-  const activeRound = projection.activeRoundId
-    ? projection.stageRounds[projection.activeRoundId]
-    : undefined;
+  const round = activeRound(projection);
   const latestRound = latestRoundForStage(projection, stageId);
-  if (!activeRound) {
-    if (latestRound?.status === "completed") return { type: "start_stage_review", stageId };
+  if (!round) {
+    if (latestRound?.status === "completed") {
+      if (roundNeedsLeadDecision(projection, latestRound)) {
+        return { type: "start_lead_round_planning", stageId };
+      }
+      return { type: "start_stage_review", stageId };
+    }
     return { type: "start_lead_round_planning", stageId };
   }
 
-  const unstartedWorkUnits = activeRound.workUnits.filter(
-    (workUnit) =>
-      !Object.values(projection.workerRuns).some(
-        (run) => run.roundId === activeRound.id && run.workUnitId === workUnit.id,
-      ),
-  );
-  if (unstartedWorkUnits.length === 1) {
+  const roundState = describeRound(projection, round);
+  if (roundState.unstartedWorkUnits.length === 1) {
     return {
       type: "start_stage_worker",
       stageId,
-      roundId: activeRound.id,
-      workUnitId: unstartedWorkUnits[0]!.id,
+      roundId: round.id,
+      workUnitId: roundState.unstartedWorkUnits[0]!.id,
     };
   }
-  if (unstartedWorkUnits.length > 1) {
+  if (roundState.unstartedWorkUnits.length > 1) {
     return {
       type: "start_stage_workers",
       stageId,
-      roundId: activeRound.id,
-      workUnitIds: unstartedWorkUnits.map((workUnit) => workUnit.id),
-      count: unstartedWorkUnits.length,
+      roundId: round.id,
+      workUnitIds: roundState.unstartedWorkUnits.map((workUnit) => workUnit.id),
+      count: roundState.unstartedWorkUnits.length,
     };
   }
 
-  const allRuns = runsForRound(projection, activeRound.id);
-  const terminalRuns = terminalRunsForRound(projection, activeRound.id);
-  if (terminalRuns.length < activeRound.workUnits.length) {
+  if (!roundState.readyToComplete) {
     return {
       type: "await_worker_results",
       stageId,
-      runningRuns: allRuns.length - terminalRuns.length,
-      targetRuns: activeRound.workUnits.length,
+      runningRuns: roundState.runningRuns,
+      targetRuns: roundState.workUnits,
     };
   }
 
-  return { type: "complete_stage_round", roundId: activeRound.id };
+  return { type: "complete_stage_round", roundId: round.id };
+}
+
+function roundNeedsLeadDecision(
+  projection: TaskProjection,
+  round: NonNullable<TaskProjection["stageRounds"][string]>,
+): boolean {
+  const roundState = describeRound(projection, round);
+  return roundState.failedRuns > 0 || roundState.budgetExceededRuns > 0;
 }
 
 function summarizeReviewingAction(projection: TaskProjection): OrchestrationActionSummary {
@@ -140,34 +145,4 @@ function summarizeReviewingAction(projection: TaskProjection): OrchestrationActi
   }
 
   return { type: "blocked", reason: "Reviewing task has no active stage or final review." };
-}
-
-function terminalRunsForRound(projection: TaskProjection, roundId: string): WorkerRunProjection[] {
-  return runsForRound(projection, roundId).filter((run) => run.status !== "running");
-}
-
-function runsForRound(projection: TaskProjection, roundId: string): WorkerRunProjection[] {
-  return Object.values(projection.workerRuns).filter((run) => run.roundId === roundId);
-}
-
-function latestRoundForStage(
-  projection: TaskProjection,
-  stageId: string,
-): StageRoundProjection | undefined {
-  return Object.values(projection.stageRounds)
-    .filter((round) => round.stageId === stageId)
-    .sort((a, b) =>
-      String(b.completedAt ?? b.startedAt).localeCompare(String(a.completedAt ?? a.startedAt)),
-    )[0];
-}
-
-function latestStageReview(
-  projection: TaskProjection,
-  stageId: string,
-): StageReviewProjection | undefined {
-  return Object.values(projection.stageReviews)
-    .filter((review) => review.stageId === stageId)
-    .sort((a, b) =>
-      String(b.finishedAt ?? b.startedAt).localeCompare(String(a.finishedAt ?? a.startedAt)),
-    )[0];
 }

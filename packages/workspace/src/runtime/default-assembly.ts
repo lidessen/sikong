@@ -5,7 +5,7 @@ export type RuntimeAssemblyProfile = "lead" | "planning" | "worker" | "review";
 
 const claudeInspectionTools = ["Read", "Glob", "Grep", "LS"];
 const claudeExecutionTools = ["Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "LS"];
-const claudeSikongDisabledTools = ["Task", "Agent", "ExitPlanMode", "TodoWrite", "TaskUpdate"];
+const claudeSikongDisabledTools = ["Task", "Agent", "EnterPlanMode", "ExitPlanMode"];
 
 export function defaultRuntimeAssembly(
   runtime: DefaultAgentRuntime,

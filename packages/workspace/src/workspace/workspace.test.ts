@@ -298,7 +298,7 @@ describe("task drive command", () => {
               model: "deepseek-v4-flash",
               builtinTools: ["Read", "Glob", "Grep", "LS"],
               allowedTools: ["Read", "Glob", "Grep", "LS"],
-              disallowedTools: ["Task", "Agent", "ExitPlanMode", "TodoWrite", "TaskUpdate"],
+              disallowedTools: ["Task", "Agent", "EnterPlanMode", "ExitPlanMode"],
             },
           },
           toolProfiles: {
