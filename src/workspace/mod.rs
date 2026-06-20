@@ -4,9 +4,12 @@ mod git_file_system;
 mod memory;
 mod workspaces;
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
-use crate::types::{ArtifactId, NodeId, WorkspaceResourceId, WorkspaceSnapshotId};
+use crate::{ArtifactId, NodeId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +17,9 @@ pub use file_system::FileSystemWorkspace;
 pub use git_file_system::GitFileSystemWorkspace;
 pub use memory::MemoryWorkspace;
 pub use workspaces::Workspaces;
+
+pub type WorkspaceSnapshotId = u64;
+pub type WorkspaceResourceId = u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum WorkspaceProvider {
@@ -254,18 +260,25 @@ pub trait Workspace {
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct WorkspaceIds {
+    state: Arc<Mutex<WorkspaceIdsState>>,
+}
+
+#[derive(Debug, Default)]
+struct WorkspaceIdsState {
     next_snapshot_id: WorkspaceSnapshotId,
     next_resource_id: WorkspaceResourceId,
 }
 
 impl WorkspaceIds {
     pub(super) fn next_snapshot_id(&mut self) -> WorkspaceSnapshotId {
-        self.next_snapshot_id += 1;
-        self.next_snapshot_id
+        let mut state = self.state.lock().unwrap();
+        state.next_snapshot_id += 1;
+        state.next_snapshot_id
     }
 
     pub(super) fn next_resource_id(&mut self) -> WorkspaceResourceId {
-        self.next_resource_id += 1;
-        self.next_resource_id
+        let mut state = self.state.lock().unwrap();
+        state.next_resource_id += 1;
+        state.next_resource_id
     }
 }

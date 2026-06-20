@@ -376,7 +376,11 @@ export class AiSdkAdapter implements BackendAdapter {
         }
         const finalArgs = decision.action === "replaceArgs" ? decision.args : argObj;
         if (!def.execute) return { error: `Tool "${name}" has no executor` };
-        return await def.execute(finalArgs, { signal, callId, requestStop });
+        const output = await def.execute(finalArgs, { signal, callId, requestStop });
+        if (req.terminalToolSet.includes(name)) {
+          requestStop(`terminal tool ${name} called`);
+        }
+        return output;
       },
     });
   }

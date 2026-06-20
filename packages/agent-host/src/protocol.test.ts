@@ -28,6 +28,10 @@ describe("agent-host protocol schemas", () => {
     expect(parseAgentRunRequest(validRequest)).toEqual(validRequest);
   });
 
+  test("accept optional per-run effort", () => {
+    expect(parseAgentRunRequest({ ...validRequest, effort: "max" }).effort).toBe("max");
+  });
+
   test("reject legacy tool choice field", () => {
     expect(() =>
       parseAgentRunRequest({

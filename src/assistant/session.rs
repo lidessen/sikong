@@ -9,8 +9,8 @@ use crate::{
     TaskWorkerFactory,
 };
 
-use super::context::AssistantContext;
-use super::tools::{CancelTaskArgs, CreateTaskArgs, FinishAssistantTurnArgs, InspectTaskArgs};
+use super::context::{AssistantContext, AssistantConversationMessage, AssistantConversationRole};
+use super::tools::{CancelTaskArgs, CreateTaskArgs, FinishTurnArgs, InspectTaskArgs};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionState {
@@ -105,22 +105,22 @@ fn decode_assistant_turn(
             message: "assistant turn did not call a terminal tool".to_string(),
         })?;
 
-    if terminal_call.name != "finish_assistant_turn" {
+    if terminal_call.name != "finish_turn" {
         return Err(AssistantTurnError {
             message: format!(
-                "expected finish_assistant_turn terminal tool, got {}",
+                "expected finish_turn terminal tool, got {}",
                 terminal_call.name
             ),
         });
     }
 
-    let finish = serde_json::from_value::<FinishAssistantTurnArgs>(terminal_call.arguments.clone())
+    let finish = serde_json::from_value::<FinishTurnArgs>(terminal_call.arguments.clone())
         .map_err(|error| AssistantTurnError {
-            message: format!("invalid finish_assistant_turn arguments: {error}"),
+            message: format!("invalid finish_turn arguments: {error}"),
         })?;
     if finish.response.trim().is_empty() {
         return Err(AssistantTurnError {
-            message: "finish_assistant_turn response must not be empty".to_string(),
+            message: "finish_turn response must not be empty".to_string(),
         });
     }
 
@@ -136,7 +136,7 @@ fn retry_request(request: &AgentRunRequest, error: &str) -> AgentRunRequest {
     retry.prompt.push(AgentPromptSection {
         title: "Tool Repair".to_string(),
         content: format!(
-            "Your previous assistant tool sequence was rejected by the protocol validator: {error}. Use the provided assistant tools with valid arguments, then finish with finish_assistant_turn. Do not guess outside the provided context."
+            "Your previous assistant tool sequence was rejected by the protocol validator: {error}. Use the provided assistant tools with valid arguments, then finish with finish_turn. Do not guess outside the provided context."
         ),
     });
     retry.input = with_tool_error(&retry.input, error);
@@ -186,20 +186,27 @@ pub struct SessionReply {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantSessionConfig {
     pub max_parallel_tasks: usize,
+    pub task_board_enabled: bool,
+    pub conversation_message_limit: usize,
 }
 
 impl Default for AssistantSessionConfig {
     fn default() -> Self {
         Self {
             max_parallel_tasks: 2,
+            task_board_enabled: true,
+            conversation_message_limit: 200,
         }
     }
 }
 
 pub struct AssistantSession<L: AssistantLoop> {
     focus_task: Option<TaskId>,
+    conversation: Vec<AssistantConversationMessage>,
+    conversation_message_limit: usize,
     loop_agent: L,
     task_board: TaskBoard,
+    task_board_enabled: bool,
 }
 
 impl<L: AssistantLoop> AssistantSession<L> {
@@ -237,8 +244,11 @@ impl<L: AssistantLoop> AssistantSession<L> {
         let task_board = TaskBoard::new(config.max_parallel_tasks, worker_factory);
         Self {
             focus_task: None,
+            conversation: Vec::new(),
+            conversation_message_limit: config.conversation_message_limit,
             loop_agent,
             task_board,
+            task_board_enabled: config.task_board_enabled,
         }
     }
 
@@ -297,18 +307,30 @@ impl<L: AssistantLoop> AssistantSession<L> {
         store: &mut impl TaskStore,
         message: impl Into<String>,
     ) -> SessionReply {
-        self.task_board.drain(store).await;
-        let context = AssistantContext::build(store, message);
+        let message = message.into();
+        if self.task_board_enabled {
+            self.task_board.drain(store).await;
+        }
+        let context = if self.task_board_enabled {
+            AssistantContext::build_with_task_board(store, message.clone(), true)
+        } else {
+            AssistantContext::message_only(message.clone())
+        }
+        .with_conversation(self.conversation.clone());
         let turn = match self.loop_agent.run_turn(&context).await {
             Ok(turn) => turn,
             Err(error) => {
-                return SessionReply {
+                let reply = SessionReply {
                     text: format!("Assistant turn failed: {}", error.message),
                     task_id: None,
                 };
+                self.record_turn(message, &reply);
+                return reply;
             }
         };
-        self.apply_turn(store, turn).await
+        let reply = self.apply_turn(store, turn).await;
+        self.record_turn(message, &reply);
+        reply
     }
 
     async fn apply_turn(
@@ -321,8 +343,12 @@ impl<L: AssistantLoop> AssistantSession<L> {
 
         for call in turn.tool_calls {
             match call.name.as_str() {
-                "read_assistant_context" | "list_tasks" => {}
+                "query_messages" => {}
+                "list_tasks" if self.task_board_enabled => {}
                 "inspect_task" => {
+                    if !self.task_board_enabled {
+                        return unsupported_task_board_tool("inspect_task");
+                    }
                     let args = match decode_tool_args::<InspectTaskArgs>(&call) {
                         Ok(args) => args,
                         Err(error) => return tool_sequence_error(error),
@@ -340,6 +366,9 @@ impl<L: AssistantLoop> AssistantSession<L> {
                     push_unique(&mut touched_task_ids, task_id);
                 }
                 "create_task" => {
+                    if !self.task_board_enabled {
+                        return unsupported_task_board_tool("create_task");
+                    }
                     let args = match decode_tool_args::<CreateTaskArgs>(&call) {
                         Ok(args) => args,
                         Err(error) => return tool_sequence_error(error),
@@ -353,6 +382,9 @@ impl<L: AssistantLoop> AssistantSession<L> {
                     }
                 }
                 "cancel_task" => {
+                    if !self.task_board_enabled {
+                        return unsupported_task_board_tool("cancel_task");
+                    }
                     let args = match decode_tool_args::<CancelTaskArgs>(&call) {
                         Ok(args) => args,
                         Err(error) => return tool_sequence_error(error),
@@ -365,7 +397,7 @@ impl<L: AssistantLoop> AssistantSession<L> {
                         push_unique(&mut touched_task_ids, task_id);
                     }
                 }
-                "finish_assistant_turn" => {
+                "finish_turn" => {
                     saw_terminal = true;
                     break;
                 }
@@ -380,7 +412,7 @@ impl<L: AssistantLoop> AssistantSession<L> {
 
         if !saw_terminal {
             return SessionReply {
-                text: "Assistant tool sequence failed: missing finish_assistant_turn.".to_string(),
+                text: "Assistant tool sequence failed: missing finish_turn.".to_string(),
                 task_id: None,
             };
         }
@@ -444,6 +476,30 @@ impl<L: AssistantLoop> AssistantSession<L> {
             text: format!("Cancelled task {task_id}."),
             task_id: Some(task_id),
         }
+    }
+
+    fn record_turn(&mut self, message: String, reply: &SessionReply) {
+        self.conversation.push(AssistantConversationMessage {
+            role: AssistantConversationRole::User,
+            content: message,
+            task_id: reply.task_id.clone(),
+        });
+        self.conversation.push(AssistantConversationMessage {
+            role: AssistantConversationRole::Assistant,
+            content: reply.text.clone(),
+            task_id: reply.task_id.clone(),
+        });
+        if self.conversation.len() > self.conversation_message_limit {
+            let overflow = self.conversation.len() - self.conversation_message_limit;
+            self.conversation.drain(0..overflow);
+        }
+    }
+}
+
+fn unsupported_task_board_tool(tool_name: &str) -> SessionReply {
+    SessionReply {
+        text: format!("Assistant tool sequence failed: task board tool {tool_name} is disabled."),
+        task_id: None,
     }
 }
 

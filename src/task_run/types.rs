@@ -1,44 +1,11 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
-
-use crate::workspace::WorkspaceError;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::agent_run::AgentTokenUsage;
+use crate::workspace::WorkspaceError;
+
 pub type NodeId = u64;
 pub type ArtifactId = u64;
-pub type WorkspaceSnapshotId = u64;
-pub type WorkspaceResourceId = u64;
-
-#[derive(Debug, Clone, Default)]
-pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
-}
-
-impl CancellationToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-
-    pub async fn cancelled(&self) {
-        while !self.is_cancelled() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodeOperation {
@@ -109,9 +76,12 @@ pub enum VerificationVerdict {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum FailureClass {
     MissingInfo,
     SpecAmbiguity,
+    IncompleteOutput,
     BadOutput,
     UnsafeSideEffect,
     MergeConflict,
@@ -131,6 +101,8 @@ pub struct AgentRunRecord {
     pub operation: NodeOperation,
     pub report: String,
     pub terminal_tool: Option<String>,
+    pub duration_ms: u128,
+    pub usage: Option<AgentTokenUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

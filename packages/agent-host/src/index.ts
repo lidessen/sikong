@@ -1,3 +1,5 @@
+export { createAgentLoopWorker } from "./agent-loop-worker";
+export type { AgentLoopWorkerOptions } from "./agent-loop-worker";
 export { createDynamicTools, runMockAgentWorker, ToolLoopAgent } from "./mock-worker";
 export { runRuntimeHost } from "./runtime-host";
 export type { ToolLoopResult, ToolLoopStep } from "./mock-worker";

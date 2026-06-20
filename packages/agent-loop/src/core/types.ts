@@ -119,6 +119,8 @@ export interface RunInput {
   system?: string;
   skills?: Skill[];
   tools?: ToolSet;
+  /** Tools that end this run after their normal executor returns. */
+  terminalToolSet?: string[];
   mcp?: McpServers;
   hooks?: Hooks;
   /** Soft cap on agent turns, where the backend honors it. */

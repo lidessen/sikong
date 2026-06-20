@@ -1,19 +1,46 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use async_recursion::async_recursion;
+use tokio::task::JoinSet;
+use tracing::{info, warn};
 
-use crate::CancellationToken;
-use crate::agent_run::AgentRunScheduler;
-use crate::engine_resources::WorkspaceResourceRegistry;
-use crate::node::{Artifact, ArtifactContentKind, NodePlan, NodeTemplate, ProblemNode};
-use crate::task_run::{
-    AgentOperationContext, AgentRunResult, NodeOperationOutput, OperationHarness,
+use crate::agent_run::{AgentRunScheduler, CancellationToken};
+use crate::workspace::{
+    Workspace, WorkspaceChange, WorkspaceResource, WorkspaceResourceRef, WorkspaceSurface,
 };
-use crate::types::{
-    AgentRunRecord, ArtifactId, AttemptRecord, EngineError, EngineReport, FailureClass, NodeId,
-    NodeOperation, NodeStatus, OperationEvent, ProblemKey, VerificationVerdict,
+
+use super::node::{
+    Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroupMode, ProblemNode,
+    ScopeAssessment, WorkSize,
 };
-use crate::workspace::{Workspace, WorkspaceChange, WorkspaceResourceRef, WorkspaceSurface};
+use super::resources::WorkspaceResourceRegistry;
+use super::{
+    AgentOperationContext, AgentRunRecord, AgentRunResult, ArtifactId, AttemptRecord, EngineError,
+    EngineReport, FailureClass, NodeId, NodeOperation, NodeOperationOutput, NodeStatus,
+    OperationEvent, OperationHarness, ProblemKey, VerificationVerdict,
+};
+
+fn plan_from_scope_assessment(
+    assessment: &ScopeAssessment,
+    missing_info: Option<String>,
+    current_plan: &NodePlan,
+) -> NodePlan {
+    if let Some(need) = missing_info.filter(|need| !need.trim().is_empty()) {
+        let then = match current_plan {
+            NodePlan::NeedsInfo { then, .. } => then.clone(),
+            _ => Box::new(NodePlan::Execute),
+        };
+        return NodePlan::NeedsInfo { need, then };
+    }
+
+    match assessment.size {
+        WorkSize::Tiny | WorkSize::Small | WorkSize::Medium => NodePlan::Execute,
+        WorkSize::Large | WorkSize::XLarge => match current_plan {
+            NodePlan::Group(_) => current_plan.clone(),
+            _ => NodePlan::Split,
+        },
+    }
+}
 
 pub struct Engine<W: Workspace, A: AgentRunScheduler> {
     workspace: W,
@@ -31,8 +58,8 @@ pub struct Engine<W: Workspace, A: AgentRunScheduler> {
 
 impl<W, A> Engine<W, A>
 where
-    W: Workspace + Send,
-    A: AgentRunScheduler + Send,
+    W: Workspace + Clone + Send + 'static,
+    A: AgentRunScheduler + Clone + Send + 'static,
 {
     pub fn new(workspace: W, agent: A) -> Self {
         Self {
@@ -115,10 +142,7 @@ where
         check_cancelled(cancellation)?;
         let key = self.node(node_id)?.key.clone();
         if let Some(artifact_id) = self.memo_table.get(&key).copied() {
-            self.run_agent(node_id, NodeOperation::Commit, cancellation)
-                .await?;
-            self.node_mut(node_id)?.status = NodeStatus::Committed;
-            self.node_mut(node_id)?.accepted_artifact = Some(artifact_id);
+            self.commit(node_id, artifact_id)?;
             return Ok(Some(artifact_id));
         }
 
@@ -131,8 +155,16 @@ where
         if self.should_plan(node_id)? {
             self.plan_group(node_id, cancellation).await?;
             let child_ids = self.node(node_id)?.children.clone();
-            for child_id in child_ids {
-                self.resolve(child_id, cancellation).await?;
+            match self.group_mode(node_id)? {
+                Some(PlanGroupMode::Parallel) => {
+                    self.resolve_parallel_children(child_ids, cancellation)
+                        .await?;
+                }
+                Some(PlanGroupMode::Stage) | None => {
+                    for child_id in child_ids {
+                        self.resolve(child_id, cancellation).await?;
+                    }
+                }
             }
             self.combine(node_id, cancellation).await?;
         } else if self.node(node_id)?.candidate.is_none() {
@@ -148,8 +180,22 @@ where
         cancellation: &CancellationToken,
     ) -> Result<(), EngineError> {
         if self.node(node_id)?.status == NodeStatus::New {
-            self.run_agent(node_id, NodeOperation::Specify, cancellation)
+            let result = self
+                .run_agent(node_id, NodeOperation::Specify, cancellation)
                 .await?;
+            if let NodeOperationOutput::Specified {
+                scope_assessment,
+                missing_info,
+            } = result.output
+            {
+                let current_plan = self.node(node_id)?.plan.clone();
+                let plan =
+                    plan_from_scope_assessment(&scope_assessment, missing_info, &current_plan);
+                let node = self.node_mut(node_id)?;
+                node.size = scope_assessment.size;
+                node.scope_assessment = Some(scope_assessment);
+                node.plan = plan;
+            }
             self.node_mut(node_id)?.status = NodeStatus::Specified;
         }
         Ok(())
@@ -167,12 +213,7 @@ where
         let result = self
             .run_agent(node_id, NodeOperation::Acquire, cancellation)
             .await?;
-        if let NodeOperationOutput::Acquired {
-            need,
-            evidence,
-            next_plan,
-        } = result.output
-        {
+        if let NodeOperationOutput::Acquired { need, evidence } = result.output {
             let artifact_id = self.push_artifact(
                 node_id,
                 ArtifactContentKind::Text,
@@ -183,6 +224,10 @@ where
             self.node_mut(node_id)?
                 .acquired
                 .push(format!("{need}={artifact_id}"));
+            let next_plan = match self.node(node_id)?.plan.clone() {
+                NodePlan::NeedsInfo { then, .. } => *then,
+                _ => NodePlan::Execute,
+            };
             self.node_mut(node_id)?.plan = next_plan;
             self.node_mut(node_id)?.status = NodeStatus::Specified;
             return Ok(true);
@@ -192,8 +237,17 @@ where
     }
 
     fn should_plan(&self, node_id: NodeId) -> Result<bool, EngineError> {
-        Ok(matches!(self.node(node_id)?.plan, NodePlan::Group(_))
-            && self.node(node_id)?.children.is_empty())
+        Ok(matches!(
+            self.node(node_id)?.plan,
+            NodePlan::Split | NodePlan::Group(_)
+        ) && self.node(node_id)?.children.is_empty())
+    }
+
+    fn group_mode(&self, node_id: NodeId) -> Result<Option<PlanGroupMode>, EngineError> {
+        Ok(match &self.node(node_id)?.plan {
+            NodePlan::Group(group) => Some(group.mode),
+            _ => None,
+        })
     }
 
     async fn plan_group(
@@ -207,6 +261,7 @@ where
         let NodeOperationOutput::Planned { group } = result.output else {
             return Ok(());
         };
+        self.node_mut(node_id)?.plan = NodePlan::Group(group.clone());
         let child_ids: Vec<_> = group
             .items
             .into_iter()
@@ -214,6 +269,117 @@ where
             .collect();
         self.node_mut(node_id)?.children = child_ids;
         self.node_mut(node_id)?.status = NodeStatus::Planned;
+        Ok(())
+    }
+
+    async fn resolve_parallel_children(
+        &mut self,
+        child_ids: Vec<NodeId>,
+        cancellation: &CancellationToken,
+    ) -> Result<(), EngineError> {
+        let mut branches = JoinSet::new();
+        for child_id in child_ids {
+            check_cancelled(cancellation)?;
+            let child = self.node(child_id)?.clone();
+            let workspace = self.workspace.clone();
+            let agent = self.agent.clone();
+            let cancellation = cancellation.clone();
+            branches.spawn(async move {
+                let mut branch = Engine::new(workspace, agent);
+                branch.next_node_id = child.id;
+                branch.nodes.insert(child.id, child);
+                branch.resolve(child_id, &cancellation).await?;
+                Ok::<_, EngineError>((child_id, branch))
+            });
+        }
+
+        while let Some(branch) = branches.join_next().await {
+            let (child_id, branch) =
+                branch.map_err(|error| EngineError::AgentProtocol(error.to_string()))??;
+            self.merge_parallel_branch(child_id, branch)?;
+            self.cleanup_releasable_resources()?;
+        }
+
+        Ok(())
+    }
+
+    fn merge_parallel_branch(
+        &mut self,
+        child_id: NodeId,
+        mut branch: Engine<W, A>,
+    ) -> Result<(), EngineError> {
+        let mut node_ids = branch.nodes.keys().copied().collect::<Vec<_>>();
+        node_ids.sort_unstable();
+        let mut node_map = HashMap::new();
+        node_map.insert(child_id, child_id);
+        for id in node_ids.iter().copied().filter(|id| *id != child_id) {
+            self.next_node_id += 1;
+            node_map.insert(id, self.next_node_id);
+        }
+
+        let mut artifact_ids = branch.artifacts.keys().copied().collect::<Vec<_>>();
+        artifact_ids.sort_unstable();
+        let mut artifact_map = HashMap::new();
+        for id in artifact_ids {
+            self.next_artifact_id += 1;
+            artifact_map.insert(id, self.next_artifact_id);
+        }
+
+        let resources = branch
+            .workspace_resources
+            .drain_all()
+            .into_iter()
+            .map(|resource| remap_workspace_resource(resource, &node_map, &artifact_map));
+        self.workspace_resources.track_all(resources);
+
+        for (_, artifact) in branch.artifacts {
+            let artifact = remap_artifact(artifact, &node_map, &artifact_map)?;
+            self.artifacts.insert(artifact.id, artifact);
+        }
+
+        for (_, node) in branch.nodes {
+            let node = remap_node(node, &node_map, &artifact_map)?;
+            self.nodes.insert(node.id, node);
+        }
+
+        for event in branch.events {
+            self.events.push(OperationEvent {
+                node_id: remap_node_id(event.node_id, &node_map)?,
+                operation: event.operation,
+                note: event.note,
+            });
+        }
+
+        for run in branch.agent_runs {
+            self.agent_runs.push(AgentRunRecord {
+                node_id: remap_node_id(run.node_id, &node_map)?,
+                operation: run.operation,
+                report: run.report,
+                terminal_tool: run.terminal_tool,
+                duration_ms: run.duration_ms,
+                usage: run.usage,
+            });
+        }
+
+        for (key, attempts) in branch.attempts {
+            let remapped = attempts
+                .into_iter()
+                .map(|attempt| {
+                    Ok(AttemptRecord {
+                        node_id: remap_node_id(attempt.node_id, &node_map)?,
+                        operation: attempt.operation,
+                        verdict: attempt.verdict,
+                    })
+                })
+                .collect::<Result<Vec<_>, EngineError>>()?;
+            self.attempts.entry(key).or_default().extend(remapped);
+        }
+
+        for (key, artifact_id) in branch.memo_table {
+            self.memo_table
+                .insert(key, remap_artifact_id(artifact_id, &artifact_map)?);
+        }
+
         Ok(())
     }
 
@@ -343,7 +509,7 @@ where
 
         match verdict {
             VerificationVerdict::Accept => {
-                self.commit(node_id, artifact_id, cancellation).await?;
+                self.commit(node_id, artifact_id)?;
                 Ok(Some(artifact_id))
             }
             VerificationVerdict::Uncertain { missing_info, .. } => {
@@ -459,19 +625,13 @@ where
         self.verify_and_maybe_commit(node_id, cancellation).await
     }
 
-    async fn commit(
-        &mut self,
-        node_id: NodeId,
-        artifact_id: ArtifactId,
-        cancellation: &CancellationToken,
-    ) -> Result<(), EngineError> {
-        self.run_agent(node_id, NodeOperation::Commit, cancellation)
-            .await?;
+    fn commit(&mut self, node_id: NodeId, artifact_id: ArtifactId) -> Result<(), EngineError> {
         let key = self.node(node_id)?.key.clone();
         self.memo_table.insert(key, artifact_id);
         let node = self.node_mut(node_id)?;
         node.status = NodeStatus::Committed;
         node.accepted_artifact = Some(artifact_id);
+        self.record(node_id, NodeOperation::Commit, "committed");
         Ok(())
     }
 
@@ -485,6 +645,8 @@ where
                 key: template.key,
                 parent,
                 intent: template.intent,
+                size: template.size,
+                scope_assessment: template.scope_assessment,
                 workspace: template.workspace,
                 capabilities: template.capabilities,
                 budget: template.budget,
@@ -564,26 +726,55 @@ where
         let operation = context.operation;
         let harness = OperationHarness::new(context.clone());
         let input = harness.build_agent_run();
+        info!(
+            node_id,
+            operation = ?operation,
+            objective = %input.objective,
+            terminal_tools = ?input.terminal_tool_set,
+            "starting agent run"
+        );
+        let started_at = Instant::now();
         let worker_result = self.agent.run(input, cancellation.clone()).await;
+        let duration_ms = started_at.elapsed().as_millis();
         check_cancelled(cancellation)?;
+        let usage = worker_result.usage.clone();
         let result = match harness.decode_result(worker_result) {
             Ok(result) => result,
             Err(error) => {
+                warn!(
+                    node_id,
+                    operation = ?operation,
+                    duration_ms,
+                    terminal_tool = ?error.terminal_tool,
+                    error = %error.message,
+                    "agent run failed"
+                );
                 self.agent_runs.push(AgentRunRecord {
                     node_id,
                     operation,
                     report: error.message.clone(),
                     terminal_tool: error.terminal_tool.clone(),
+                    duration_ms,
+                    usage,
                 });
                 self.record(node_id, operation, error.message.clone());
                 return Err(EngineError::AgentProtocol(error.message));
             }
         };
+        info!(
+            node_id,
+            operation = ?operation,
+            duration_ms,
+            terminal_tool = ?result.terminal_tool,
+            "agent run completed"
+        );
         self.agent_runs.push(AgentRunRecord {
             node_id,
             operation,
             report: result.report.clone(),
             terminal_tool: result.terminal_tool.clone(),
+            duration_ms,
+            usage,
         });
         self.record(node_id, operation, result.report.clone());
         Ok(result)
@@ -682,6 +873,115 @@ where
     fn node_mut(&mut self, id: NodeId) -> Result<&mut ProblemNode, EngineError> {
         self.nodes.get_mut(&id).ok_or(EngineError::MissingNode(id))
     }
+}
+
+fn remap_node(
+    mut node: ProblemNode,
+    node_map: &HashMap<NodeId, NodeId>,
+    artifact_map: &HashMap<ArtifactId, ArtifactId>,
+) -> Result<ProblemNode, EngineError> {
+    node.id = remap_node_id(node.id, node_map)?;
+    node.parent = node
+        .parent
+        .map(|id| node_map.get(&id).copied().unwrap_or(id));
+    node.children = node
+        .children
+        .into_iter()
+        .map(|id| remap_node_id(id, node_map))
+        .collect::<Result<Vec<_>, _>>()?;
+    node.candidate = node
+        .candidate
+        .map(|id| remap_artifact_id(id, artifact_map))
+        .transpose()?;
+    node.accepted_artifact = node
+        .accepted_artifact
+        .map(|id| remap_artifact_id(id, artifact_map))
+        .transpose()?;
+    Ok(node)
+}
+
+fn remap_artifact(
+    mut artifact: Artifact,
+    node_map: &HashMap<NodeId, NodeId>,
+    artifact_map: &HashMap<ArtifactId, ArtifactId>,
+) -> Result<Artifact, EngineError> {
+    artifact.id = remap_artifact_id(artifact.id, artifact_map)?;
+    artifact.node_id = remap_node_id(artifact.node_id, node_map)?;
+    artifact.children = artifact
+        .children
+        .into_iter()
+        .map(|id| remap_artifact_id(id, artifact_map))
+        .collect::<Result<Vec<_>, _>>()?;
+    artifact.workspace_change = artifact
+        .workspace_change
+        .map(|change| remap_workspace_change(change, node_map, artifact_map))
+        .transpose()?;
+    Ok(artifact)
+}
+
+fn remap_workspace_change(
+    mut change: WorkspaceChange,
+    node_map: &HashMap<NodeId, NodeId>,
+    artifact_map: &HashMap<ArtifactId, ArtifactId>,
+) -> Result<WorkspaceChange, EngineError> {
+    change.resources = change
+        .resources
+        .into_iter()
+        .map(|resource| remap_workspace_resource(resource, node_map, artifact_map))
+        .collect();
+    Ok(change)
+}
+
+fn remap_workspace_resource(
+    mut resource: WorkspaceResource,
+    node_map: &HashMap<NodeId, NodeId>,
+    artifact_map: &HashMap<ArtifactId, ArtifactId>,
+) -> WorkspaceResource {
+    resource.refs = resource
+        .refs
+        .into_iter()
+        .filter_map(|resource_ref| remap_workspace_ref(resource_ref, node_map, artifact_map).ok())
+        .collect();
+    resource
+}
+
+fn remap_workspace_ref(
+    resource_ref: WorkspaceResourceRef,
+    node_map: &HashMap<NodeId, NodeId>,
+    artifact_map: &HashMap<ArtifactId, ArtifactId>,
+) -> Result<WorkspaceResourceRef, EngineError> {
+    Ok(match resource_ref {
+        WorkspaceResourceRef::RunningNode(id) => {
+            WorkspaceResourceRef::RunningNode(remap_node_id(id, node_map)?)
+        }
+        WorkspaceResourceRef::CandidateArtifact(id) => {
+            WorkspaceResourceRef::CandidateArtifact(remap_artifact_id(id, artifact_map)?)
+        }
+        WorkspaceResourceRef::ChildInputForCombine(id) => {
+            WorkspaceResourceRef::ChildInputForCombine(remap_node_id(id, node_map)?)
+        }
+        WorkspaceResourceRef::MergeSurface(id) => {
+            WorkspaceResourceRef::MergeSurface(remap_node_id(id, node_map)?)
+        }
+        WorkspaceResourceRef::DebugRetain => WorkspaceResourceRef::DebugRetain,
+    })
+}
+
+fn remap_node_id(id: NodeId, node_map: &HashMap<NodeId, NodeId>) -> Result<NodeId, EngineError> {
+    node_map
+        .get(&id)
+        .copied()
+        .ok_or(EngineError::MissingNode(id))
+}
+
+fn remap_artifact_id(
+    id: ArtifactId,
+    artifact_map: &HashMap<ArtifactId, ArtifactId>,
+) -> Result<ArtifactId, EngineError> {
+    artifact_map
+        .get(&id)
+        .copied()
+        .ok_or(EngineError::MissingArtifact(id))
 }
 
 fn path_allowed(path: &str, scopes: &[String]) -> bool {

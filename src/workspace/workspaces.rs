@@ -4,7 +4,7 @@ use super::{
     WorkspaceResult, WorkspaceSnapshot, WorkspaceSurface,
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Workspaces {
     ids: WorkspaceIds,
 }

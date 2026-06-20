@@ -12,16 +12,12 @@ surface, or acceptance target unless the user explicitly asks for legacy work.
 
 - `src/` contains the Rust `siko` engine, assistant, task manager, single-task
   run harnesses/tools, workspace providers, and agent run scheduler.
-- `src/engine.rs`, `src/node.rs`, and `src/types.rs` contain the recursive
-  engine core. See `src/README.md` for the detailed Rust mainline module map
-  and file organization rules.
 - `src/task_run/` contains the single-task recursive run boundary where
-  plan/execute/combine/verify and other node operations are prepared for the
-  agent loop: prompts, context packets, tool schemas, terminal tool sets, and
-  terminal payload decoding.
+  the recursive engine, problem tree, resource bookkeeping, and
+  plan/execute/combine/verify node-operation harnesses live.
 - `src/task_board/` contains assistant-facing task board types, stores, and
   queueing. It owns task records, cancellation, and task-level dispatch;
-  node-operation run behavior belongs to `src/task_run/` and `src/engine.rs`.
+  node-operation run behavior belongs to `src/task_run/`.
 - `src/workspace/` contains the memory, filesystem, git-filesystem, and
   dispatching workspace providers.
 - `src/assistant/` contains the assistant context/session/ACP layer and

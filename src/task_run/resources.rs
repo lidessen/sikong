@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use crate::types::WorkspaceResourceId;
-use crate::workspace::{WorkspaceResource, WorkspaceResourceRef, WorkspaceResourceState};
+use crate::workspace::{
+    WorkspaceResource, WorkspaceResourceId, WorkspaceResourceRef, WorkspaceResourceState,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct WorkspaceResourceRegistry {
@@ -60,5 +61,12 @@ impl WorkspaceResourceRegistry {
         if let Some(resource) = self.resources.get_mut(&id) {
             resource.state = WorkspaceResourceState::FailedCleanup;
         }
+    }
+
+    pub(crate) fn drain_all(&mut self) -> Vec<WorkspaceResource> {
+        self.resources
+            .drain()
+            .map(|(_, resource)| resource)
+            .collect()
     }
 }

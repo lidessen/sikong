@@ -225,6 +225,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
         system,
         prompt: input.prompt,
         tools,
+        terminalToolSet: input.terminalToolSet ?? [],
         mcp,
         maxSteps: input.maxSteps,
         signal: input.signal,

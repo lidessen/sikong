@@ -38,6 +38,7 @@ describe("credential resolution", () => {
     const cfg = deepseek().configureFor("claude-code");
     if (cfg.runtime === "claude-code") {
       expect(cfg.env.ANTHROPIC_API_KEY).toBe("sk-from-env");
+      expect(cfg.env.CLAUDE_CODE_EFFORT_LEVEL).toBe("max");
     }
   });
 
@@ -80,9 +81,10 @@ describe("credential resolution", () => {
       const cfg = kimi().configureFor("claude-code");
       expect(cfg.runtime).toBe("claude-code");
       if (cfg.runtime === "claude-code") {
-        expect(cfg.model).toBe("kimi-for-coding");
+        expect(cfg.model).toBeUndefined();
         expect(cfg.env.ANTHROPIC_BASE_URL).toBe("https://api.kimi.com/coding/");
         expect(cfg.env.ANTHROPIC_API_KEY).toBe("sk-kimi");
+        expect(cfg.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("262144");
       }
     } finally {
       if (previous === undefined) delete process.env.KIMI_CODE_API_KEY;
@@ -90,20 +92,14 @@ describe("credential resolution", () => {
     }
   });
 
-  test("kimi supports ai-sdk through the Kimi Code OpenAI-compatible endpoint", () => {
+  test("kimi does not expose ai-sdk without client allowlist onboarding", () => {
     const previous = process.env.KIMI_CODE_API_KEY;
     process.env.KIMI_CODE_API_KEY = "sk-kimi";
     try {
-      const cfg = kimi().configureFor("ai-sdk");
-      expect(cfg.runtime).toBe("ai-sdk");
-      if (cfg.runtime === "ai-sdk") {
-        expect(cfg.spec).toEqual({
-          kind: "moonshotai",
-          baseURL: "https://api.kimi.com/coding/v1",
-          apiKey: "sk-kimi",
-          model: "kimi-for-coding",
-        });
-      }
+      expect(kimi().supportedRuntimes).toEqual(["claude-code"]);
+      expect(() => kimi().configureFor("ai-sdk")).toThrow(
+        /does not support the "ai-sdk" runtime/,
+      );
     } finally {
       if (previous === undefined) delete process.env.KIMI_CODE_API_KEY;
       else process.env.KIMI_CODE_API_KEY = previous;

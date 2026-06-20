@@ -1,9 +1,10 @@
 use async_trait::async_trait;
+use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{
@@ -12,11 +13,9 @@ use tokio::net::{
 };
 use tokio::process::{Child, Command};
 use tokio::time::{sleep, timeout};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
-use crate::CancellationToken;
-
-use super::run::{AgentRunRequest, AgentRunResponse};
+use super::run::{AgentRunRequest, AgentRunResponse, CancellationToken};
 
 #[async_trait]
 pub trait AgentRunScheduler: Send {
@@ -27,16 +26,25 @@ pub trait AgentRunScheduler: Send {
     ) -> AgentRunResponse;
 }
 
+fn short_message_id(prefix: &str) -> String {
+    format!("{prefix}_{}", nanoid!(10))
+}
+
 pub struct ProcessAgentRunScheduler {
     command: String,
     args: Vec<String>,
     socket_path: PathBuf,
     socket_dir: Option<TempDir>,
     startup_error: Option<String>,
-    next_run_id: u64,
     child: Option<Child>,
     writer: Option<OwnedWriteHalf>,
     reader: Option<BufReader<OwnedReadHalf>>,
+}
+
+impl Clone for ProcessAgentRunScheduler {
+    fn clone(&self) -> Self {
+        Self::new(self.command.clone(), self.args.clone())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -148,7 +156,6 @@ impl ProcessAgentRunScheduler {
             socket_path,
             socket_dir,
             startup_error: None,
-            next_run_id: 0,
             child: None,
             writer: None,
             reader: None,
@@ -163,7 +170,6 @@ impl ProcessAgentRunScheduler {
             socket_path: path,
             socket_dir: None,
             startup_error: Some(command_error.to_string()),
-            next_run_id: 0,
             child: None,
             writer: None,
             reader: None,
@@ -338,8 +344,7 @@ impl ProcessAgentRunScheduler {
             return Ok(());
         }
 
-        self.next_run_id += 1;
-        let shutdown_id = format!("shutdown_{}", self.next_run_id);
+        let shutdown_id = short_message_id("shutdown");
         let send_result = self
             .send_message(&ProcessAgentRunSchedulerMessage::Shutdown {
                 id: shutdown_id.clone(),
@@ -398,6 +403,7 @@ impl ProcessAgentRunScheduler {
             report: message.into(),
             tool_calls: Vec::new(),
             terminal_call: None,
+            usage: None,
         }
     }
 }
@@ -417,8 +423,14 @@ impl AgentRunScheduler for ProcessAgentRunScheduler {
             return Self::error_result(error.to_string());
         }
 
-        self.next_run_id += 1;
-        let run_id = format!("run_{}", self.next_run_id);
+        let run_id = short_message_id("run");
+        let started_at = Instant::now();
+        info!(
+            run_id = %run_id,
+            objective = %input.objective,
+            terminal_tools = ?input.terminal_tool_set,
+            "dispatching agent host run"
+        );
         if let Err(error) = self
             .send_message(&ProcessAgentRunSchedulerMessage::Run {
                 id: run_id.clone(),
@@ -426,16 +438,44 @@ impl AgentRunScheduler for ProcessAgentRunScheduler {
             })
             .await
         {
+            warn!(
+                run_id = %run_id,
+                duration_ms = started_at.elapsed().as_millis(),
+                error = %error,
+                "failed to send agent host run"
+            );
             return Self::error_result(error.to_string());
         }
 
         match self.read_response_or_cancel(&run_id, &cancellation).await {
-            Ok(result) => result,
+            Ok(result) => {
+                info!(
+                    run_id = %run_id,
+                    duration_ms = started_at.elapsed().as_millis(),
+                    terminal_tool = ?result.terminal_call.as_ref().map(|call| call.name.as_str()),
+                    tool_calls = result.tool_calls.len(),
+                    "agent host run completed"
+                );
+                result
+            }
             Err(ProcessAgentRunSchedulerError::Cancelled) => {
+                warn!(
+                    run_id = %run_id,
+                    duration_ms = started_at.elapsed().as_millis(),
+                    "agent host run cancelled"
+                );
                 self.terminate().await;
                 Self::error_result(ProcessAgentRunSchedulerError::Cancelled.to_string())
             }
-            Err(error) => Self::error_result(error.to_string()),
+            Err(error) => {
+                warn!(
+                    run_id = %run_id,
+                    duration_ms = started_at.elapsed().as_millis(),
+                    error = %error,
+                    "agent host run failed"
+                );
+                Self::error_result(error.to_string())
+            }
         }
     }
 }

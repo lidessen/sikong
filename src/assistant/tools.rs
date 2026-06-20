@@ -1,21 +1,23 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{AgentToolSpec, AssistantContext};
+use crate::AgentToolSpec;
 
-pub(crate) fn specs_for_context(_context: &AssistantContext) -> Vec<AgentToolSpec> {
-    AssistantTool::ALL.iter().map(|tool| tool.spec()).collect()
+pub(crate) fn specs_for_tools(tools: &[AssistantTool]) -> Vec<AgentToolSpec> {
+    tools.iter().map(|tool| tool.spec()).collect()
 }
 
 pub(crate) fn terminal_tool_names() -> Vec<String> {
-    vec![AssistantTool::FinishAssistantTurn.name().to_string()]
+    vec![AssistantTool::FinishTurn.name().to_string()]
 }
 
 #[siko_macros::toolset(enum_name = "AssistantTool")]
 #[allow(dead_code)]
 pub(crate) trait AssistantTools {
-    #[tool(description = "Read the current assistant turn context packet.")]
-    fn read_assistant_context(&self, args: ReadAssistantContextArgs);
+    #[tool(
+        description = "Query conversation messages. If query is omitted, returns recent messages. Offset starts from the end after filtering; limit defaults to 20."
+    )]
+    fn query_messages(&self, args: QueryMessagesArgs);
 
     #[tool(description = "List the tasks visible to the assistant.")]
     fn list_tasks(&self, args: ListTasksArgs);
@@ -34,11 +36,16 @@ pub(crate) trait AssistantTools {
     #[tool(
         description = "Finish the assistant turn with the response that should be shown to the user."
     )]
-    fn finish_assistant_turn(&self, args: FinishAssistantTurnArgs);
+    fn finish_turn(&self, args: FinishTurnArgs);
 }
 
 #[derive(Deserialize, JsonSchema)]
-pub(crate) struct ReadAssistantContextArgs {}
+#[allow(dead_code)]
+pub(crate) struct QueryMessagesArgs {
+    pub query: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
 
 #[derive(Deserialize, JsonSchema)]
 pub(crate) struct ListTasksArgs {}
@@ -59,7 +66,7 @@ pub(crate) struct CancelTaskArgs {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub(crate) struct FinishAssistantTurnArgs {
+pub(crate) struct FinishTurnArgs {
     pub response: String,
     #[serde(default)]
     pub task_ids: Vec<String>,

@@ -1,50 +1,43 @@
 mod agent_run;
 mod assistant;
 mod config;
-mod engine;
-mod engine_resources;
-mod node;
 mod task_board;
 mod task_run;
-mod types;
 mod workspace;
 
 pub use agent_run::{
-    AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRunScheduler, AgentToolCall,
-    AgentToolSpec, ProcessAgentRunScheduler, ProcessAgentRunSchedulerError,
+    AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRunScheduler,
+    AgentTokenUsage, AgentToolCall, AgentToolSpec, CancellationToken, ProcessAgentRunScheduler,
+    ProcessAgentRunSchedulerError,
 };
 pub use assistant::{
     AcpRequest, AcpResponse, AcpServer, AcpServerConfig, AgentAssistantLoop, AssistantContext,
-    AssistantContextTask, AssistantHarness, AssistantLoop, AssistantSession,
-    AssistantSessionConfig, AssistantTurn, AssistantTurnContextPacket, AssistantTurnError,
-    JsonRpcError, SessionReply, SessionState, run_acp_stdio_server,
+    AssistantContextTask, AssistantConversationMessage, AssistantConversationRole,
+    AssistantHarness, AssistantLoop, AssistantSession, AssistantSessionConfig,
+    AssistantTaskBoardContext, AssistantTurn, AssistantTurnError, JsonRpcError, SessionReply,
+    SessionState, run_acp_stdio_server,
 };
 pub use config::{AssistantConfig, DebugConfig, SikoConfig, default_config_path};
-pub use engine::Engine;
-pub use node::{
-    Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroup, PlanGroupMode, ProblemNode,
-};
 pub use task_board::{
     AssistantTask, AssistantTaskEvent, AssistantTaskEventRecord, AssistantTaskStatus,
     FileTaskStore, MemoryTaskStore, TaskBoard, TaskBoardSnapshot, TaskEngineRunner,
     TaskEngineRunnerFactory, TaskId, TaskStore, TaskWorkerFactory,
 };
 pub use task_run::{
-    AgentOperationContext, AgentRunDecodeError, AgentRunResult, EngineAgentArtifactPacket,
-    EngineAgentContextPacket, EngineAgentGitRequirementPacket, EngineAgentNodePacket,
-    EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, NodeOperationOutput,
-    OperationHarness,
-};
-pub use types::{
-    AgentRunRecord, ArtifactId, AttemptRecord, Budget, CancellationToken, CapabilityProfile,
-    EngineError, EngineReport, FailureClass, NodeId, NodeOperation, NodeStatus, OperationEvent,
-    ProblemKey, VerificationVerdict, WorkspaceResourceId, WorkspaceSnapshotId,
+    AgentOperationContext, AgentRunDecodeError, AgentRunRecord, AgentRunResult, Artifact,
+    ArtifactContentKind, ArtifactId, AttemptRecord, Budget, CapabilityProfile, Engine,
+    EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,
+    EngineAgentNodePacket, EngineAgentWorkspaceRequirementPacket,
+    EngineAgentWorkspaceSurfacePacket, EngineError, EngineReport, FailureClass, NodeId,
+    NodeOperation, NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationEvent,
+    OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment,
+    VerificationVerdict, WorkShape, WorkSize,
 };
 pub use workspace::{
     FileSystemWorkspace, GitBranchResource, GitCommitResource, GitFileSystemWorkspace,
     GitWorkspaceChange, GitWorkspaceRequirement, GitWorkspaceSnapshot, GitWorkspaceSurface,
     GitWorktreeResource, MemoryWorkspace, Workspace, WorkspaceChange, WorkspaceError,
-    WorkspaceProvider, WorkspaceRequirement, WorkspaceResource, WorkspaceResourceKind,
-    WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceResult,
-    WorkspaceSnapshot, WorkspaceSurface, Workspaces,
+    WorkspaceProvider, WorkspaceRequirement, WorkspaceResource, WorkspaceResourceId,
+    WorkspaceResourceKind, WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState,
+    WorkspaceResult, WorkspaceSnapshot, WorkspaceSnapshotId, WorkspaceSurface, Workspaces,
 };

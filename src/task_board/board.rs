@@ -12,7 +12,8 @@ use tracing::{Level, error, info};
 use crate::{
     AgentRunRequest, AgentRunResponse, AgentRunScheduler, AssistantTaskEventRecord,
     AssistantTaskStatus, Budget, CancellationToken, CapabilityProfile, Engine, EngineError,
-    EngineReport, MemoryWorkspace, NodePlan, NodeTemplate, ProblemKey, TaskId, TaskStore,
+    EngineReport, MemoryWorkspace, NodeId, NodePlan, NodeTemplate, ProblemKey, TaskId, TaskStore,
+    WorkSize,
 };
 
 type WorkerFactory = dyn Fn() -> Box<dyn AgentRunScheduler + Send> + Send + Sync;
@@ -44,7 +45,7 @@ pub trait TaskEngineRunner: Send {
         task_id: &str,
         request: &str,
         cancellation: CancellationToken,
-    ) -> Result<(crate::NodeId, EngineReport), EngineError>;
+    ) -> Result<(NodeId, EngineReport), EngineError>;
 }
 
 #[derive(Clone)]
@@ -67,14 +68,32 @@ impl TaskEngineRunnerFactory {
 }
 
 struct RecursiveTaskEngineRunner {
-    worker: Option<Box<dyn AgentRunScheduler + Send>>,
+    worker_factory: TaskWorkerFactory,
 }
 
 impl RecursiveTaskEngineRunner {
-    fn new(worker: Box<dyn AgentRunScheduler + Send>) -> Self {
+    fn new(worker_factory: TaskWorkerFactory) -> Self {
+        Self { worker_factory }
+    }
+}
+
+struct FactoryAgentRunScheduler {
+    worker_factory: TaskWorkerFactory,
+    worker: Option<Box<dyn AgentRunScheduler + Send>>,
+}
+
+impl FactoryAgentRunScheduler {
+    fn new(worker_factory: TaskWorkerFactory) -> Self {
         Self {
-            worker: Some(worker),
+            worker_factory,
+            worker: None,
         }
+    }
+}
+
+impl Clone for FactoryAgentRunScheduler {
+    fn clone(&self) -> Self {
+        Self::new(self.worker_factory.clone())
     }
 }
 
@@ -85,16 +104,27 @@ impl TaskEngineRunner for RecursiveTaskEngineRunner {
         task_id: &str,
         request: &str,
         cancellation: CancellationToken,
-    ) -> Result<(crate::NodeId, EngineReport), EngineError> {
+    ) -> Result<(NodeId, EngineReport), EngineError> {
         let root_template = task_request_to_root(task_id, request);
-        let worker = self
-            .worker
-            .take()
-            .expect("task engine runner is single-use");
+        let worker = FactoryAgentRunScheduler::new(self.worker_factory.clone());
         let mut engine = Engine::new(MemoryWorkspace::default(), worker);
         let root = engine.insert_root(root_template);
         let report = engine.run_with_cancel(root, cancellation).await?;
         Ok((root, report))
+    }
+}
+
+#[async_trait]
+impl AgentRunScheduler for FactoryAgentRunScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        let worker = self
+            .worker
+            .get_or_insert_with(|| self.worker_factory.make());
+        worker.run(input, cancellation).await
     }
 }
 
@@ -122,7 +152,7 @@ struct RunningTask {
 enum TaskRunEvent {
     Completed {
         task_id: TaskId,
-        root: crate::NodeId,
+        root: NodeId,
         report: EngineReport,
     },
     Failed {
@@ -143,7 +173,7 @@ pub struct TaskBoardSnapshot {
 impl TaskBoard {
     pub fn new(max_parallel_tasks: usize, worker_factory: TaskWorkerFactory) -> Self {
         let engine_runner_factory = TaskEngineRunnerFactory::new(move || {
-            Box::new(RecursiveTaskEngineRunner::new(worker_factory.make()))
+            Box::new(RecursiveTaskEngineRunner::new(worker_factory.clone()))
         });
         Self::with_engine_runner(max_parallel_tasks, engine_runner_factory)
     }
@@ -423,7 +453,7 @@ fn mark_cancelled(store: &mut impl TaskStore, task_id: &str, message: &str) {
 fn record_engine_report_logs(
     store: &mut impl TaskStore,
     task_id: &str,
-    root: crate::NodeId,
+    root: NodeId,
     report: &EngineReport,
 ) {
     info!(
@@ -488,6 +518,7 @@ fn record_engine_report_logs(
             node_id = run.node_id,
             operation = ?run.operation,
             terminal_tool = ?run.terminal_tool,
+            duration_ms = run.duration_ms,
             "{}", run.report
         );
         store.record_task_event(
@@ -503,6 +534,7 @@ fn record_engine_report_logs(
                     "node_id": run.node_id,
                     "operation": run.operation,
                     "terminal_tool": run.terminal_tool,
+                    "duration_ms": run.duration_ms,
                     "report": run.report,
                 }),
             },
@@ -514,6 +546,8 @@ fn task_request_to_root(task_id: &str, request: &str) -> NodeTemplate {
     NodeTemplate {
         key: ProblemKey(task_id.to_string()),
         intent: request.to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: crate::WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),

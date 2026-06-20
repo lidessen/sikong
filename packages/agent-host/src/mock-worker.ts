@@ -127,7 +127,7 @@ function mockToolSteps(
   toolName: string,
   terminalArguments: Record<string, unknown>,
 ): ToolLoopStep[] {
-  if (toolName === "finish_assistant_turn") {
+  if (toolName === "finish_turn") {
     return mockAssistantToolSteps(request, terminalArguments);
   }
 
@@ -155,10 +155,6 @@ function mockAssistantToolSteps(
   const lowerMessage = message.toLowerCase();
   const steps: ToolLoopStep[] = [];
 
-  if (request.tools.some((tool) => tool.name === "read_assistant_context")) {
-    steps.push({ name: "read_assistant_context", arguments: {} });
-  }
-
   if (lowerMessage === "list" || lowerMessage === "tasks") {
     steps.push({ name: "list_tasks", arguments: {} });
   } else if (lowerMessage === "cancel") {
@@ -172,14 +168,12 @@ function mockAssistantToolSteps(
     steps.push({ name: "create_task", arguments: { request: message } });
   }
 
-  steps.push({ name: "finish_assistant_turn", arguments: terminalArguments });
+  steps.push({ name: "finish_turn", arguments: terminalArguments });
   return steps;
 }
 
 function contextReaderToolName(request: AgentRunRequest): string | undefined {
-  const preferred = request.terminalToolSet.includes("finish_assistant_turn")
-    ? "read_assistant_context"
-    : "read_operation_context";
+  const preferred = "read_operation_context";
   if (request.tools.some((tool) => tool.name === preferred)) {
     return preferred;
   }
@@ -193,12 +187,12 @@ async function mockTerminalArguments(
   toolName: string,
 ): Promise<Record<string, unknown>> {
   const input = toRecord(request.input);
-  const plan = toRecord(input.plan);
+  const plan = input.plan;
   const operation = typeof input.operation === "string" ? input.operation : "";
 
   switch (toolName) {
     case "submit_specification":
-      return {};
+      return mockSpecificationArgs(plan, input);
     case "submit_evidence":
       return mockEvidenceArgs(plan, input);
     case "submit_plan_group":
@@ -209,13 +203,58 @@ async function mockTerminalArguments(
       return mockCombinationArgs(input);
     case "submit_verdict":
       return mockVerdictArgs(input);
-    case "submit_commit":
-      return {};
-    case "finish_assistant_turn":
+    case "finish_turn":
       return mockFinishAssistantTurnArgs(input);
     default:
       return { operation };
   }
+}
+
+function mockSpecificationArgs(plan: unknown, input: Record<string, unknown>): Record<string, unknown> {
+  const record = toRecord(plan);
+  if ("NeedsInfo" in record) {
+    const needsInfo = toRecord(record.NeedsInfo);
+    return {
+      size: "small",
+      shape: "unknown",
+      reference_match:
+        "This is closest to Small, but one explicit missing information need blocks execution.",
+      scope_signals: ["missing information blocks the next action"],
+      missing_info: stringOr(needsInfo.need, "missing_information"),
+    };
+  }
+
+  const node = toRecord(input.node);
+  const nodeSize = stringOr(node.size, "").toLowerCase();
+  if (nodeSize === "large" || nodeSize === "xlarge") {
+    return {
+      size: nodeSize,
+      shape: "phased",
+      reference_match:
+        "This is closest to Large because the node was created as a broad child that needs recursive planning.",
+      scope_signals: ["broad child node", "requires recursive planning before execution"],
+      missing_info: null,
+    };
+  }
+
+  if ("Group" in record || "Split" in record) {
+    return {
+      size: "large",
+      shape: "phased",
+      reference_match:
+        "This is closest to Large because the fixture already contains multiple child work items.",
+      scope_signals: ["multiple child work items", "requires planning before execution"],
+      missing_info: null,
+    };
+  }
+  return {
+    size: "small",
+    shape: "atomic",
+    reference_match:
+      "This is closest to Small because the mock agent mirrors one local node and one terminal path.",
+    scope_signals: ["one local problem", "one verification path"],
+    missing_info: null,
+  };
 }
 
 function mockFinishAssistantTurnArgs(input: Record<string, unknown>): Record<string, unknown> {
@@ -258,7 +297,7 @@ function mockFinishAssistantTurnArgs(input: Record<string, unknown>): Record<str
 }
 
 function formatTaskList(input: Record<string, unknown>): string {
-  const tasks = arrayOfRecords(input.tasks);
+  const tasks = taskBoardTasks(input);
   if (tasks.length === 0) {
     return "No tasks yet.";
   }
@@ -271,31 +310,73 @@ function formatTaskList(input: Record<string, unknown>): string {
 }
 
 function formatTaskStatus(input: Record<string, unknown>, taskId: string): string {
-  const task = arrayOfRecords(input.tasks).find((item) => stringOr(item.id, "") === taskId);
+  const task = taskBoardTasks(input).find((item) => stringOr(item.id, "") === taskId);
   if (!task) {
     return `Task ${taskId} was not found.`;
   }
   return `${stringOr(task.id, taskId)} ${stringOr(task.status, "<unknown>")}: ${stringOr(task.title, "")}`;
 }
 
-function mockEvidenceArgs(
-  plan: Record<string, unknown>,
-  input: Record<string, unknown>,
-): Record<string, unknown> {
-  const needsInfo = toRecord(plan.NeedsInfo);
+function taskBoardTasks(input: Record<string, unknown>): Record<string, unknown>[] {
+  return arrayOfRecords(toRecord(input.task_board).tasks);
+}
+
+function mockEvidenceArgs(plan: unknown, input: Record<string, unknown>): Record<string, unknown> {
+  const needsInfo = toRecord(toRecord(plan).NeedsInfo);
   const node = toRecord(input.node);
   return {
     need: stringOr(needsInfo.need, "missing_information"),
     evidence: `evidence for ${stringOr(node.intent, "mock work")}`,
-    next_plan: needsInfo.then ?? "Execute",
   };
 }
 
-function mockPlanGroupArgs(plan: Record<string, unknown>): Record<string, unknown> {
-  const group = toRecord(plan.Group);
+function mockPlanGroupArgs(plan: unknown): Record<string, unknown> {
+  const record = toRecord(plan);
+  if (plan === "Split" || "Split" in record) {
+    return {
+      mode: "parallel",
+      items: [
+        {
+          key: "split-a",
+          intent: "split a",
+          size: "small",
+          shape: "atomic",
+          reference_match: "One generated atomic split child.",
+          scope_signals: ["one child item"],
+        },
+        {
+          key: "split-b",
+          intent: "split b",
+          size: "small",
+          shape: "atomic",
+          reference_match: "One generated atomic split child.",
+          scope_signals: ["one child item"],
+        },
+      ],
+    };
+  }
+
+  const group = toRecord(record.Group);
   return {
     mode: stringOr(group.mode, "parallel"),
-    items: Array.isArray(group.items) ? group.items : [],
+    items: Array.isArray(group.items) ? group.items.map(planGroupItem) : [],
+  };
+}
+
+function planGroupItem(item: unknown): Record<string, unknown> {
+  const record = toRecord(item);
+  return {
+    key: stringOr(record.key, "mock-item"),
+    intent: stringOr(record.intent, "mock item"),
+    size: stringOr(record.size, "small"),
+    shape: stringOr(record.shape, "atomic"),
+    reference_match: stringOr(
+      record.reference_match,
+      "This child is closest to Small because it is one scoped mock plan item.",
+    ),
+    scope_signals: Array.isArray(record.scope_signals)
+      ? record.scope_signals
+      : ["one child item"],
   };
 }
 
@@ -353,10 +434,10 @@ function changedPathsFor(input: Record<string, unknown>): string[] {
 
 function verdictFor(intent: string, attempt: number): unknown {
   if (intent.includes("always bad")) {
-    return { Reject: { failure_class: "BadOutput", reason: "bad output" } };
+    return { Reject: { failure_class: "bad_output", reason: "bad output" } };
   }
   if (intent.includes("retry once") && attempt === 0) {
-    return { Reject: { failure_class: "BadOutput", reason: "bad output" } };
+    return { Reject: { failure_class: "bad_output", reason: "bad output" } };
   }
   if (intent.includes("needs post-verify info")) {
     return {
@@ -380,7 +461,7 @@ function verdictToArgs(verdict: unknown): Record<string, unknown> {
     return {
       verdict: "reject",
       reason: stringOr(reject.reason, "mock rejected"),
-      failure_class: reject.failure_class ?? "BadOutput",
+      failure_class: reject.failure_class ?? "bad_output",
     };
   }
 

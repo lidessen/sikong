@@ -24,6 +24,9 @@ export const agentPromptSectionSchema = z
 
 export type AgentPromptSection = zod.infer<typeof agentPromptSectionSchema>;
 
+export const agentEffortSchema = z.enum(["low", "medium", "high", "max"]);
+export type AgentEffort = zod.infer<typeof agentEffortSchema>;
+
 export const agentRunRequestSchema = z
   .object({
     protocolVersion: z.literal(1),
@@ -32,6 +35,7 @@ export const agentRunRequestSchema = z
     input: jsonValueSchema,
     tools: z.array(agentToolSpecSchema),
     terminalToolSet: z.array(z.string().min(1)),
+    effort: agentEffortSchema.optional(),
   })
   .strict();
 
@@ -46,11 +50,24 @@ export const agentToolCallSchema = z
 
 export type AgentToolCall = zod.infer<typeof agentToolCallSchema>;
 
+export const agentTokenUsageSchema = z
+  .object({
+    inputTokens: z.number().nonnegative().optional(),
+    outputTokens: z.number().nonnegative().optional(),
+    totalTokens: z.number().nonnegative().optional(),
+    cacheReadTokens: z.number().nonnegative().optional(),
+    cacheCreationTokens: z.number().nonnegative().optional(),
+  })
+  .strict();
+
+export type AgentTokenUsage = zod.infer<typeof agentTokenUsageSchema>;
+
 export const agentRunResponseSchema = z
   .object({
     report: z.string(),
     toolCalls: z.array(agentToolCallSchema).optional(),
     terminalCall: agentToolCallSchema.optional(),
+    usage: agentTokenUsageSchema.optional(),
   })
   .strict();
 

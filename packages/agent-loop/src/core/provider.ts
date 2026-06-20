@@ -16,14 +16,16 @@ export type RuntimeType = "claude-code" | "codex" | "ai-sdk" | "cursor";
  * Claude Code runtime: an Anthropic-wire endpoint injected purely via the
  * spawned child's environment. The adapter merges `env` into the SDK's
  * `Options.env` (which REPLACES the child env, so the adapter also spreads
- * process.env to keep PATH/HOME) and passes `model` to `Options.model`.
+ * process.env to keep PATH/HOME). Some Anthropic-wire providers, such as Kimi
+ * Code, intentionally do not pass a model override and let Claude Code keep its
+ * normal model label while the base URL routes the request.
  */
 export interface ClaudeRuntimeConfig {
   runtime: "claude-code";
   /** Child-process env: ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL, ... */
   env: Record<string, string>;
-  /** Model id for `Options.model`. */
-  model: string;
+  /** Optional model id for `Options.model`. */
+  model?: string;
 }
 
 /**

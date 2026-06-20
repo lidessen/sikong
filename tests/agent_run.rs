@@ -30,6 +30,7 @@ async fn test_agent_selects_terminal_tool_from_run_config() {
                     },
                 ],
                 terminal_tool_set: vec!["submit_work".to_string()],
+                effort: None,
             },
             CancellationToken::new(),
         )

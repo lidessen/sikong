@@ -1,9 +1,8 @@
-use crate::types::{WorkspaceResourceId, WorkspaceSnapshotId};
-
 use super::{
     Workspace, WorkspaceChange, WorkspaceIds, WorkspaceProvider, WorkspaceRequirement,
-    WorkspaceResource, WorkspaceResourceKind, WorkspaceResourceMetadata, WorkspaceResourceRef,
-    WorkspaceResourceState, WorkspaceResult, WorkspaceSnapshot, WorkspaceSurface,
+    WorkspaceResource, WorkspaceResourceId, WorkspaceResourceKind, WorkspaceResourceMetadata,
+    WorkspaceResourceRef, WorkspaceResourceState, WorkspaceResult, WorkspaceSnapshot,
+    WorkspaceSnapshotId, WorkspaceSurface,
 };
 
 #[derive(Debug, Clone, Default)]

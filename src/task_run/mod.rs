@@ -1,14 +1,26 @@
+mod engine;
 mod harness;
+mod node;
+mod resources;
 mod tools;
+mod types;
 
-use crate::node::{Artifact, NodePlan, ProblemNode};
-use crate::types::{NodeOperation, VerificationVerdict};
 use crate::workspace::WorkspaceSurface;
 
+pub use engine::Engine;
 pub use harness::{
     EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,
     EngineAgentNodePacket, EngineAgentWorkspaceRequirementPacket,
     EngineAgentWorkspaceSurfacePacket, OperationHarness,
+};
+pub use node::{
+    Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroup, PlanGroupMode, ProblemNode,
+    ScopeAssessment, WorkShape, WorkSize,
+};
+pub use types::{
+    AgentRunRecord, ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError,
+    EngineReport, FailureClass, NodeId, NodeOperation, NodeStatus, OperationEvent, ProblemKey,
+    VerificationVerdict,
 };
 
 #[derive(Debug, Clone)]
@@ -36,14 +48,16 @@ pub struct AgentRunDecodeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeOperationOutput {
-    Specified,
+    Specified {
+        scope_assessment: ScopeAssessment,
+        missing_info: Option<String>,
+    },
     Acquired {
         need: String,
         evidence: String,
-        next_plan: NodePlan,
     },
     Planned {
-        group: crate::PlanGroup,
+        group: PlanGroup,
     },
     Executed {
         output: String,
@@ -54,5 +68,4 @@ pub enum NodeOperationOutput {
     Verified {
         verdict: VerificationVerdict,
     },
-    Committed,
 }

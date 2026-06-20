@@ -58,6 +58,8 @@ async fn engine_harness_includes_candidate_child_and_workspace_surface_context()
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("combine".to_string()),
         intent: "combined patch".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git(["packages/client/src/api.ts"]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
@@ -149,7 +151,7 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             "submit_specification",
             "Node To Specify",
             "Normalize node",
-            "",
+            "size",
         ),
         (
             NodeOperation::Acquire,
@@ -161,7 +163,7 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
         (
             NodeOperation::Plan,
             "submit_plan_group",
-            "Contradiction Analysis",
+            "Planning Lens",
             "main contradiction",
             "items",
         ),
@@ -183,15 +185,8 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             NodeOperation::Verify,
             "submit_verdict",
             "Verdict Standard",
-            "Accept only when",
+            "same node can repair it",
             "verdict",
-        ),
-        (
-            NodeOperation::Commit,
-            "submit_commit",
-            "Report Standard",
-            "final report signal",
-            "",
         ),
     ];
 
@@ -211,13 +206,50 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
         assert_eq!(request.objective, format!("{operation:?} node 1"));
         assert!(request.prompt.len() >= 5);
         assert!(prompt_section_exists(&request.prompt, "Role"));
+        assert!(prompt_section_exists(&request.prompt, "Context Access"));
         assert!(prompt_section_exists(&request.prompt, expected_section));
         assert!(prompt_section_exists(&request.prompt, "Completion"));
         assert!(prompt_contains(&request.prompt, prompt_fragment));
         assert!(prompt_contains(&request.prompt, "read_operation_context"));
         assert!(prompt_contains(&request.prompt, terminal_tool));
+        if operation == NodeOperation::Acquire {
+            assert!(prompt_contains(
+                &request.prompt,
+                "engine can re-run Specify"
+            ));
+            assert!(!prompt_contains(&request.prompt, "next_plan.kind"));
+        }
+        if operation == NodeOperation::Specify {
+            assert!(prompt_contains(
+                &request.prompt,
+                "smallest safe size by cognitive load"
+            ));
+            assert!(prompt_contains(&request.prompt, "tiny feels like"));
+            assert!(prompt_contains(&request.prompt, "xlarge"));
+            assert!(prompt_contains(&request.prompt, "Scope Examples"));
+            assert!(prompt_contains(&request.prompt, "Use these as analogies"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Ask for missing information only"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "submit missing_info as null"
+            ));
+        }
+        if operation == NodeOperation::Plan {
+            assert!(prompt_contains(
+                &request.prompt,
+                "size, shape, reference_match, and scope_signals"
+            ));
+        }
         assert_eq!(request.terminal_tool_set, vec![terminal_tool]);
         assert_eq!(harness.terminal_tool_names(), vec![terminal_tool]);
+        if operation == NodeOperation::Plan {
+            assert_eq!(serde_json::to_value(&request).unwrap()["effort"], "max");
+        } else {
+            assert!(serde_json::to_value(&request).unwrap()["effort"].is_null());
+        }
         assert_eq!(
             request
                 .tools
@@ -245,7 +277,191 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
                 terminal_spec.input_schema
             );
         }
+        if operation == NodeOperation::Specify {
+            assert!(schema_has_property(&terminal_spec.input_schema, "size"));
+            assert!(schema_has_property(
+                &terminal_spec.input_schema,
+                "reference_match"
+            ));
+            assert!(schema_has_property(
+                &terminal_spec.input_schema,
+                "scope_signals"
+            ));
+        }
     }
+}
+
+#[test]
+#[should_panic(expected = "Commit is an engine-only event")]
+fn engine_harness_does_not_build_agent_run_for_commit_event() {
+    let context = AgentOperationContext {
+        node: problem_node(NodePlan::Execute),
+        operation: NodeOperation::Commit,
+        candidate: None,
+        child_artifacts: Vec::new(),
+        workspace_surface: None,
+    };
+
+    let _ = OperationHarness::new(context).build_agent_run();
+}
+
+#[test]
+fn engine_harness_decodes_specification_scope_assessment() {
+    let context = AgentOperationContext {
+        node: problem_node(NodePlan::Execute),
+        operation: NodeOperation::Specify,
+        candidate: None,
+        child_artifacts: Vec::new(),
+        workspace_surface: None,
+    };
+    let result = OperationHarness::new(context)
+        .decode_result(AgentRunResponse {
+            report: "specified".to_string(),
+            tool_calls: Vec::new(),
+            terminal_call: Some(AgentToolCall {
+                name: "submit_specification".to_string(),
+                arguments: serde_json::json!({
+                    "size": "medium",
+                    "shape": "phased",
+                    "reference_match": "One coherent feature spanning several related files.",
+                    "scope_signals": ["one main acceptance target", "focused tests"],
+                    "missing_info": null
+                }),
+            }),
+            usage: None,
+        })
+        .expect("specification size scope_assessment should decode");
+
+    let NodeOperationOutput::Specified {
+        scope_assessment,
+        missing_info,
+    } = result.output
+    else {
+        panic!("expected specified output");
+    };
+    assert_eq!(missing_info, None);
+    assert_eq!(scope_assessment.size, WorkSize::Medium);
+    assert_eq!(scope_assessment.shape, WorkShape::Phased);
+    assert_eq!(
+        scope_assessment.reference_match,
+        "One coherent feature spanning several related files."
+    );
+    assert_eq!(
+        scope_assessment.scope_signals,
+        vec!["one main acceptance target", "focused tests"]
+    );
+}
+
+#[test]
+fn engine_harness_treats_string_null_missing_info_as_absent() {
+    let context = AgentOperationContext {
+        node: problem_node(NodePlan::Execute),
+        operation: NodeOperation::Specify,
+        candidate: None,
+        child_artifacts: Vec::new(),
+        workspace_surface: None,
+    };
+    let result = OperationHarness::new(context)
+        .decode_result(AgentRunResponse {
+            report: "specified".to_string(),
+            tool_calls: Vec::new(),
+            terminal_call: Some(AgentToolCall {
+                name: "submit_specification".to_string(),
+                arguments: serde_json::json!({
+                    "size": "tiny",
+                    "shape": "atomic",
+                    "reference_match": "Single self-contained artifact.",
+                    "scope_signals": ["no external fact required"],
+                    "missing_info": "null"
+                }),
+            }),
+            usage: None,
+        })
+        .expect("string null should not become a missing-info plan");
+
+    let NodeOperationOutput::Specified { missing_info, .. } = result.output else {
+        panic!("expected specified output");
+    };
+    assert_eq!(missing_info, None);
+}
+
+#[tokio::test]
+async fn engine_harness_decodes_agent_friendly_plan_items() {
+    let context = AgentOperationContext {
+        node: problem_node(NodePlan::Split),
+        operation: NodeOperation::Plan,
+        candidate: None,
+        child_artifacts: Vec::new(),
+        workspace_surface: None,
+    };
+    let harness = OperationHarness::new(context);
+
+    let result = harness
+        .decode_result(AgentRunResponse {
+            report: "planned".to_string(),
+            tool_calls: Vec::new(),
+            terminal_call: Some(AgentToolCall {
+                name: "submit_plan_group".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "stage",
+                    "items": [
+                        {
+                            "title": "Lock developer preview scope",
+                            "description": "Write the smallest useful acceptance checklist.",
+                            "verification": "Checklist has concrete pass/fail commands.",
+                            "size": "medium",
+                            "shape": "research/specify",
+                            "reference_match": "One coherent child slice with focused tests.",
+                            "scope_signals": "one child item"
+                        }
+                    ]
+                }),
+            }),
+            usage: None,
+        })
+        .expect("agent-friendly plan item should decode");
+
+    let NodeOperationOutput::Planned { group } = result.output else {
+        panic!("expected planned output");
+    };
+    assert_eq!(group.mode, PlanGroupMode::Stage);
+    assert_eq!(group.items.len(), 1);
+    assert_eq!(
+        group.items[0].key,
+        ProblemKey("lock-developer-preview-scope".to_string())
+    );
+    assert!(
+        group.items[0]
+            .intent
+            .contains("Write the smallest useful acceptance checklist.")
+    );
+    assert!(
+        group.items[0]
+            .intent
+            .contains("Checklist has concrete pass/fail commands.")
+    );
+    assert_eq!(group.items[0].plan, NodePlan::Execute);
+    assert_eq!(group.items[0].size, WorkSize::Medium);
+    assert_eq!(
+        group.items[0]
+            .scope_assessment
+            .as_ref()
+            .unwrap()
+            .reference_match,
+        "One coherent child slice with focused tests."
+    );
+    assert_eq!(
+        group.items[0].scope_assessment.as_ref().unwrap().shape,
+        WorkShape::Unknown
+    );
+    assert_eq!(
+        group.items[0]
+            .scope_assessment
+            .as_ref()
+            .unwrap()
+            .scope_signals,
+        vec!["one child item"]
+    );
 }
 
 #[test]
@@ -279,37 +495,47 @@ fn submit_work_schema_does_not_accept_workspace_change_facts() {
 fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
     let harness = AssistantHarness::new(AssistantContext {
         current_message: "status task_1".to_string(),
-        active_task: Some("task_1".to_string()),
-        tasks: vec![AssistantContextTask {
-            id: "task_1".to_string(),
-            title: "Analyze repo".to_string(),
-            status: AssistantTaskStatus::Running,
+        conversation: vec![AssistantConversationMessage {
+            role: AssistantConversationRole::User,
+            content: "create task".to_string(),
+            task_id: Some("task_1".to_string()),
         }],
+        task_board: Some(AssistantTaskBoardContext {
+            active_task: Some("task_1".to_string()),
+            tasks: vec![AssistantContextTask {
+                id: "task_1".to_string(),
+                title: "Analyze repo".to_string(),
+                status: AssistantTaskStatus::Running,
+            }],
+        }),
     });
     let expected_tools = vec![
-        "read_assistant_context",
+        "query_messages",
         "list_tasks",
         "inspect_task",
         "create_task",
         "cancel_task",
-        "finish_assistant_turn",
+        "finish_turn",
     ];
     let request = harness.build_agent_run();
 
     assert_eq!(request.protocol_version, 1);
     assert_eq!(request.objective, "Assistant turn");
-    assert_eq!(request.prompt.len(), 4);
+    assert_eq!(request.prompt.len(), 7);
     assert!(prompt_section_exists(&request.prompt, "Role"));
     assert!(prompt_section_exists(&request.prompt, "Operating Model"));
     assert!(prompt_section_exists(&request.prompt, "Context"));
-    assert!(prompt_section_exists(&request.prompt, "Completion"));
-    assert!(prompt_contains(
+    assert!(prompt_section_exists(&request.prompt, "Task Board"));
+    assert!(prompt_section_exists(
         &request.prompt,
-        "assistant-level coordinator"
+        "Recent Conversation"
     ));
-    assert!(prompt_contains(&request.prompt, "read_assistant_context"));
-    assert!(prompt_contains(&request.prompt, "finish_assistant_turn"));
-    assert_eq!(request.terminal_tool_set, vec!["finish_assistant_turn"]);
+    assert!(prompt_section_exists(&request.prompt, "Latest Message"));
+    assert!(prompt_section_exists(&request.prompt, "Completion"));
+    assert!(prompt_contains(&request.prompt, "assistant-level operator"));
+    assert!(prompt_contains(&request.prompt, "query_messages"));
+    assert!(prompt_contains(&request.prompt, "finish_turn"));
+    assert_eq!(request.terminal_tool_set, vec!["finish_turn"]);
     assert_eq!(
         request
             .tools
@@ -322,16 +548,49 @@ fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
     let terminal_spec = request
         .tools
         .iter()
-        .find(|tool| tool.name == "finish_assistant_turn")
+        .find(|tool| tool.name == "finish_turn")
         .expect("assistant terminal tool");
     assert!(schema_has_property(&terminal_spec.input_schema, "response"));
 
     let packet = parse_context_packet(&request);
     assert_eq!(packet["kind"], "assistant_turn");
     assert_eq!(packet["current_message"], "status task_1");
-    assert_eq!(packet["active_task"], "task_1");
-    assert_eq!(packet["tasks"][0]["id"], "task_1");
-    assert_eq!(packet["tasks"][0]["status"], "Running");
+    assert_eq!(packet["conversation"]["messages"][0]["task_id"], "task_1");
+    assert_eq!(
+        packet["conversation"]["messages"][0]["content"],
+        "create task"
+    );
+    assert_eq!(packet["task_board"]["active_task"], "task_1");
+    assert_eq!(packet["task_board"]["tasks"][0]["id"], "task_1");
+    assert_eq!(packet["task_board"]["tasks"][0]["status"], "Running");
+}
+
+#[test]
+fn assistant_harness_omits_task_board_tools_when_disabled() {
+    let harness = AssistantHarness::new(AssistantContext::message_only(
+        "reply directly without creating a task",
+    ));
+    let request = harness.build_agent_run();
+    let tool_names = request
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(tool_names, vec!["query_messages", "finish_turn"]);
+    assert!(!prompt_section_exists(&request.prompt, "Task Board"));
+    assert!(!prompt_section_exists(
+        &request.prompt,
+        "Recent Conversation"
+    ));
+
+    let packet = parse_context_packet(&request);
+    assert_eq!(packet["kind"], "assistant_turn");
+    assert!(packet.get("task_board").is_none());
+    assert_eq!(
+        packet["conversation"]["messages"].as_array().unwrap().len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -352,6 +611,7 @@ async fn engine_harness_reports_run_decode_error_for_wrong_terminal_tool() {
             name: "submit_verdict".to_string(),
             arguments: serde_json::json!({}),
         }),
+        usage: None,
     });
 
     let error = result.expect_err("wrong terminal tool should fail closed");
@@ -377,6 +637,7 @@ async fn engine_harness_reports_run_decode_error_for_malformed_terminal_payload(
             name: "submit_work".to_string(),
             arguments: serde_json::json!({ "output": 42 }),
         }),
+        usage: None,
     });
 
     let error = result.expect_err("malformed terminal payload should fail closed");
@@ -405,11 +666,50 @@ async fn engine_harness_rejects_agent_reported_workspace_facts_in_work_payload()
                 "side_effects": ["agent-reported-write"],
             }),
         }),
+        usage: None,
     });
 
     let error = result.expect_err("agent-reported workspace facts should fail closed");
     assert_eq!(error.terminal_tool.as_deref(), Some("submit_work"));
     assert!(error.message.contains("unknown field"));
+}
+
+#[tokio::test]
+async fn engine_harness_maps_open_verifier_failure_classes() {
+    let context = AgentOperationContext {
+        node: problem_node(NodePlan::Execute),
+        operation: NodeOperation::Verify,
+        candidate: None,
+        child_artifacts: Vec::new(),
+        workspace_surface: None,
+    };
+    let harness = OperationHarness::new(context);
+
+    let result = harness
+        .decode_result(AgentRunResponse {
+            report: "verified".to_string(),
+            tool_calls: Vec::new(),
+            terminal_call: Some(AgentToolCall {
+                name: "submit_verdict".to_string(),
+                arguments: serde_json::json!({
+                    "verdict": "reject",
+                    "reason": "assessment is incomplete",
+                    "failure_class": "incomplete_assessment"
+                }),
+            }),
+            usage: None,
+        })
+        .expect("open verifier class should decode");
+
+    assert_eq!(
+        result.output,
+        NodeOperationOutput::Verified {
+            verdict: VerificationVerdict::Reject {
+                failure_class: FailureClass::IncompleteOutput,
+                reason: "assessment is incomplete".to_string(),
+            }
+        }
+    );
 }
 
 fn parse_context_packet(request: &AgentRunRequest) -> Value {
@@ -442,10 +742,10 @@ fn schema_properties_are_empty(schema: &Value) -> bool {
 
 fn plan_for_operation(operation: NodeOperation) -> NodePlan {
     match operation {
-        NodeOperation::Specify
-        | NodeOperation::Execute
-        | NodeOperation::Verify
-        | NodeOperation::Commit => NodePlan::Execute,
+        NodeOperation::Specify | NodeOperation::Execute | NodeOperation::Verify => {
+            NodePlan::Execute
+        }
+        NodeOperation::Commit => NodePlan::Execute,
         NodeOperation::Acquire => NodePlan::NeedsInfo {
             need: "missing input".to_string(),
             then: Box::new(NodePlan::Execute),
@@ -461,6 +761,8 @@ fn scoped_git_leaf(key: &str, output: &str, path: &str) -> NodeTemplate {
     NodeTemplate {
         key: ProblemKey(key.to_string()),
         intent: output.to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git([path]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
@@ -474,6 +776,8 @@ fn problem_node(plan: NodePlan) -> ProblemNode {
         key: ProblemKey("node".to_string()),
         parent: None,
         intent: "node".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),

@@ -32,7 +32,6 @@ const DEEPSEEK_ANTHROPIC = "https://api.deepseek.com/anthropic";
 /** DeepSeek's cheap/fast tier — used for Claude Code haiku-level + subagent calls. */
 const DEEPSEEK_FLASH = "deepseek-v4-flash";
 const KIMI_CODE_ANTHROPIC = "https://api.kimi.com/coding/";
-const KIMI_CODE_OPENAI = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_MODEL = "kimi-for-coding";
 const ANTHROPIC_BASE = "https://api.anthropic.com";
 const OPENAI_BASE = "https://api.openai.com/v1";
@@ -100,9 +99,8 @@ export function deepseek(opts: { apiKey?: string; model?: string } = {}): ModelP
       switch (runtime) {
         case "claude-code":
           // DeepSeek's recommended Claude Code config: AUTH_TOKEN auth, the cheap
-          // flash tier for haiku-level + subagents, and max effort (which closes
-          // most of the flash↔pro quality gap per public evals). `model` is the
-          // main tier the caller picked (flash by default; pro on escalation).
+          // flash tier for haiku-level and subagent calls, and max effort by
+          // default. Callers may still override effort per run.
           return {
             runtime,
             model,
@@ -134,15 +132,14 @@ export function deepseek(opts: { apiKey?: string; model?: string } = {}): ModelP
   };
 }
 
-/** Kimi Code Plan — subscription-backed coding endpoint for Claude Code + AI SDK. */
-export function kimi(opts: { apiKey?: string; model?: string } = {}): ModelProvider {
+/** Kimi Code Plan — subscription-backed coding endpoint for Claude Code. */
+export function kimi(opts: { apiKey?: string } = {}): ModelProvider {
   const apiKey = resolveApiKey({
     providerId: "kimi",
     explicit: opts.apiKey,
     envVars: ["KIMI_CODE_API_KEY"],
   })!;
-  const model = opts.model ?? KIMI_CODE_MODEL;
-  const supportedRuntimes: RuntimeType[] = ["claude-code", "ai-sdk"];
+  const supportedRuntimes: RuntimeType[] = ["claude-code"];
   return {
     id: "kimi",
     supportedRuntimes,
@@ -151,21 +148,10 @@ export function kimi(opts: { apiKey?: string; model?: string } = {}): ModelProvi
         case "claude-code":
           return {
             runtime,
-            model,
             env: {
               ANTHROPIC_BASE_URL: KIMI_CODE_ANTHROPIC,
               ANTHROPIC_API_KEY: apiKey,
               CLAUDE_CODE_AUTO_COMPACT_WINDOW: "262144",
-            },
-          };
-        case "ai-sdk":
-          return {
-            runtime,
-            spec: {
-              kind: "moonshotai",
-              baseURL: KIMI_CODE_OPENAI,
-              apiKey,
-              model,
             },
           };
         default:

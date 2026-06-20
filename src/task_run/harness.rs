@@ -2,13 +2,14 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::AgentToolSpec;
-use crate::agent_run::{AgentPromptSection, AgentRunRequest, AgentRunResponse};
-use crate::node::NodePlan;
-use crate::types::NodeOperation;
+use crate::agent_run::{AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse};
 use crate::workspace::WorkspaceProvider;
 
 use super::tools::{EngineTool, EngineTools, read_operation_context_spec};
-use super::{AgentOperationContext, AgentRunDecodeError, AgentRunResult};
+use super::{
+    AgentOperationContext, AgentRunDecodeError, AgentRunResult, Artifact, NodeOperation, NodePlan,
+    ScopeAssessment, WorkSize,
+};
 
 macro_rules! operation_prompt {
     ($(
@@ -59,6 +60,8 @@ pub struct EngineAgentNodePacket {
     pub parent: Option<u64>,
     pub key: String,
     pub intent: String,
+    pub size: WorkSize,
+    pub scope_assessment: Option<ScopeAssessment>,
     pub status: String,
     pub workspace: EngineAgentWorkspaceRequirementPacket,
     pub allow_write: bool,
@@ -107,12 +110,25 @@ pub(super) fn finish_prompt(tools: &[&str]) -> String {
     )
 }
 
+fn context_access_section() -> AgentPromptSection {
+    AgentPromptSection {
+        title: "Context Access".to_string(),
+        content: "The operation context is injected into this run. Use read_operation_context when you need the authoritative packet, full node details, candidate artifact, child artifacts, or workspace surface before submitting."
+            .to_string(),
+    }
+}
+
+fn with_context_access(mut sections: Vec<AgentPromptSection>) -> Vec<AgentPromptSection> {
+    sections.insert(1, context_access_section());
+    sections
+}
+
 fn operation_prompt_sections(
     operation: NodeOperation,
     context: &AgentOperationContext,
 ) -> Vec<AgentPromptSection> {
     match operation {
-        NodeOperation::Specify => operation_prompt! {
+        NodeOperation::Specify => with_context_access(operation_prompt! {
             "Role" {
                 "You are the specification pass for one recursive engine node."
             }
@@ -123,16 +139,28 @@ fn operation_prompt_sections(
                 )
             }
             "Specification Standard" {
-                "Clarify the objective, expected artifact, acceptance boundary, workspace assumptions, and any missing constraints. Use read_operation_context for the authoritative node packet before submitting."
+                "Turn the raw intent into a stable work brief: what result would matter, what boundary keeps it from drifting, what workspace assumptions shape the work, and what specific fact would block even a responsible scope judgement. Assess the node intent itself, not the cost of this Specify pass. The engine will choose the next operation from your scope assessment."
+            }
+            "Scope Reading" {
+                "Pick the smallest safe size by cognitive load, not by artifact type. tiny feels like a direct answer from injected context. small feels like one local problem with one obvious verification path. medium feels like one coherent change or analysis that may touch several related facts or files. large feels like ordered phases, shared evidence feeding later work, or several concerns that deserve separate verification. xlarge feels like multiple independent targets or repo-wide exploration that would make one run brittle."
+            }
+            "Scope Examples" {
+                "Use these as analogies, not rules. A direct explanation from the current message is tiny. A local API rename with a focused test is small. One coherent feature or design review across related files is medium. A phased migration, repo-wide audit, or several independent packages is large or xlarge."
+            }
+            "Shape Reading" {
+                "Read the shape of the problem. atomic means one coherent responsibility. phased means the understanding changes as work progresses, such as inspect then change then validate. independent_areas means several weakly coupled surfaces can be explored separately before convergence. unknown is only for cases where the injected context is genuinely insufficient to classify the work."
+            }
+            "Missing Information" {
+                "Ask for missing information only when one concrete absent fact blocks a responsible next step. Do not ask for ordinary implementation choices, local acceptance details, or constraints that a later Plan or Execute pass can refine. If the intent already identifies a local area, do not ask which exact file, prompt string, or test to inspect; that discovery belongs to Execute. If the work is broad but understandable, submit missing_info as null and let the engine route it."
             }
             "Non Goals" {
-                "Do not solve the task, create child nodes, verify candidate output, or mutate workspace state during specification."
+                "Do not solve the task, create the plan, verify a candidate, combine child work, or mutate workspace state. This pass only makes the node legible enough for the engine to route safely."
             }
             "Completion" {
                 finish_prompt(&[EngineTool::SubmitSpecification.name()])
             }
-        },
-        NodeOperation::Acquire => operation_prompt! {
+        }),
+        NodeOperation::Acquire => with_context_access(operation_prompt! {
             "Role" {
                 "You are the information acquisition pass for a blocked recursive engine node."
             }
@@ -143,30 +171,36 @@ fn operation_prompt_sections(
                 )
             }
             "Evidence Standard" {
-                "Use read_operation_context to inspect the requested need, then return concise evidence with provenance or reasoning strong enough for the next operation to proceed."
+                "Return only the evidence that unblocks the next routing decision: facts, provenance when available, reasoning when provenance is internal, and any uncertainty that should remain visible. Do not turn this into a broad research task."
             }
             "Boundary" {
-                "Do not create child nodes or execute workspace changes. This pass only supplies the missing information and the next plan transition."
+                "Do not create child nodes, choose a plan, or execute workspace changes. This pass supplies missing information evidence so the engine can re-run Specify with better context."
             }
             "Completion" {
                 finish_prompt(&[EngineTool::SubmitEvidence.name()])
             }
-        },
-        NodeOperation::Plan => operation_prompt! {
+        }),
+        NodeOperation::Plan => with_context_access(operation_prompt! {
             "Role" {
                 "You are the planning pass for one recursive engine node."
             }
             "Parent Problem" {
                 format!(
-                    "Plan node {} by identifying the main contradiction first. Parent intent: {}",
+                    "Plan node {} by understanding the main contradiction first. Parent intent: {}",
                     context.node.id, context.node.intent
                 )
             }
-            "Contradiction Analysis" {
-                "Analyze the main problem before decomposing. If the work is a sequence of qualitatively different phases, choose mode stage. If the work is the same phase split across independent items, choose mode parallel. Do not encode dependency graphs."
+            "Planning Lens" {
+                "Find the load-bearing 30% of this parent problem: the pressure that determines the shape of the rest. Decompose only around that pressure. Keep child intent clear enough that each child can re-enter Specify and solve its own local 70% without being micromanaged by this plan."
+            }
+            "Group Shape" {
+                "Choose stage when the parent problem wants a changing line of thought: each item transforms the understanding for the next item, and early evidence should shape later work. Choose parallel when the parent problem wants several comparable evidence surfaces explored independently before a later convergence pass. Do not invent dependency graphs; if sibling output must be interpreted together, leave that synthesis to Combine."
             }
             "Planning Strategy" {
-                "Use read_operation_context before submitting. Create the smallest useful item set. Stage items are executed in order. Parallel items are intended to converge independently before Combine. If an item needs further decomposition, give it a group plan of its own instead of mixing serial and parallel structure in one group."
+                "Create the smallest useful item set that preserves the parent shape. A good child is a coherent responsibility, not a checklist row. This Plan pass defines only the current local group; child nodes always re-enter Specify, so do not decide child split/execute here."
+            }
+            "Plan Item Shape" {
+                "Each item should describe one child node. Prefer key and intent. Include size, shape, reference_match, and scope_signals when useful to preserve the sizing reason. Use shape values atomic, phased, independent_areas, or unknown. Write scope_signals as an array of short strings. You may also use title, description, and verification; the engine will keep the description and append verification as the child acceptance note. Do not include plan.kind or nested groups in plan items."
             }
             "Non Goals" {
                 "Do not execute item work or combine results here. This pass only defines one local plan group."
@@ -174,8 +208,8 @@ fn operation_prompt_sections(
             "Completion" {
                 finish_prompt(&[EngineTool::SubmitPlanGroup.name()])
             }
-        },
-        NodeOperation::Execute => operation_prompt! {
+        }),
+        NodeOperation::Execute => with_context_access(operation_prompt! {
             "Role" {
                 "You are the atomic execution pass for one recursive engine node."
             }
@@ -186,16 +220,16 @@ fn operation_prompt_sections(
                 )
             }
             "Workspace Rules" {
-                "Use read_operation_context before acting. If workspace_surface is present, treat it as the concrete execution surface. Respect allow_write, read_scope, write_scope, and provider details exactly. Submit only the work result; the workspace provider captures file changes and side effects."
+                "If workspace_surface is present, treat it as the concrete execution surface. Respect allow_write, read_scope, write_scope, and provider details exactly. Submit only the work result; the workspace provider captures file changes and side effects."
             }
             "Execution Standard" {
-                "Produce the smallest complete artifact that satisfies this node. Do not split the work, verify acceptance, or decide global task completion from this pass."
+                "Produce the smallest complete artifact that satisfies this node. Work like a competent owner of this local slice: inspect the relevant context, make the local change or answer, and run focused checks when the workspace and capability scope allow it. Include the useful evidence in the submitted result. Do not split the work, claim final task acceptance, or decide global completion from this pass."
             }
             "Completion" {
                 finish_prompt(&[EngineTool::SubmitWork.name()])
             }
-        },
-        NodeOperation::Combine => operation_prompt! {
+        }),
+        NodeOperation::Combine => with_context_access(operation_prompt! {
             "Role" {
                 "You are the convergence pass that combines accepted child artifacts."
             }
@@ -208,10 +242,10 @@ fn operation_prompt_sections(
                 )
             }
             "Workspace Integration" {
-                "Use read_operation_context to inspect child artifacts and workspace_surface. Workspace change details are normally hidden. If conflicts are present, resolve those conflict paths as part of the combined artifact instead of treating them as deterministic failure."
+                "Workspace change details are normally hidden. If conflicts are present, resolve those conflict paths as part of the combined artifact instead of treating them as deterministic failure."
             }
             "Combination Standard" {
-                "Preserve accepted child work, remove contradictions, explain resolved conflicts, and submit one coherent parent-level result."
+                "Reconstruct the parent-level result from the accepted child evidence. Do not paste child outputs together. Preserve what matters, discard duplicate or local scaffolding, resolve contradictions against the parent intent, and make remaining caveats explicit. If the children represent parallel evidence surfaces, synthesize the common conclusion and the meaningful differences."
             }
             "Non Goals" {
                 "Do not create new child nodes or re-run verification. Verification happens after this combined result is submitted."
@@ -219,8 +253,8 @@ fn operation_prompt_sections(
             "Completion" {
                 finish_prompt(&[EngineTool::SubmitCombination.name()])
             }
-        },
-        NodeOperation::Verify => operation_prompt! {
+        }),
+        NodeOperation::Verify => with_context_access(operation_prompt! {
             "Role" {
                 "You are the verification pass for one candidate artifact."
             }
@@ -231,38 +265,21 @@ fn operation_prompt_sections(
                 )
             }
             "Verification Lens" {
-                "Use read_operation_context to inspect the candidate artifact, node constraints, workspace scope, and any child artifact evidence. Workspace change details are verified by the engine instead of model judgment."
+                "Judge the candidate artifact against the node constraints, workspace scope, and any child artifact evidence. Workspace change details are verified by the engine instead of model judgment."
             }
             "Verdict Standard" {
-                "Accept only when the candidate satisfies the node intent and scope. Reject with actionable feedback when the same node can retry. Mark uncertain only when required information is missing rather than guessed."
+                "Use this judgement model. If a concrete external fact is missing from the operation context, return verdict=need_information with the specific missing fact. If the candidate satisfies the node intent and scope with available evidence, accept it. If it falls short but the same node can repair it, reject with feedback written for the next Execute attempt: what is missing, what evidence shows the gap, and what a corrected artifact should change. Do not reject based on style preference alone."
             }
             "Boundary" {
-                "Do not edit the artifact or workspace in verification. Return only the verdict and concise reasoning."
+                "Do not edit the artifact or workspace in verification. Return only the verdict and concise reasoning that helps the engine either converge or retry efficiently."
             }
             "Completion" {
                 finish_prompt(&[EngineTool::SubmitVerdict.name()])
             }
-        },
-        NodeOperation::Commit => operation_prompt! {
-            "Role" {
-                "You are the commit/report pass for an accepted recursive engine node."
-            }
-            "Accepted Node" {
-                format!(
-                    "Prepare the final report signal for node {} after convergence. Node intent: {}",
-                    context.node.id, context.node.intent
-                )
-            }
-            "Report Standard" {
-                "Use read_operation_context to inspect the accepted candidate. Summarize the durable result, unresolved caveats, and any operator-facing next step."
-            }
-            "Boundary" {
-                "Do not modify artifacts, spawn new work, or re-open verification. This pass only records the accepted node as committed."
-            }
-            "Completion" {
-                finish_prompt(&[EngineTool::SubmitCommit.name()])
-            }
-        },
+        }),
+        NodeOperation::Commit => {
+            panic!("Commit is an engine-only event and must not build an agent run")
+        }
     }
 }
 
@@ -274,20 +291,26 @@ fn tools_for_operation(operation: NodeOperation) -> Vec<EngineTool> {
         NodeOperation::Execute => vec![EngineTool::SubmitWork],
         NodeOperation::Combine => vec![EngineTool::SubmitCombination],
         NodeOperation::Verify => vec![EngineTool::SubmitVerdict],
-        NodeOperation::Commit => vec![EngineTool::SubmitCommit],
+        NodeOperation::Commit => {
+            panic!("Commit is an engine-only event and must not expose agent tools")
+        }
     }
 }
 
 impl OperationHarness {
     pub fn build_agent_run(&self) -> AgentRunRequest {
         let context = self.context();
-        AgentRunRequest::new(
+        let request = AgentRunRequest::new(
             format!("{:?} node {}", context.operation, context.node.id),
             operation_prompt_sections(context.operation, context),
             operation_input(context),
             operation_tools(context),
             operation_tool_names(context.operation),
-        )
+        );
+        match context.operation {
+            NodeOperation::Plan => request.with_effort(AgentEffort::Max),
+            _ => request,
+        }
     }
 
     pub fn context_packet(&self) -> EngineAgentContextPacket {
@@ -402,6 +425,8 @@ fn node_packet(context: &AgentOperationContext) -> EngineAgentNodePacket {
         parent: node.parent,
         key: node.key.0.clone(),
         intent: node.intent.clone(),
+        size: node.size,
+        scope_assessment: node.scope_assessment.clone(),
         status: format!("{:?}", node.status),
         workspace: EngineAgentWorkspaceRequirementPacket {
             provider: node.workspace.provider,
@@ -426,7 +451,7 @@ fn node_packet(context: &AgentOperationContext) -> EngineAgentNodePacket {
     }
 }
 
-fn artifact_packet(artifact: &crate::Artifact) -> EngineAgentArtifactPacket {
+fn artifact_packet(artifact: &Artifact) -> EngineAgentArtifactPacket {
     EngineAgentArtifactPacket {
         id: artifact.id,
         node_id: artifact.node_id,

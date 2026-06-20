@@ -329,6 +329,11 @@ function runtimeProviderOptions(
     if (!providerName || !model) {
       throw new Error("ai-sdk runtime requires both provider and model.");
     }
+    if (providerName === "kimi") {
+      throw new Error(
+        "Kimi Code does not support the ai-sdk runtime without client allowlist onboarding.",
+      );
+    }
   }
   if (!providerName) return options;
 
@@ -346,7 +351,7 @@ function createRuntimeProvider(providerName: string, model?: string): ModelProvi
     case "deepseek":
       return deepseek(model ? { model } : {});
     case "kimi":
-      return kimi(model ? { model } : {});
+      return kimi({});
     case "anthropic":
       return anthropic(model ? { model } : {});
     case "openai":

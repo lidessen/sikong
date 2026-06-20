@@ -25,7 +25,13 @@ async fn agent_run_scheduler_reuses_one_host_for_multiple_runs() {
     );
     assert_eq!(
         first.terminal_call.as_ref().map(|call| &call.arguments),
-        Some(&json!({}))
+        Some(&json!({
+            "size": "small",
+            "shape": "atomic",
+            "reference_match": "This is closest to Small because the mock agent mirrors one local node and one terminal path.",
+            "scope_signals": ["one local problem", "one verification path"],
+            "missing_info": null
+        }))
     );
     assert_eq!(
         second.terminal_call.as_ref().map(|call| call.name.as_str()),
@@ -114,6 +120,7 @@ fn request(terminal_tool: &str) -> AgentRunRequest {
             },
         ],
         terminal_tool_set: vec![terminal_tool.to_string()],
+        effort: None,
     }
 }
 

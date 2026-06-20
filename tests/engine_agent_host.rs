@@ -47,12 +47,7 @@ async fn host_simple_leaf_commits_with_terminal_tools() {
             .iter()
             .filter_map(|run| run.terminal_tool.as_deref())
             .collect::<Vec<_>>(),
-        vec![
-            "submit_specification",
-            "submit_work",
-            "submit_verdict",
-            "submit_commit",
-        ]
+        vec!["submit_specification", "submit_work", "submit_verdict",]
     );
 }
 
@@ -66,6 +61,8 @@ async fn host_acquire_can_rewrite_into_group_then_commit() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("research-plan".to_string()),
         intent: "combined findings".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
@@ -110,6 +107,8 @@ async fn host_nested_group_resolves_children_recursively() {
     let nested = NodeTemplate {
         key: ProblemKey("nested".to_string()),
         intent: "nested combined".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
@@ -124,6 +123,8 @@ async fn host_nested_group_resolves_children_recursively() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("root-group".to_string()),
         intent: "root combined".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
@@ -171,6 +172,8 @@ async fn host_reject_retries_until_accepted() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("host-retry".to_string()),
         intent: "retry once".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget { max_attempts: 2 },
@@ -201,6 +204,8 @@ async fn host_uncertain_verdict_moves_node_to_waiting_for_info() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("host-uncertain".to_string()),
         intent: "needs post-verify info".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
@@ -235,6 +240,8 @@ async fn host_unsafe_read_only_change_prunes_node() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("host-read-only".to_string()),
         intent: "read only must not write".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git_repo(
             repo.root(),
             repo.worktrees(),
@@ -273,6 +280,8 @@ async fn host_git_merge_conflict_is_given_to_agent_instead_of_pruning_parent() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("host-conflict".to_string()),
         intent: "combined patch".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git(["packages/client/src/api.ts"]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
@@ -320,6 +329,8 @@ async fn host_git_workspace_surface_is_written_captured_and_cleaned() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("host-git-write".to_string()),
         intent: "host writes git file".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git_repo(
             repo.root(),
             repo.worktrees(),
@@ -362,6 +373,8 @@ fn scoped_git_leaf(key: &str, output: &str, path: &str) -> NodeTemplate {
     NodeTemplate {
         key: ProblemKey(key.to_string()),
         intent: output.to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git([path]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),

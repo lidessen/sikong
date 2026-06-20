@@ -1,13 +1,11 @@
 use std::collections::BTreeSet;
 
-use crate::types::{WorkspaceResourceId, WorkspaceSnapshotId};
-
 use super::{
     GitBranchResource, GitCommitResource, GitWorkspaceChange, GitWorkspaceSnapshot,
     GitWorkspaceSurface, GitWorktreeResource, Workspace, WorkspaceChange, WorkspaceError,
-    WorkspaceIds, WorkspaceProvider, WorkspaceRequirement, WorkspaceResource,
+    WorkspaceIds, WorkspaceProvider, WorkspaceRequirement, WorkspaceResource, WorkspaceResourceId,
     WorkspaceResourceKind, WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState,
-    WorkspaceResult, WorkspaceSnapshot, WorkspaceSurface, git_cli::GitCli,
+    WorkspaceResult, WorkspaceSnapshot, WorkspaceSnapshotId, WorkspaceSurface, git_cli::GitCli,
 };
 
 #[derive(Debug, Clone, Default)]

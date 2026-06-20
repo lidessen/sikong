@@ -159,7 +159,7 @@ Tool definitions live outside harnesses:
 - `EngineTool`: tools available to engine operation runs, such as
   `read_operation_context` and operation submit tools.
 - `AssistantTool`: tools available to assistant turns, such as
-  `read_assistant_context` and assistant decision submission.
+  `query_messages`, task-board tools, and `finish_turn`.
 
 The tool catalog defines names, descriptions, and input schemas. It does not
 decide which terminal tools an operation should use. That choice stays with the
@@ -168,8 +168,6 @@ current harness and operation implementation.
 Field meanings:
 
 - `protocolVersion`: fail-fast compatibility version for the Rust/Bun contract.
-- `kind`: names the harness family. `engine_operation` is used for
-  `NodeOperation`; `assistant_turn` is reserved for the future assistant loop.
 - `objective`: concise label for this one loop run, suitable for logs and
   summaries.
 - `prompt`: ordered model-facing harness sections. Each section has a stable
@@ -179,7 +177,9 @@ Field meanings:
 - `input`: structured harness-owned context packet. For engine operations this
   is `EngineAgentContextPacket`, containing operation, node metadata,
   workspace requirement, candidate artifact, child artifacts, and integration
-  conflict evidence. For assistant turns this is `AssistantTurnContextPacket`.
+  conflict evidence. For assistant turns this is the pack-built assistant input
+  object containing the current message, session conversation, and mounted pack
+  context such as the task board.
 - `tools`: dynamic tools made available to the loop. Tool definitions do not
   carry terminal semantics. Rust keeps tool definitions in a tool catalog; the
   harness selects concrete tools for the current context.
@@ -228,17 +228,107 @@ stage/parallel child group, candidate artifact, verification verdict, or commit
 report through terminal tool arguments; it cannot directly mutate the main
 world.
 
-The Rust prototype defines only the `AgentWorker` client boundary. Rust-side
-tests may use a test-only worker under `tests/`, but the real Bun mock belongs
-in `@sikong/agent-host`, where it can exercise the same dynamic tool
-registration and loop stop path as the production runner. `BunAgentHostClient`
-is only a Unix socket client for that host process; it is not the runtime pool
-implementation. `AgentOperationContext` prepares operation-specific context and
-submit-tool implementations through `OperationHarness`; `EngineAgentHarness` is
-only the current adapter for the engine's legacy `AgentHarness` trait.
-`NodeScript` is only the current
-fixture used by the operation harness before real submit-tool payload schemas
-exist. It should not become the durable kernel model.
+The Rust prototype defines the `AgentRunScheduler` boundary. Rust-side tests
+may use deterministic scheduler fixtures, but the real Bun mock belongs in
+`@sikong/agent-host`, where it can exercise the same dynamic tool registration
+and loop stop path as the production runner. `ProcessAgentRunScheduler` is the
+Rust-side Unix socket scheduler for that host process; it is not the runtime
+pool implementation. `AgentOperationContext` prepares operation-specific
+context through `OperationHarness`, and terminal tool payload schemas are
+defined by the operation tool catalog.
+
+## Live Eval Mode
+
+Live agent-loop evaluation is not a Rust unit test. It is an explicit eval mode
+outside the default deterministic suite because it spends model tokens, depends
+on credentials, and is judged probabilistically.
+
+The minimal shape is:
+
+```text
+natural task request
+  -> full single task run through real agent-loop
+  -> transcript of nodes, operations, terminal tools, events, and report
+  -> independent judge agent
+  -> strict JSON judgement
+```
+
+The scenario input must not contain a concrete decomposition. The root task
+starts as a normal task request. During `Specify`, the actor agent may choose
+`Execute`, `NeedsInfo`, or `Split`; only `Split` activates the later `Plan`
+operation that creates child nodes. This keeps split decisions inside the real
+agent loop rather than the test harness.
+
+The first live eval is exposed as:
+
+```bash
+SIKONG_RUN_LIVE_AGENT_TESTS=1 KIMI_CODE_API_KEY=... \
+cargo run -- eval task-run-split --json
+```
+
+Before running the full task eval, each operation can be evaluated in isolation:
+
+```bash
+# One operation scenario.
+RUST_LOG=siko=info SIKONG_RUN_LIVE_AGENT_TESTS=1 \
+cargo run -- eval task-run-operation --operation verify --scenario accept --json
+
+# All scenarios for one operation.
+RUST_LOG=siko=info SIKONG_RUN_LIVE_AGENT_TESTS=1 \
+cargo run -- eval task-run-operation --operation plan --scenario all --json
+
+# Full operation matrix. This is intentionally explicit because it spends many
+# model calls: each scenario runs the operation actor and then a judge actor.
+RUST_LOG=siko=info SIKONG_RUN_LIVE_AGENT_TESTS=1 \
+cargo run -- eval task-run-operation --operation all --scenario all --json
+```
+
+The operation matrix covers the important branch behavior before the full run:
+
+- `Specify`: `execute`, `split`, `needs-info`
+- `Acquire`: `resolve-missing-scope`
+- `Plan`: `stage`, `parallel`
+- `Execute`: `simple-result`, `blocked-files`
+- `Combine`: `normal`, `conflict`
+- `Verify`: `accept`, `reject`, `uncertain`
+- `Commit`: `report`
+
+The operation judge is also tool-driven. It first calls `read_eval_context`,
+then must end with `finish_eval`, so judge failures are visible as the same
+terminal-tool protocol failures as actor runs.
+
+When investigating a slow or stuck live run, capture both Rust orchestration
+logs and Bun agent-loop activity:
+
+```bash
+RUST_LOG=siko=info SIKONG_RUN_LIVE_AGENT_TESTS=1 \
+cargo run -- eval task-run-split --json 2>&1 | tee /tmp/siko-task-run-split-live.log
+```
+
+Useful views:
+
+```bash
+# Agent-loop tool calls, usage snapshots, and final result.
+rg '^\{' /tmp/siko-task-run-split-live.log \
+  | jq -r 'select(.source == "agent-loop") | [.elapsedMs, .event, (.name // .terminalTool // ""), (.inputTokens // ""), (.totalTokens // ""), (.error // "")] | @tsv'
+
+# Rust-side operation boundaries and failures.
+rg 'starting agent run|agent host run completed|agent run completed|agent run failed|failed to run eval' \
+  /tmp/siko-task-run-split-live.log
+
+# Include text/thinking chunks when the model's reasoning stream is needed.
+RUST_LOG=siko=info SIKONG_AGENT_LOOP_VERBOSE_TEXT=1 SIKONG_RUN_LIVE_AGENT_TESTS=1 \
+cargo run -- eval task-run-split --json 2>&1 | tee /tmp/siko-task-run-split-live-verbose.log
+```
+
+The agent-host disables Claude Code built-in tools by default for real
+agent-loop runs, so operation passes can only call the dynamic tools supplied by
+Rust. For debugging tool leakage, set `SIKONG_AGENT_HOST_CLAUDE_BUILTINS=1`.
+
+Its default task is intentionally broad: "Make a small agent runtime ready for
+a developer preview." The judge passes only when the transcript shows a real
+single task run with useful child nodes and the expected major operations, not
+just a hand-authored plan payload.
 
 ## Standard Node Operations
 
@@ -288,7 +378,63 @@ Input:
 Output:
 
 - `ProblemNode` with intent, constraints, acceptance rules, capabilities,
-  budget, and a stable memo key.
+  budget, stable memo key, and a scope assessment.
+
+`Specify` does not ask the agent to estimate token counts. The agent chooses the
+smallest safe semantic size class, classifies the work shape, and explains the
+closest reference match. It does not submit `execute`, `split`, `stage`, or
+`parallel`; those are engine decisions.
+
+```rust
+enum WorkSize {
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    XLarge,
+}
+
+enum WorkShape {
+    Atomic,
+    Phased,
+    IndependentAreas,
+    Unknown,
+}
+
+struct ScopeAssessment {
+    size: WorkSize,
+    shape: WorkShape,
+    reference_match: String,
+    scope_signals: Vec<String>,
+}
+```
+
+The size classes are deliberately concrete enough for model-side analogy:
+
+- `tiny`: answerable from the user request and injected context; no project
+  exploration.
+- `small`: one local problem, one primary area, usually 1-3 files, and one
+  obvious verification path.
+- `medium`: one coherent feature or change, several related files, implementation
+  plus focused tests, and one main acceptance target.
+- `large`: multiple related parts that benefit from ordered phases, shared
+  context, or evidence from earlier work feeding later work.
+- `xlarge`: too broad for one reliable run, multiple independent areas, repo-wide
+  exploration, or several targets that can interfere.
+
+The work shape captures qualitative structure without letting the agent choose
+the plan:
+
+- `atomic`: one coherent unit of work.
+- `phased`: qualitatively different steps must happen in order, such as
+  understand -> change -> verify.
+- `independent_areas`: several weakly coupled areas can be handled separately.
+- `unknown`: available evidence is insufficient to classify the shape.
+
+The engine owns any token-window mapping and next-plan policy. A practical
+default is: `tiny/small/medium` execute directly unless blocked by missing
+information; `large/xlarge` enter `Plan`, where the planner chooses `stage` or
+`parallel` from the current scope and evidence.
 
 `Specify` is used at the beginning and after failures. It is not a retry
 operation;
@@ -353,10 +499,12 @@ The group mode follows from that analysis:
   such as inspecting several modules or producing several same-level design
   options.
 
-Do not encode arbitrary dependency graphs inside one planning step. If an item
-needs more structure, give that item its own `NodePlan::Group` and let the same
-recursive mechanism plan it later. A failed parent can be planned differently
-on a later attempt, but that is still `Plan`, not a separate repair operation.
+Do not encode arbitrary dependency graphs inside one planning step. Plan items
+describe child node intent and optional scope hints; they do not choose
+`execute`, `split`, or nested groups. Every child re-enters `Specify`, and the
+engine applies the same scope policy recursively. A failed parent can be planned
+differently on a later attempt, but that is still `Plan`, not a separate repair
+operation.
 
 ### Execute
 
@@ -723,6 +871,7 @@ enum NodePlan {
         need: String,
         then: Box<NodePlan>,
     },
+    Split,
     Group(PlanGroup),
 }
 

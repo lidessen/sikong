@@ -1,4 +1,14 @@
-use std::{ffi::OsStr, fs, path::Path, process::Command};
+use std::{
+    ffi::OsStr,
+    fs,
+    path::Path,
+    process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use siko::*;
 
@@ -17,6 +27,20 @@ async fn simple_leaf_executes_verifies_and_commits() {
     let report = engine.run(root).await.unwrap();
 
     assert_eq!(report.status, NodeStatus::Committed);
+    assert_eq!(engine.node(root).unwrap().size, WorkSize::Small);
+    assert_eq!(
+        engine
+            .node(root)
+            .unwrap()
+            .scope_assessment
+            .as_ref()
+            .unwrap()
+            .scope_signals,
+        vec![
+            "one local problem".to_string(),
+            "one verification path".to_string()
+        ]
+    );
     let artifact = engine.artifact(report.artifact.unwrap()).unwrap();
     assert_eq!(artifact.text, "polished text");
     assert_eq!(
@@ -42,7 +66,6 @@ async fn simple_leaf_executes_verifies_and_commits() {
             NodeOperation::Specify,
             NodeOperation::Execute,
             NodeOperation::Verify,
-            NodeOperation::Commit,
         ]
     );
     assert_eq!(
@@ -51,12 +74,7 @@ async fn simple_leaf_executes_verifies_and_commits() {
             .iter()
             .filter_map(|run| run.terminal_tool.as_deref())
             .collect::<Vec<_>>(),
-        vec![
-            "submit_specification",
-            "submit_work",
-            "submit_verdict",
-            "submit_commit",
-        ]
+        vec!["submit_specification", "submit_work", "submit_verdict",]
     );
 }
 
@@ -66,6 +84,8 @@ async fn acquire_rewrites_node_then_executes() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("trip".to_string()),
         intent: "plan trip".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
@@ -93,6 +113,8 @@ async fn parallel_group_resolves_children_and_combines_parent() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("design".to_string()),
         intent: "complete design".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
@@ -127,11 +149,90 @@ async fn parallel_group_resolves_children_and_combines_parent() {
 }
 
 #[tokio::test]
+async fn parallel_group_executes_children_concurrently() {
+    let state = Arc::new(ConcurrentAgentState::default());
+    let mut engine = Engine::new(
+        MemoryWorkspace::default(),
+        ConcurrentAgentRunScheduler {
+            state: state.clone(),
+        },
+    );
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("parallel".to_string()),
+        intent: "combined concurrent work".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![
+                NodeTemplate::memory_leaf("concurrent-a", "concurrent a"),
+                NodeTemplate::memory_leaf("concurrent-b", "concurrent b"),
+            ],
+        }),
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Committed);
+    assert!(
+        state.max_execute.load(Ordering::SeqCst) > 1,
+        "parallel children did not overlap"
+    );
+}
+
+#[tokio::test]
+async fn parallel_group_merges_children_as_they_finish() {
+    let mut engine = Engine::new(MemoryWorkspace::default(), StaggeredAgentRunScheduler);
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("staggered".to_string()),
+        intent: "combined staggered work".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![
+                NodeTemplate::memory_leaf("slow-child", "slow child"),
+                NodeTemplate::memory_leaf("fast-child", "fast child"),
+            ],
+        }),
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Committed);
+    let children = engine.node(root).unwrap().children.clone();
+    let slow_child = children[0];
+    let fast_child = children[1];
+    let fast_commit = engine
+        .events()
+        .iter()
+        .position(|event| event.node_id == fast_child && event.operation == NodeOperation::Commit)
+        .expect("fast child commit event");
+    let slow_commit = engine
+        .events()
+        .iter()
+        .position(|event| event.node_id == slow_child && event.operation == NodeOperation::Commit)
+        .expect("slow child commit event");
+    assert!(
+        fast_commit < slow_commit,
+        "parallel branches should be merged in completion order"
+    );
+}
+
+#[tokio::test]
 async fn stage_group_resolves_items_in_order_and_combines_parent() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("staged-design".to_string()),
         intent: "complete staged design".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
@@ -152,14 +253,14 @@ async fn stage_group_resolves_items_in_order_and_combines_parent() {
     let stage_a = root_children[0];
     let stage_b = root_children[1];
     let stage_a_commit = engine
-        .agent_runs()
+        .events()
         .iter()
-        .position(|run| run.node_id == stage_a && run.operation == NodeOperation::Commit)
+        .position(|event| event.node_id == stage_a && event.operation == NodeOperation::Commit)
         .expect("stage a commit");
     let stage_b_spec = engine
-        .agent_runs()
+        .events()
         .iter()
-        .position(|run| run.node_id == stage_b && run.operation == NodeOperation::Specify)
+        .position(|event| event.node_id == stage_b && event.operation == NodeOperation::Specify)
         .expect("stage b specify");
     assert!(stage_a_commit < stage_b_spec);
     assert_eq!(
@@ -168,12 +269,66 @@ async fn stage_group_resolves_items_in_order_and_combines_parent() {
     );
 }
 
+#[derive(Default)]
+struct ConcurrentAgentState {
+    current_execute: AtomicUsize,
+    max_execute: AtomicUsize,
+}
+
+#[derive(Clone)]
+struct ConcurrentAgentRunScheduler {
+    state: Arc<ConcurrentAgentState>,
+}
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for ConcurrentAgentRunScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        if input.terminal_tool_set == vec!["submit_work".to_string()] {
+            let current = self.state.current_execute.fetch_add(1, Ordering::SeqCst) + 1;
+            self.state.max_execute.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.state.current_execute.fetch_sub(1, Ordering::SeqCst);
+        }
+
+        TestAgentRunScheduler.run(input, cancellation).await
+    }
+}
+
+#[derive(Clone)]
+struct StaggeredAgentRunScheduler;
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for StaggeredAgentRunScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        let intent = input
+            .input
+            .pointer("/node/intent")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if intent == "slow child" && input.terminal_tool_set == vec!["submit_work".to_string()] {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+        }
+
+        TestAgentRunScheduler.run(input, cancellation).await
+    }
+}
+
 #[tokio::test]
 async fn verify_reject_retries_leaf_until_accept() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("retry".to_string()),
         intent: "retry once".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget { max_attempts: 2 },
@@ -200,6 +355,8 @@ async fn repeated_failure_prunes_after_budget() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("fail".to_string()),
         intent: "always bad".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget { max_attempts: 2 },
@@ -244,6 +401,8 @@ async fn read_only_workspace_change_is_rejected() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("read-only".to_string()),
         intent: "read only must not write".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git_repo(
             repo.root(),
             repo.worktrees(),
@@ -280,6 +439,8 @@ async fn git_combine_conflict_is_given_to_agent_instead_of_pruning_parent() {
     let child_a = NodeTemplate {
         key: ProblemKey("a".to_string()),
         intent: "patch a".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git(["packages/client/src/api.ts"]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
@@ -288,6 +449,8 @@ async fn git_combine_conflict_is_given_to_agent_instead_of_pruning_parent() {
     let child_b = NodeTemplate {
         key: ProblemKey("b".to_string()),
         intent: "patch b".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git(["packages/client/src/api.ts"]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
@@ -296,6 +459,8 @@ async fn git_combine_conflict_is_given_to_agent_instead_of_pruning_parent() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("conflict".to_string()),
         intent: "combined patch".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git(["packages/client/src/api.ts"]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
@@ -337,6 +502,8 @@ async fn engine_cleans_git_workspace_resources_after_run() {
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("write-file".to_string()),
         intent: "write file".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
         workspace: WorkspaceRequirement::git_repo(
             repo.root(),
             repo.worktrees(),
@@ -355,6 +522,7 @@ async fn engine_cleans_git_workspace_resources_after_run() {
     assert!(repo.git(["branch", "--list", "sikong/*"]).trim().is_empty());
 }
 
+#[derive(Clone)]
 struct WritingGitAgentRunScheduler;
 
 #[async_trait::async_trait]
@@ -385,6 +553,7 @@ impl AgentRunScheduler for WritingGitAgentRunScheduler {
                         "output": "write file",
                     }),
                 }),
+                usage: None,
             };
         }
 

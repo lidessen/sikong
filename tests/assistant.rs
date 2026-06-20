@@ -58,13 +58,91 @@ impl AssistantLoop for TestAssistantLoop {
     }
 }
 
+#[derive(Debug, Default)]
+struct DirectReplyAssistantLoop;
+
+#[async_trait::async_trait]
+impl AssistantLoop for DirectReplyAssistantLoop {
+    async fn run_turn(
+        &mut self,
+        _context: &AssistantContext,
+    ) -> Result<AssistantTurn, AssistantTurnError> {
+        Ok(assistant_turn(
+            Vec::new(),
+            "Direct assistant reply.",
+            Vec::new(),
+        ))
+    }
+}
+
+#[derive(Debug, Default)]
+struct RecordingConversationAssistantLoop {
+    contexts: Arc<Mutex<Vec<AssistantContext>>>,
+}
+
+#[async_trait::async_trait]
+impl AssistantLoop for RecordingConversationAssistantLoop {
+    async fn run_turn(
+        &mut self,
+        context: &AssistantContext,
+    ) -> Result<AssistantTurn, AssistantTurnError> {
+        self.contexts.lock().unwrap().push(context.clone());
+        Ok(assistant_turn(
+            Vec::new(),
+            &format!("ack {}", context.current_message.trim()),
+            Vec::new(),
+        ))
+    }
+}
+
+#[derive(Debug, Default)]
+struct SteeringConversationAssistantLoop;
+
+#[async_trait::async_trait]
+impl AssistantLoop for SteeringConversationAssistantLoop {
+    async fn run_turn(
+        &mut self,
+        context: &AssistantContext,
+    ) -> Result<AssistantTurn, AssistantTurnError> {
+        if let Some(previous_task_id) = context
+            .conversation
+            .iter()
+            .rev()
+            .find_map(|entry| entry.task_id.clone())
+        {
+            return Ok(assistant_turn(
+                vec![tool_call(
+                    "create_task",
+                    serde_json::json!({
+                        "request": format!(
+                            "Follow up on {previous_task_id}: {}",
+                            context.current_message.trim()
+                        ),
+                    }),
+                )],
+                "Creating follow-up task.",
+                Vec::new(),
+            ));
+        }
+
+        Ok(assistant_turn(
+            vec![tool_call(
+                "create_task",
+                serde_json::json!({ "request": context.current_message.trim() }),
+            )],
+            "Creating task.",
+            Vec::new(),
+        ))
+    }
+}
+
 fn assistant_turn(
     mut calls: Vec<AgentToolCall>,
     response: &str,
     task_ids: Vec<String>,
 ) -> AssistantTurn {
     calls.push(tool_call(
-        "finish_assistant_turn",
+        "finish_turn",
         serde_json::json!({
             "response": response,
             "task_ids": task_ids,
@@ -82,6 +160,91 @@ fn tool_call(name: &str, arguments: serde_json::Value) -> AgentToolCall {
         name: name.to_string(),
         arguments,
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_session_injects_latest_message_and_recent_conversation() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::with_worker_factory(
+        RecordingConversationAssistantLoop {
+            contexts: contexts.clone(),
+        },
+        || TestAgentRunScheduler,
+        AssistantSessionConfig {
+            max_parallel_tasks: 2,
+            task_board_enabled: false,
+            conversation_message_limit: 12,
+        },
+    );
+
+    session.handle_message(&mut store, "first message").await;
+    session.handle_message(&mut store, "second message").await;
+
+    let contexts = contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 2);
+    assert_eq!(contexts[0].current_message, "first message");
+    assert!(contexts[0].conversation.is_empty());
+    assert_eq!(contexts[1].current_message, "second message");
+    assert_eq!(contexts[1].conversation.len(), 2);
+    assert_eq!(
+        contexts[1].conversation[0].role,
+        AssistantConversationRole::User
+    );
+    assert_eq!(contexts[1].conversation[0].content, "first message");
+    assert_eq!(
+        contexts[1].conversation[1].role,
+        AssistantConversationRole::Assistant
+    );
+    assert_eq!(contexts[1].conversation[1].content, "ack first message");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_session_bounds_long_conversation_context() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::with_worker_factory(
+        RecordingConversationAssistantLoop {
+            contexts: contexts.clone(),
+        },
+        || TestAgentRunScheduler,
+        AssistantSessionConfig {
+            max_parallel_tasks: 2,
+            task_board_enabled: false,
+            conversation_message_limit: 3,
+        },
+    );
+
+    for index in 0..6 {
+        session
+            .handle_message(&mut store, format!("turn {index}"))
+            .await;
+    }
+
+    let contexts = contexts.lock().unwrap();
+    let last = contexts.last().expect("last context");
+    assert_eq!(last.current_message, "turn 5");
+    assert_eq!(last.conversation.len(), 3);
+    assert_eq!(last.conversation.last().unwrap().content, "ack turn 4");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_session_can_steer_from_previous_task_context() {
+    let mut store = MemoryTaskStore::new();
+    let mut session =
+        AssistantSession::new(SteeringConversationAssistantLoop, TestAgentRunScheduler);
+
+    let first = session.handle_message(&mut store, "draft a design").await;
+    let first_task_id = first.task_id.expect("first task id");
+    let second = session
+        .handle_message(&mut store, "make that more concrete")
+        .await;
+
+    let second_task_id = second.task_id.expect("second task id");
+    assert_ne!(first_task_id, second_task_id);
+    let second_task = store.get_task(&second_task_id).expect("second task");
+    assert!(second_task.request.contains(&first_task_id));
+    assert!(second_task.request.contains("make that more concrete"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -178,6 +341,82 @@ async fn assistant_agent_host_loop_handles_create_status_list_and_reply() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_session_can_run_without_task_board() {
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::with_worker_factory(
+        DirectReplyAssistantLoop,
+        || TestAgentRunScheduler,
+        AssistantSessionConfig {
+            max_parallel_tasks: 2,
+            task_board_enabled: false,
+            conversation_message_limit: 12,
+        },
+    );
+
+    let reply = session
+        .handle_message(&mut store, "summarize your role")
+        .await;
+
+    assert_eq!(reply.text, "Direct assistant reply.");
+    assert!(reply.task_id.is_none());
+    assert_eq!(store.list_tasks().len(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_real_kimi_loop_replies_without_task_board_when_enabled() {
+    if std::env::var("SIKONG_RUN_LIVE_AGENT_TESTS").ok().as_deref() != Some("1")
+        || std::env::var("KIMI_CODE_API_KEY").is_err()
+    {
+        eprintln!(
+            "skipping assistant_real_kimi_loop_replies_without_task_board_when_enabled: set SIKONG_RUN_LIVE_AGENT_TESTS=1 and KIMI_CODE_API_KEY"
+        );
+        return;
+    }
+    if skip_without_bun("assistant_real_kimi_loop_replies_without_task_board_when_enabled") {
+        return;
+    }
+
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::with_worker_factory(
+        AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
+            "bun",
+            [
+                "packages/agent-host/src/runtime-host.ts",
+                "--worker",
+                "agent-loop",
+                "--provider",
+                "kimi",
+                "--runtime",
+                "claude-code",
+                "--max-steps",
+                "6",
+            ],
+        )),
+        || TestAgentRunScheduler,
+        AssistantSessionConfig {
+            max_parallel_tasks: 2,
+            task_board_enabled: false,
+            conversation_message_limit: 12,
+        },
+    );
+
+    let reply = session
+        .handle_message(
+            &mut store,
+            "Reply exactly with assistant-live-ok. Do not create a task.",
+        )
+        .await;
+
+    assert!(
+        reply.text.to_lowercase().contains("assistant-live-ok"),
+        "unexpected live assistant reply: {}",
+        reply.text
+    );
+    assert!(reply.task_id.is_none());
+    assert_eq!(store.list_tasks().len(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assistant_tool_sequence_repair_is_agent_driven() {
     let worker = RepairingAssistantWorker::default();
     let requests = worker.requests.clone();
@@ -192,10 +431,7 @@ async fn assistant_tool_sequence_repair_is_agent_driven() {
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[1].prompt.iter().any(|section| {
-        section.title == "Tool Repair"
-            && section
-                .content
-                .contains("invalid finish_assistant_turn arguments")
+        section.title == "Tool Repair" && section.content.contains("invalid finish_turn arguments")
     }));
     assert!(requests[1].input.get("assistant_tool_error").is_some());
 }
@@ -214,6 +450,8 @@ async fn assistant_accepts_new_prompt_while_another_task_is_running() {
         },
         AssistantSessionConfig {
             max_parallel_tasks: 2,
+            task_board_enabled: true,
+            conversation_message_limit: 12,
         },
     );
 
@@ -489,13 +727,14 @@ impl AgentRunScheduler for RepairingAssistantWorker {
             return AgentRunResponse {
                 report: "invalid assistant tool sequence".to_string(),
                 tool_calls: vec![AgentToolCall {
-                    name: "finish_assistant_turn".to_string(),
+                    name: "finish_turn".to_string(),
                     arguments: serde_json::json!({}),
                 }],
                 terminal_call: Some(AgentToolCall {
-                    name: "finish_assistant_turn".to_string(),
+                    name: "finish_turn".to_string(),
                     arguments: serde_json::json!({}),
                 }),
+                usage: None,
             };
         }
 
@@ -506,7 +745,7 @@ impl AgentRunScheduler for RepairingAssistantWorker {
             }),
         };
         let finish = AgentToolCall {
-            name: "finish_assistant_turn".to_string(),
+            name: "finish_turn".to_string(),
             arguments: serde_json::json!({
                 "response": "Creating repaired task.",
                 "task_ids": [],
@@ -516,6 +755,7 @@ impl AgentRunScheduler for RepairingAssistantWorker {
             report: "repaired assistant tool sequence".to_string(),
             tool_calls: vec![create, finish.clone()],
             terminal_call: Some(finish),
+            usage: None,
         }
     }
 }

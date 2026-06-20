@@ -3,7 +3,8 @@ mod run_scheduler;
 
 pub(crate) use run::schema_for;
 pub use run::{
-    AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentToolCall, AgentToolSpec,
+    AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentTokenUsage,
+    AgentToolCall, AgentToolSpec, CancellationToken,
 };
 pub use run_scheduler::{
     AgentRunScheduler, ProcessAgentRunScheduler, ProcessAgentRunSchedulerError,

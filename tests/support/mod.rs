@@ -26,6 +26,7 @@ impl AgentRunScheduler for TestAgentRunScheduler {
             report: format!("test agent worker completed {}", input.objective),
             tool_calls: terminal_call.clone().into_iter().collect(),
             terminal_call,
+            usage: None,
         }
     }
 }
@@ -47,23 +48,28 @@ fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
         .unwrap_or("mock output");
 
     match tool_name {
-        "submit_specification" => json!({}),
+        "submit_specification" => mock_specification_args(plan.as_ref()),
         "submit_evidence" => match plan {
-            Some(NodePlan::NeedsInfo { need, then }) => json!({
+            Some(NodePlan::NeedsInfo { need, .. }) => json!({
                 "need": need,
                 "evidence": format!("evidence for {intent}"),
-                "next_plan": *then,
             }),
             _ => json!({
                 "need": "missing_information",
                 "evidence": "mock evidence",
-                "next_plan": NodePlan::Execute,
             }),
         },
         "submit_plan_group" => match plan {
             Some(NodePlan::Group(group)) => json!({
                 "mode": group.mode,
-                "items": group.items,
+                "items": group.items.into_iter().map(|item| {
+                    json!({
+                        "key": item.key.0,
+                        "intent": item.intent,
+                        "size": item.size,
+                        "shape": item.scope_assessment.as_ref().map(|assessment| assessment.shape).unwrap_or_default(),
+                    })
+                }).collect::<Vec<_>>(),
             }),
             _ => json!({
                 "mode": PlanGroupMode::Parallel,
@@ -84,8 +90,33 @@ fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
                 .unwrap_or_default() as usize;
             verdict_arguments(verdict_for(intent, attempt))
         }
-        "submit_commit" => json!({}),
         _ => json!({}),
+    }
+}
+
+fn mock_specification_args(plan: Option<&NodePlan>) -> Value {
+    match plan {
+        Some(NodePlan::NeedsInfo { need, .. }) => json!({
+            "size": "small",
+            "shape": "unknown",
+            "reference_match": "This is closest to Small, but one explicit missing information need blocks execution.",
+            "scope_signals": ["missing information blocks the next action"],
+            "missing_info": need,
+        }),
+        Some(NodePlan::Group(_)) | Some(NodePlan::Split) => json!({
+            "size": "large",
+            "shape": "phased",
+            "reference_match": "This is closest to Large because the fixture already contains multiple child work items.",
+            "scope_signals": ["multiple child work items", "requires planning before execution"],
+            "missing_info": null,
+        }),
+        _ => json!({
+            "size": "small",
+            "shape": "atomic",
+            "reference_match": "This is closest to Small because the test scheduler mirrors one local node with one terminal path.",
+            "scope_signals": ["one local problem", "one verification path"],
+            "missing_info": null,
+        }),
     }
 }
 

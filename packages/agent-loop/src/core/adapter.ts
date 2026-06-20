@@ -31,6 +31,7 @@ export interface ResolvedRequest {
   system: string;
   prompt: string;
   tools: ToolSet;
+  terminalToolSet: string[];
   mcp: McpServers;
   maxSteps?: number;
   signal?: AbortSignal;

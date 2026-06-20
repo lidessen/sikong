@@ -58,6 +58,44 @@ describe("mock engine worker", () => {
     expect(result.terminalCall?.name).toBe("submit_work");
   });
 
+  test("specification includes scope assessment", async () => {
+    const result = await runMockAgentWorker({
+      ...baseRequest,
+      objective: "Specify node 1",
+      input: {
+        kind: "engine_operation",
+        operation: "Specify",
+        node: { intent: "size the work" },
+        plan: "Execute",
+      },
+      tools: [
+        {
+          name: "read_operation_context",
+          description: "Read operation context.",
+          inputSchema: emptySchema(),
+        },
+        {
+          name: "submit_specification",
+          description: "Submit specification.",
+          inputSchema: emptySchema(),
+        },
+      ],
+      terminalToolSet: ["submit_specification"],
+    });
+
+    expect(result.terminalCall).toEqual({
+      name: "submit_specification",
+      arguments: {
+        size: "small",
+        shape: "atomic",
+        reference_match:
+          "This is closest to Small because the mock agent mirrors one local node and one terminal path.",
+        scope_signals: ["one local problem", "one verification path"],
+        missing_info: null,
+      },
+    });
+  });
+
   test("work runs write changed paths into a provided workspace surface", async () => {
     const worktree = await mkdtemp(join(tmpdir(), "siko-agent-host-worktree-"));
     try {
@@ -116,13 +154,15 @@ describe("mock engine worker", () => {
       input: {
         kind: "assistant_turn",
         current_message: "analyze this repo",
-        active_task: null,
-        tasks: [],
+        task_board: {
+          active_task: null,
+          tasks: [],
+        },
       },
       tools: [
         {
-          name: "read_assistant_context",
-          description: "Read assistant context.",
+          name: "query_messages",
+          description: "Query conversation messages.",
           inputSchema: emptySchema(),
         },
         {
@@ -131,28 +171,24 @@ describe("mock engine worker", () => {
           inputSchema: emptySchema(),
         },
         {
-          name: "finish_assistant_turn",
+          name: "finish_turn",
           description: "Finish assistant turn.",
           inputSchema: emptySchema(),
         },
       ],
-      terminalToolSet: ["finish_assistant_turn"],
+      terminalToolSet: ["finish_turn"],
     });
 
     expect(result.terminalCall).toEqual({
-      name: "finish_assistant_turn",
+      name: "finish_turn",
       arguments: {
         response: "Creating task.",
         task_ids: [],
       },
     });
-    expect(result.toolCalls?.map((call) => call.name)).toEqual([
-      "read_assistant_context",
-      "create_task",
-      "finish_assistant_turn",
-    ]);
-    expect(result.toolCalls?.[1]?.arguments).toEqual({ request: "analyze this repo" });
-    expect(result.report).toContain("tool calls read_assistant_context -> create_task");
+    expect(result.toolCalls?.map((call) => call.name)).toEqual(["create_task", "finish_turn"]);
+    expect(result.toolCalls?.[0]?.arguments).toEqual({ request: "analyze this repo" });
+    expect(result.report).toContain("tool calls create_task -> finish_turn");
   });
 });
 
