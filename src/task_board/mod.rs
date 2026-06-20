@@ -1,5 +1,17 @@
-use crate::{EngineReport, NodeId, NodeStatus};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::{EngineReport, NodeId, NodeOperation, NodeStatus};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tracing::Level;
+
+mod board;
+mod store;
+
+pub use board::{
+    TaskBoard, TaskBoardSnapshot, TaskEngineRunner, TaskEngineRunnerFactory, TaskWorkerFactory,
+};
+pub use store::{FileTaskStore, MemoryTaskStore, TaskStore};
 
 pub type TaskId = String;
 
@@ -27,7 +39,26 @@ pub struct AssistantTask {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssistantTaskEvent {
+    pub seq: u64,
+    pub timestamp_ms: u64,
+    pub level: String,
+    pub kind: String,
+    pub source: String,
     pub message: String,
+    pub node_id: Option<NodeId>,
+    pub operation: Option<NodeOperation>,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantTaskEventRecord {
+    pub level: Level,
+    pub kind: String,
+    pub source: String,
+    pub message: String,
+    pub node_id: Option<NodeId>,
+    pub operation: Option<NodeOperation>,
+    pub payload: Value,
 }
 
 impl AssistantTask {
@@ -49,11 +80,35 @@ impl AssistantTask {
         self.last_report = Some(report);
     }
 
-    pub fn push_event(&mut self, message: impl Into<String>) {
-        self.events.push(AssistantTaskEvent {
-            message: message.into(),
-        });
+    pub fn record_event(&mut self, record: AssistantTaskEventRecord) {
+        self.events.push(AssistantTaskEvent::from_record(
+            self.events.len() as u64 + 1,
+            record,
+        ));
     }
+}
+
+impl AssistantTaskEvent {
+    fn from_record(seq: u64, record: AssistantTaskEventRecord) -> Self {
+        Self {
+            seq,
+            timestamp_ms: timestamp_ms(),
+            level: record.level.to_string(),
+            kind: record.kind,
+            source: record.source,
+            message: record.message,
+            node_id: record.node_id,
+            operation: record.operation,
+            payload: record.payload,
+        }
+    }
+}
+
+fn timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn title_from_request(request: &str) -> String {

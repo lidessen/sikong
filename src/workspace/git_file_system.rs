@@ -1,12 +1,13 @@
-use std::{collections::BTreeSet, ffi::OsStr, fs, path::Path, process::Command};
+use std::collections::BTreeSet;
 
-use crate::types::{WorkspaceDeltaId, WorkspaceInstanceId, WorkspaceSnapshotId};
+use crate::types::{WorkspaceResourceId, WorkspaceSnapshotId};
 
 use super::{
-    GitWorkspaceDelta, GitWorkspaceInstance, GitWorkspaceIntegration, GitWorkspaceSnapshot,
-    Workspace, WorkspaceDelta, WorkspaceError, WorkspaceIds, WorkspaceInstance,
-    WorkspaceIntegration, WorkspaceProvider, WorkspaceRequirement, WorkspaceResult,
-    WorkspaceSnapshot,
+    GitBranchResource, GitCommitResource, GitWorkspaceChange, GitWorkspaceSnapshot,
+    GitWorkspaceSurface, GitWorktreeResource, Workspace, WorkspaceChange, WorkspaceError,
+    WorkspaceIds, WorkspaceProvider, WorkspaceRequirement, WorkspaceResource,
+    WorkspaceResourceKind, WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState,
+    WorkspaceResult, WorkspaceSnapshot, WorkspaceSurface, git_cli::GitCli,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -49,16 +50,20 @@ impl GitFileSystemWorkspace {
         })
     }
 
-    pub(super) fn fork_record(
-        id: WorkspaceInstanceId,
+    pub(super) fn surface_record(
+        worktree_resource_id: WorkspaceResourceId,
+        branch_resource_id: WorkspaceResourceId,
         snapshot: &WorkspaceSnapshot,
-    ) -> WorkspaceResult<WorkspaceInstance> {
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceResult<WorkspaceSurface> {
         let git = snapshot
             .git
             .as_ref()
             .map(|git| {
-                let branch_name = format!("sikong/node-{}-{id}", snapshot.id);
-                let worktree_path = git.worktree_root.join(format!("node-{}-{id}", snapshot.id));
+                let branch_name = format!("sikong/node-{}-{branch_resource_id}", snapshot.id);
+                let worktree_path = git
+                    .worktree_root
+                    .join(format!("node-{}-{worktree_resource_id}", snapshot.id));
                 GitCli::create_worktree(
                     &git.repo_root,
                     &worktree_path,
@@ -66,84 +71,150 @@ impl GitFileSystemWorkspace {
                     &git.base_sha,
                 )?;
 
-                Ok(GitWorkspaceInstance {
+                Ok(GitWorkspaceSurface {
                     repo_root: git.repo_root.clone(),
                     worktree_root: git.worktree_root.clone(),
                     base_sha: git.base_sha.clone(),
                     worktree_path,
                     branch_name,
+                    worktree_resource_id,
+                    branch_resource_id,
                 })
             })
             .transpose()?;
 
-        Ok(WorkspaceInstance {
-            id,
+        let resources = git
+            .as_ref()
+            .map(|git| {
+                vec![
+                    WorkspaceResource {
+                        id: git.worktree_resource_id,
+                        provider: WorkspaceProvider::GitFileSystem,
+                        kind: WorkspaceResourceKind::GitWorktree,
+                        state: WorkspaceResourceState::Active,
+                        refs: refs.clone(),
+                        metadata: WorkspaceResourceMetadata::GitWorktree(GitWorktreeResource {
+                            repo_root: git.repo_root.clone(),
+                            worktree_path: git.worktree_path.clone(),
+                            branch_name: git.branch_name.clone(),
+                        }),
+                    },
+                    WorkspaceResource {
+                        id: git.branch_resource_id,
+                        provider: WorkspaceProvider::GitFileSystem,
+                        kind: WorkspaceResourceKind::GitBranch,
+                        state: WorkspaceResourceState::Active,
+                        refs,
+                        metadata: WorkspaceResourceMetadata::GitBranch(GitBranchResource {
+                            repo_root: git.repo_root.clone(),
+                            worktree_root: git.worktree_root.clone(),
+                            base_sha: git.base_sha.clone(),
+                            branch_name: git.branch_name.clone(),
+                        }),
+                    },
+                ]
+            })
+            .unwrap_or_default();
+
+        Ok(WorkspaceSurface {
             snapshot_id: snapshot.id,
             provider: WorkspaceProvider::GitFileSystem,
+            resources,
+            changed_paths: Vec::new(),
+            conflicts: Vec::new(),
             git,
         })
     }
 
-    pub(super) fn delta_record(
-        id: WorkspaceDeltaId,
-        instance: &WorkspaceInstance,
-        changed_paths: Vec<String>,
+    pub(super) fn change_record(
+        commit_resource_id: WorkspaceResourceId,
+        surface: &WorkspaceSurface,
         side_effects: Vec<String>,
-    ) -> WorkspaceResult<WorkspaceDelta> {
-        let Some(git_instance) = &instance.git else {
-            return Ok(WorkspaceDelta {
-                id,
-                instance_id: instance.id,
+    ) -> WorkspaceResult<WorkspaceChange> {
+        let Some(git_surface) = &surface.git else {
+            return Ok(WorkspaceChange {
                 provider: WorkspaceProvider::GitFileSystem,
-                changed_paths,
+                resources: Vec::new(),
+                resource_ids: surface
+                    .resources
+                    .iter()
+                    .map(|resource| resource.id)
+                    .collect(),
+                changed_paths: Vec::new(),
                 side_effects,
+                conflicts: Vec::new(),
                 git: None,
             });
         };
 
         let mut side_effects = side_effects;
-        let detected_paths =
-            GitCli::commit_all(&git_instance.worktree_path, &format!("sikong delta {id}"))?;
+        let detected_paths = GitCli::commit_all(
+            &git_surface.worktree_path,
+            &format!("sikong resource change {commit_resource_id}"),
+        )?;
         if let Some(commit_sha) = &detected_paths.commit_sha {
             side_effects.push(format!("git_commit:{commit_sha}"));
         }
 
-        Ok(WorkspaceDelta {
-            id,
-            instance_id: instance.id,
+        let mut resource_ids = vec![git_surface.branch_resource_id];
+        let mut resources = Vec::new();
+        if let Some(commit_sha) = &detected_paths.commit_sha {
+            resource_ids.push(commit_resource_id);
+            resources.push(WorkspaceResource {
+                id: commit_resource_id,
+                provider: WorkspaceProvider::GitFileSystem,
+                kind: WorkspaceResourceKind::GitCommit,
+                state: WorkspaceResourceState::Active,
+                refs: Vec::new(),
+                metadata: WorkspaceResourceMetadata::GitCommit(GitCommitResource {
+                    repo_root: git_surface.repo_root.clone(),
+                    branch_name: git_surface.branch_name.clone(),
+                    commit_sha: commit_sha.clone(),
+                }),
+            });
+        }
+
+        Ok(WorkspaceChange {
             provider: WorkspaceProvider::GitFileSystem,
+            resources,
+            resource_ids,
             changed_paths: detected_paths.changed_paths,
             side_effects,
-            git: Some(GitWorkspaceDelta {
-                repo_root: git_instance.repo_root.clone(),
-                worktree_root: git_instance.worktree_root.clone(),
-                base_sha: git_instance.base_sha.clone(),
-                branch_name: git_instance.branch_name.clone(),
-                worktree_path: git_instance.worktree_path.clone(),
+            conflicts: Vec::new(),
+            git: Some(GitWorkspaceChange {
+                repo_root: git_surface.repo_root.clone(),
+                worktree_root: git_surface.worktree_root.clone(),
+                base_sha: git_surface.base_sha.clone(),
+                branch_name: git_surface.branch_name.clone(),
+                worktree_path: None,
                 commit_sha: detected_paths.commit_sha,
             }),
         })
     }
 
-    pub(super) fn integration_record(
-        deltas: &[WorkspaceDelta],
-    ) -> WorkspaceResult<WorkspaceIntegration> {
-        let git_deltas: Vec<_> = deltas
+    pub(super) fn merge_record(
+        worktree_resource_id: WorkspaceResourceId,
+        branch_resource_id: WorkspaceResourceId,
+        changes: &[WorkspaceChange],
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceResult<WorkspaceSurface> {
+        let git_changes: Vec<_> = changes
             .iter()
-            .filter_map(|delta| delta.git.as_ref())
+            .filter_map(|change| change.git.as_ref())
             .collect();
-        if git_deltas.is_empty() {
-            return Ok(Self::path_conflict_integration_record(deltas));
+        if git_changes.is_empty() {
+            return Ok(Self::path_conflict_merge_surface_record(
+                worktree_resource_id,
+                changes,
+                refs,
+            ));
         }
 
-        let first = git_deltas[0];
-        let delta_key = deltas
-            .iter()
-            .map(|delta| delta.id.to_string())
-            .collect::<Vec<_>>()
-            .join("-");
-        let branch_name = format!("sikong/integration/{delta_key}");
-        let worktree_path = first.worktree_root.join(format!("integration-{delta_key}"));
+        let first = git_changes[0];
+        let branch_name = format!("sikong/merge/{branch_resource_id}");
+        let worktree_path = first
+            .worktree_root
+            .join(format!("merge-{worktree_resource_id}"));
 
         let mut conflicts = Vec::new();
         GitCli::create_worktree(
@@ -152,15 +223,15 @@ impl GitFileSystemWorkspace {
             &branch_name,
             &first.base_sha,
         )?;
-        for git_delta in &git_deltas {
-            if git_delta.commit_sha.is_none() {
+        for git_change in &git_changes {
+            if git_change.commit_sha.is_none() {
                 continue;
             }
-            if GitCli::merge_branch(&worktree_path, &git_delta.branch_name).is_err() {
+            if GitCli::merge_branch(&worktree_path, &git_change.branch_name).is_err() {
                 conflicts = GitCli::conflict_paths(&worktree_path)?;
                 if conflicts.is_empty() {
                     return Err(WorkspaceError::GitCommand {
-                        operation: format!("merge {}", git_delta.branch_name),
+                        operation: format!("merge {}", git_change.branch_name),
                         cwd: worktree_path,
                         message: "git merge failed without reported conflict paths".to_string(),
                     });
@@ -170,37 +241,66 @@ impl GitFileSystemWorkspace {
         }
 
         let changed_paths = dedupe_preserving_order(
-            deltas
+            changes
                 .iter()
-                .flat_map(|delta| delta.changed_paths.iter().cloned()),
+                .flat_map(|change| change.changed_paths.iter().cloned()),
         );
 
-        Ok(WorkspaceIntegration {
-            deltas: deltas.iter().map(|delta| delta.id).collect(),
+        Ok(WorkspaceSurface {
+            snapshot_id: 0,
+            provider: WorkspaceProvider::GitFileSystem,
+            resources: vec![
+                WorkspaceResource {
+                    id: worktree_resource_id,
+                    provider: WorkspaceProvider::GitFileSystem,
+                    kind: WorkspaceResourceKind::GitWorktree,
+                    state: WorkspaceResourceState::Active,
+                    refs: refs.clone(),
+                    metadata: WorkspaceResourceMetadata::GitWorktree(GitWorktreeResource {
+                        repo_root: first.repo_root.clone(),
+                        worktree_path: worktree_path.clone(),
+                        branch_name: branch_name.clone(),
+                    }),
+                },
+                WorkspaceResource {
+                    id: branch_resource_id,
+                    provider: WorkspaceProvider::GitFileSystem,
+                    kind: WorkspaceResourceKind::GitBranch,
+                    state: WorkspaceResourceState::Active,
+                    refs,
+                    metadata: WorkspaceResourceMetadata::GitBranch(GitBranchResource {
+                        repo_root: first.repo_root.clone(),
+                        worktree_root: first.worktree_root.clone(),
+                        base_sha: first.base_sha.clone(),
+                        branch_name: branch_name.clone(),
+                    }),
+                },
+            ],
             changed_paths,
             conflicts,
-            git: Some(GitWorkspaceIntegration {
-                worktree_path,
+            git: Some(GitWorkspaceSurface {
+                repo_root: first.repo_root.clone(),
+                worktree_root: first.worktree_root.clone(),
+                base_sha: first.base_sha.clone(),
+                worktree_path: worktree_path.clone(),
                 branch_name,
+                worktree_resource_id,
+                branch_resource_id,
             }),
         })
     }
 
-    pub fn dispose_instance(&self, instance: &WorkspaceInstance) -> WorkspaceResult<()> {
-        let Some(git) = &instance.git else {
-            return Ok(());
-        };
-        GitCli::remove_worktree(&git.repo_root, &git.worktree_path)?;
-        GitCli::delete_branch(&git.repo_root, &git.branch_name)
-    }
-
-    fn path_conflict_integration_record(deltas: &[WorkspaceDelta]) -> WorkspaceIntegration {
+    fn path_conflict_merge_surface_record(
+        resource_id: WorkspaceResourceId,
+        changes: &[WorkspaceChange],
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceSurface {
         let mut changed_paths = Vec::new();
         let mut seen = BTreeSet::new();
         let mut conflicts = Vec::new();
 
-        for delta in deltas {
-            for path in &delta.changed_paths {
+        for change in changes {
+            for path in &change.changed_paths {
                 if !seen.insert(path.clone()) {
                     conflicts.push(path.clone());
                 }
@@ -208,8 +308,17 @@ impl GitFileSystemWorkspace {
             }
         }
 
-        WorkspaceIntegration {
-            deltas: deltas.iter().map(|delta| delta.id).collect(),
+        WorkspaceSurface {
+            snapshot_id: 0,
+            provider: WorkspaceProvider::GitFileSystem,
+            resources: vec![WorkspaceResource {
+                id: resource_id,
+                provider: WorkspaceProvider::GitFileSystem,
+                kind: WorkspaceResourceKind::Memory,
+                state: WorkspaceResourceState::Active,
+                refs,
+                metadata: WorkspaceResourceMetadata::None,
+            }],
             changed_paths,
             conflicts,
             git: None,
@@ -226,209 +335,46 @@ impl Workspace for GitFileSystemWorkspace {
         Self::snapshot_record(id, requirement)
     }
 
-    fn fork(&mut self, snapshot: &WorkspaceSnapshot) -> WorkspaceResult<WorkspaceInstance> {
-        let id = self.ids.next_instance_id();
-        Self::fork_record(id, snapshot)
-    }
-
-    fn collect_delta(
+    fn open_surface(
         &mut self,
-        instance: &WorkspaceInstance,
-        changed_paths: Vec<String>,
+        snapshot: &WorkspaceSnapshot,
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceResult<WorkspaceSurface> {
+        let worktree_resource_id = self.ids.next_resource_id();
+        let branch_resource_id = self.ids.next_resource_id();
+        Self::surface_record(worktree_resource_id, branch_resource_id, snapshot, refs)
+    }
+
+    fn capture_changes(
+        &mut self,
+        surface: &WorkspaceSurface,
         side_effects: Vec<String>,
-    ) -> WorkspaceResult<WorkspaceDelta> {
-        let id = self.ids.next_delta_id();
-        Self::delta_record(id, instance, changed_paths, side_effects)
+    ) -> WorkspaceResult<WorkspaceChange> {
+        let commit_resource_id = self.ids.next_resource_id();
+        Self::change_record(commit_resource_id, surface, side_effects)
     }
 
-    fn combine(&self, deltas: &[WorkspaceDelta]) -> WorkspaceResult<WorkspaceIntegration> {
-        Self::integration_record(deltas)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CommitAllResult {
-    changed_paths: Vec<String>,
-    commit_sha: Option<String>,
-}
-
-struct GitCli;
-
-impl GitCli {
-    fn fetch(repo_root: &Path, remote: &str) -> WorkspaceResult<()> {
-        Self::run(format!("fetch {remote}"), repo_root, ["fetch", remote]).map(|_| ())
+    fn merge_changes(
+        &mut self,
+        changes: &[WorkspaceChange],
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceResult<WorkspaceSurface> {
+        let worktree_resource_id = self.ids.next_resource_id();
+        let branch_resource_id = self.ids.next_resource_id();
+        Self::merge_record(worktree_resource_id, branch_resource_id, changes, refs)
     }
 
-    fn rev_parse(repo_root: &Path, rev: &str) -> WorkspaceResult<String> {
-        Self::run(format!("rev-parse {rev}"), repo_root, ["rev-parse", rev])
-            .map(|output| output.trim().to_string())
-    }
-
-    fn create_worktree(
-        repo_root: &Path,
-        worktree_path: &Path,
-        branch_name: &str,
-        base_sha: &str,
-    ) -> WorkspaceResult<()> {
-        if let Some(parent) = worktree_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| WorkspaceError::Io {
-                operation: "create worktree parent".to_string(),
-                path: parent.to_path_buf(),
-                message: error.to_string(),
-            })?;
+    fn cleanup(&mut self, resource: &WorkspaceResource) -> WorkspaceResult<()> {
+        match &resource.metadata {
+            WorkspaceResourceMetadata::GitWorktree(git) => {
+                GitCli::remove_worktree(&git.repo_root, &git.worktree_path)
+            }
+            WorkspaceResourceMetadata::GitBranch(git) => {
+                GitCli::delete_branch(&git.repo_root, &git.branch_name)
+            }
+            WorkspaceResourceMetadata::GitCommit(_) | WorkspaceResourceMetadata::None => Ok(()),
         }
-        Self::run(
-            format!("worktree add {branch_name}"),
-            repo_root,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                OsStr::new("-b"),
-                OsStr::new(branch_name),
-                worktree_path.as_os_str(),
-                OsStr::new(base_sha),
-            ],
-        )
-        .map(|_| ())
     }
-
-    fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> WorkspaceResult<()> {
-        Self::run(
-            format!("worktree remove {}", worktree_path.display()),
-            repo_root,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("remove"),
-                OsStr::new("--force"),
-                worktree_path.as_os_str(),
-            ],
-        )
-        .map(|_| ())
-    }
-
-    fn delete_branch(repo_root: &Path, branch_name: &str) -> WorkspaceResult<()> {
-        Self::run(
-            format!("branch delete {branch_name}"),
-            repo_root,
-            [
-                OsStr::new("branch"),
-                OsStr::new("-D"),
-                OsStr::new(branch_name),
-            ],
-        )
-        .map(|_| ())
-    }
-
-    fn commit_all(worktree_path: &Path, message: &str) -> WorkspaceResult<CommitAllResult> {
-        Self::run("add -A", worktree_path, ["add", "-A"])?;
-        let changed_paths = Self::diff_cached_paths(worktree_path)?;
-        if changed_paths.is_empty() {
-            return Ok(CommitAllResult {
-                changed_paths,
-                commit_sha: None,
-            });
-        }
-
-        Self::run(
-            "commit",
-            worktree_path,
-            [OsStr::new("commit"), OsStr::new("-m"), OsStr::new(message)],
-        )?;
-        let commit_sha = Self::rev_parse(worktree_path, "HEAD")?;
-        Ok(CommitAllResult {
-            changed_paths,
-            commit_sha: Some(commit_sha),
-        })
-    }
-
-    fn diff_cached_paths(worktree_path: &Path) -> WorkspaceResult<Vec<String>> {
-        Self::run(
-            "diff cached paths",
-            worktree_path,
-            [
-                OsStr::new("diff"),
-                OsStr::new("--cached"),
-                OsStr::new("--name-only"),
-                OsStr::new("-z"),
-            ],
-        )
-        .map(parse_nul_paths)
-    }
-
-    fn merge_branch(worktree_path: &Path, branch_name: &str) -> WorkspaceResult<()> {
-        Self::run(
-            format!("merge {branch_name}"),
-            worktree_path,
-            [
-                OsStr::new("merge"),
-                OsStr::new("--no-ff"),
-                OsStr::new("--no-edit"),
-                OsStr::new(branch_name),
-            ],
-        )
-        .map(|_| ())
-    }
-
-    fn conflict_paths(worktree_path: &Path) -> WorkspaceResult<Vec<String>> {
-        Self::run(
-            "conflict paths",
-            worktree_path,
-            [
-                OsStr::new("diff"),
-                OsStr::new("--name-only"),
-                OsStr::new("--diff-filter=U"),
-                OsStr::new("-z"),
-            ],
-        )
-        .map(parse_nul_paths)
-    }
-
-    fn run<I, S>(operation: impl Into<String>, cwd: &Path, args: I) -> WorkspaceResult<String>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let operation = operation.into();
-        let output = Command::new("git")
-            .arg("-c")
-            .arg("user.name=Sikong")
-            .arg("-c")
-            .arg("user.email=sikong@example.invalid")
-            .args(args)
-            .current_dir(cwd)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .output()
-            .map_err(|error| WorkspaceError::Io {
-                operation: operation.clone(),
-                path: cwd.to_path_buf(),
-                message: error.to_string(),
-            })?;
-
-        if output.status.success() {
-            return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Err(WorkspaceError::GitCommand {
-            operation,
-            cwd: cwd.to_path_buf(),
-            message: format!(
-                "git exited with {}: {}{}",
-                output.status,
-                stderr.trim(),
-                stdout.trim()
-            ),
-        })
-    }
-}
-
-fn parse_nul_paths(output: String) -> Vec<String> {
-    output
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 fn dedupe_preserving_order(paths: impl IntoIterator<Item = String>) -> Vec<String> {

@@ -3,13 +3,14 @@ use siko::*;
 use std::process::Command;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn agent_host_client_reuses_one_host_for_multiple_runs() {
+async fn agent_run_scheduler_reuses_one_host_for_multiple_runs() {
     if Command::new("bun").arg("--version").output().is_err() {
-        eprintln!("skipping agent_host_client_reuses_one_host_for_multiple_runs: bun not found");
+        eprintln!("skipping agent_run_scheduler_reuses_one_host_for_multiple_runs: bun not found");
         return;
     }
 
-    let mut worker = AgentHostClient::new("bun", ["packages/agent-host/src/runtime-host.ts"]);
+    let mut worker =
+        ProcessAgentRunScheduler::new("bun", ["packages/agent-host/src/runtime-host.ts"]);
 
     let first = worker
         .run(request("submit_specification"), CancellationToken::new())
@@ -23,12 +24,8 @@ async fn agent_host_client_reuses_one_host_for_multiple_runs() {
         Some("submit_specification")
     );
     assert_eq!(
-        first
-            .terminal_call
-            .as_ref()
-            .and_then(|call| call.arguments.get("report"))
-            .and_then(serde_json::Value::as_str),
-        Some("specified run with submit_specification")
+        first.terminal_call.as_ref().map(|call| &call.arguments),
+        Some(&json!({}))
     );
     assert_eq!(
         second.terminal_call.as_ref().map(|call| call.name.as_str()),
@@ -47,13 +44,14 @@ async fn agent_host_client_reuses_one_host_for_multiple_runs() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn agent_host_client_cancels_running_host() {
+async fn agent_run_scheduler_cancels_running_host() {
     if Command::new("bun").arg("--version").output().is_err() {
-        eprintln!("skipping agent_host_client_cancels_running_host: bun not found");
+        eprintln!("skipping agent_run_scheduler_cancels_running_host: bun not found");
         return;
     }
 
-    let mut worker = AgentHostClient::new("bun", ["packages/agent-host/src/runtime-host.ts"]);
+    let mut worker =
+        ProcessAgentRunScheduler::new("bun", ["packages/agent-host/src/runtime-host.ts"]);
     let cancellation = CancellationToken::new();
     let cancel_from_task = cancellation.clone();
     tokio::spawn(async move {
@@ -77,14 +75,14 @@ async fn compiled_agent_host_binary_speaks_socket_protocol_when_configured() {
         return;
     };
 
-    let mut worker = AgentHostClient::new(command, Vec::<String>::new());
+    let mut worker = ProcessAgentRunScheduler::new(command, Vec::<String>::new());
     let result = worker
         .run(request("submit_work"), CancellationToken::new())
         .await;
 
     assert_eq!(
         result.terminal_call,
-        Some(AgentTerminalToolCall {
+        Some(AgentToolCall {
             name: "submit_work".to_string(),
             arguments: json!({}),
         })
@@ -94,7 +92,6 @@ async fn compiled_agent_host_binary_speaks_socket_protocol_when_configured() {
 fn request(terminal_tool: &str) -> AgentRunRequest {
     AgentRunRequest {
         protocol_version: 1,
-        kind: AgentRunKind::EngineOperation,
         objective: format!("run with {terminal_tool}"),
         prompt: vec![AgentPromptSection {
             title: "Completion".to_string(),
@@ -117,9 +114,6 @@ fn request(terminal_tool: &str) -> AgentRunRequest {
             },
         ],
         terminal_tool_set: vec![terminal_tool.to_string()],
-        tool_choice: AgentToolChoice::Tool {
-            name: terminal_tool.to_string(),
-        },
     }
 }
 

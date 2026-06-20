@@ -1,28 +1,28 @@
 use crate::types::{ArtifactId, Budget, CapabilityProfile, NodeId, NodeStatus, ProblemKey};
-use crate::workspace::{WorkspaceDelta, WorkspaceRequirement};
+use crate::workspace::{WorkspaceChange, WorkspaceRequirement};
 
-use crate::types::VerificationVerdict;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum NodeScript {
-    Leaf {
-        output: String,
-        changed_paths: Vec<String>,
-        side_effects: Vec<String>,
-        verdicts: Vec<VerificationVerdict>,
-    },
-    NeedsInfo {
-        need: String,
-        acquired: String,
-        then: Box<NodeScript>,
-    },
-    Divide {
-        children: Vec<NodeTemplate>,
-        combine_output: String,
-        verdicts: Vec<VerificationVerdict>,
-    },
+pub enum NodePlan {
+    Execute,
+    NeedsInfo { need: String, then: Box<NodePlan> },
+    Group(PlanGroup),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanGroup {
+    pub mode: PlanGroupMode,
+    pub items: Vec<NodeTemplate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum PlanGroupMode {
+    Stage,
+    Parallel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -32,23 +32,18 @@ pub struct NodeTemplate {
     pub workspace: WorkspaceRequirement,
     pub capabilities: CapabilityProfile,
     pub budget: Budget,
-    pub script: NodeScript,
+    pub plan: NodePlan,
 }
 
 impl NodeTemplate {
     pub fn memory_leaf(key: &str, output: &str) -> Self {
         Self {
             key: ProblemKey(key.to_string()),
-            intent: key.to_string(),
+            intent: output.to_string(),
             workspace: WorkspaceRequirement::memory(),
             capabilities: CapabilityProfile::read_only(),
             budget: Budget::default(),
-            script: NodeScript::Leaf {
-                output: output.to_string(),
-                changed_paths: Vec::new(),
-                side_effects: Vec::new(),
-                verdicts: vec![VerificationVerdict::Accept],
-            },
+            plan: NodePlan::Execute,
         }
     }
 }
@@ -62,10 +57,9 @@ pub struct ProblemNode {
     pub workspace: WorkspaceRequirement,
     pub capabilities: CapabilityProfile,
     pub budget: Budget,
-    pub dependencies: Vec<NodeId>,
     pub children: Vec<NodeId>,
     pub status: NodeStatus,
-    pub script: NodeScript,
+    pub plan: NodePlan,
     pub acquired: Vec<String>,
     pub candidate: Option<ArtifactId>,
     pub accepted_artifact: Option<ArtifactId>,
@@ -74,18 +68,16 @@ pub struct ProblemNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ArtifactKind {
-    Evidence,
-    Work,
-    Combined,
+pub enum ArtifactContentKind {
+    Text,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artifact {
     pub id: ArtifactId,
     pub node_id: NodeId,
-    pub kind: ArtifactKind,
+    pub content_kind: ArtifactContentKind,
     pub text: String,
-    pub workspace_delta: Option<WorkspaceDelta>,
+    pub workspace_change: Option<WorkspaceChange>,
     pub children: Vec<ArtifactId>,
 }

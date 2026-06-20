@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use siko::{
-    AcpServer, AgentAssistantLoop, AgentHostClient, AssistantSession, AssistantSessionConfig,
-    DebugConfig, FileTaskStore, SikoConfig, run_acp_stdio_server,
+    AcpServer, AgentAssistantLoop, AssistantSession, AssistantSessionConfig, AssistantTaskEvent,
+    DebugConfig, FileTaskStore, ProcessAgentRunScheduler, SikoConfig, TaskStore,
+    run_acp_stdio_server,
 };
 use tracing::error;
 use tracing_subscriber::EnvFilter;
@@ -22,14 +23,39 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
 
 fn run_cli(cli: Cli) -> i32 {
     match cli.command {
-        Some(Command::Assistant { acp: true }) => match run_assistant_acp() {
+        Some(Command::Assistant {
+            acp: true,
+            command: None,
+        }) => match run_assistant_acp() {
             Ok(()) => 0,
             Err(error) => {
                 error!(%error, "failed to run assistant ACP server");
                 1
             }
         },
-        Some(Command::Assistant { acp: false }) | None => {
+        Some(Command::Assistant {
+            acp: false,
+            command: Some(AssistantCommand::Logs { task_id, json }),
+        }) => match print_assistant_logs(&task_id, json) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, task_id, "failed to print assistant logs");
+                eprintln!("failed to print assistant logs for {task_id}: {error}");
+                1
+            }
+        },
+        Some(Command::Assistant {
+            acp: true,
+            command: Some(_),
+        }) => {
+            eprintln!("--acp cannot be combined with assistant subcommands");
+            2
+        }
+        Some(Command::Assistant {
+            acp: false,
+            command: None,
+        })
+        | None => {
             eprintln!("{}", Cli::command().render_help());
             0
         }
@@ -48,9 +74,25 @@ struct Cli {
 enum Command {
     /// Run the assistant entrypoint.
     Assistant {
+        #[command(subcommand)]
+        command: Option<AssistantCommand>,
+
         /// Serve the Assistant Agent over ACP JSON-RPC stdio.
         #[arg(long)]
         acp: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AssistantCommand {
+    /// Print persisted task logs in chronological order.
+    Logs {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Print the raw structured log JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -65,9 +107,9 @@ pub fn run_assistant_acp() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let config = SikoConfig::load()?;
     let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(debug.data_dir().join("assistant").join("tasks.json"))?;
+    let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
-    let assistant_loop = AgentAssistantLoop::new(AgentHostClient::new(
+    let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
     ));
@@ -75,7 +117,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
         assistant_loop,
         {
             let launch = launch.clone();
-            move || AgentHostClient::new(launch.command.clone(), launch.args.clone())
+            move || ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone())
         },
         AssistantSessionConfig {
             max_parallel_tasks: config.assistant.max_parallel_tasks,
@@ -84,6 +126,65 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let server = AcpServer::new(store, session);
     run_acp_stdio_server(server, BufReader::new(io::stdin()), io::stdout()).await?;
     Ok(())
+}
+
+fn print_assistant_logs(
+    task_id: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let task = store
+        .get_task(task_id)
+        .ok_or_else(|| format!("unknown task id {task_id}"))?;
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &task.events)?;
+        println!();
+        return Ok(());
+    }
+
+    println!("task {} {} {:?}", task.id, task.title, task.status);
+    for event in &task.events {
+        println!("{}", format_task_log(event));
+    }
+    Ok(())
+}
+
+fn assistant_store_path(debug: &DebugConfig) -> PathBuf {
+    debug.data_dir().join("assistant").join("tasks.json")
+}
+
+fn format_task_log(event: &AssistantTaskEvent) -> String {
+    let node = event
+        .node_id
+        .map(|id| format!(" node={id}"))
+        .unwrap_or_default();
+    let operation = event
+        .operation
+        .map(|operation| format!(" op={operation:?}"))
+        .unwrap_or_default();
+    let payload = if event.payload.is_null() {
+        String::new()
+    } else {
+        format!(" payload={}", compact_json(&event.payload))
+    };
+    format!(
+        "#{:04} {} {} {} source={}{}{} - {}{}",
+        event.seq,
+        event.timestamp_ms,
+        event.level,
+        event.kind,
+        event.source,
+        node,
+        operation,
+        event.message,
+        payload
+    )
+}
+
+fn compact_json(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,8 +332,46 @@ mod tests {
         let cli = Cli::try_parse_from(["siko", "assistant", "--acp"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Assistant { acp: true })
+            Some(Command::Assistant {
+                acp: true,
+                command: None
+            })
         ));
+    }
+
+    #[test]
+    fn parses_assistant_logs_command() {
+        let cli = Cli::try_parse_from(["siko", "assistant", "logs", "task_1", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Assistant {
+                acp: false,
+                command: Some(AssistantCommand::Logs { task_id, json: true })
+            }) if task_id == "task_1"
+        ));
+    }
+
+    #[test]
+    fn formats_structured_task_log_with_node_context() {
+        let line = format_task_log(&AssistantTaskEvent {
+            seq: 7,
+            timestamp_ms: 1_719_000_000_000,
+            level: tracing::Level::INFO.to_string(),
+            kind: "agent.run".to_string(),
+            source: "agent".to_string(),
+            message: "completed execute".to_string(),
+            node_id: Some(3),
+            operation: Some(siko::NodeOperation::Execute),
+            payload: serde_json::json!({
+                "terminal_tool": "submit_work"
+            }),
+        });
+
+        assert!(line.contains("#0007"));
+        assert!(line.contains("agent.run"));
+        assert!(line.contains("node=3"));
+        assert!(line.contains("op=Execute"));
+        assert!(line.contains("submit_work"));
     }
 
     #[test]

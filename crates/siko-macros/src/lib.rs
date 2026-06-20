@@ -16,13 +16,6 @@ pub fn toolset(args: TokenStream, input: TokenStream) -> TokenStream {
     let Some(enum_name) = string_arg(&args, "enum_name").map(|name| format_ident!("{name}")) else {
         return compile_error("toolset requires enum_name = \"Name\"");
     };
-    let fallback = match string_arg(&args, "fallback") {
-        Some(expr) => match syn::parse_str::<Expr>(&expr) {
-            Ok(expr) => Some(expr),
-            Err(error) => return compile_error(error.to_string()),
-        },
-        None => None,
-    };
     let output_ty = match string_arg(&args, "output") {
         Some(ty) => match syn::parse_str::<Type>(&ty) {
             Ok(ty) => Some(ty),
@@ -55,7 +48,7 @@ pub fn toolset(args: TokenStream, input: TokenStream) -> TokenStream {
             Self::#variant => crate::AgentToolSpec {
                 name: #name.to_string(),
                 description: #description.to_string(),
-                input_schema: crate::tools::schema_for::<#args_ty>(),
+                input_schema: crate::agent_run::schema_for::<#args_ty>(),
             }
         }
     });
@@ -63,34 +56,25 @@ pub fn toolset(args: TokenStream, input: TokenStream) -> TokenStream {
         let variant = &tool.variant;
         let method = &tool.method;
         let args_ty = &tool.args_ty;
-        let fallback = fallback.as_ref();
         quote! {
-            Self::#variant => {
-                serde_json::from_value::<#args_ty>(arguments)
-                    .map(|args| context.#method(args))
-                    .unwrap_or(#fallback)
-            }
+            Self::#variant => serde_json::from_value::<#args_ty>(arguments)
+                .map(|args| context.#method(args))
         }
     });
-    let decode_impl = match (fallback.as_ref(), output_ty.as_ref(), self_ty.as_ref()) {
-        (Some(_), Some(output_ty), Some(self_ty)) => quote! {
+    let decode_impl = match (output_ty.as_ref(), self_ty.as_ref()) {
+        (Some(output_ty), Some(self_ty)) => quote! {
             pub(crate) fn decode_call(
                 &self,
                 context: &#self_ty,
                 arguments: serde_json::Value,
-            ) -> #output_ty {
+            ) -> serde_json::Result<#output_ty> {
                 match self {
                     #(#decode_arms),*
                 }
             }
         },
-        (Some(_), None, _) => {
-            return compile_error("toolset with fallback also requires output = \"Type\"");
-        }
-        (Some(_), Some(_), None) => {
-            return compile_error("trait toolset cannot generate decode_call");
-        }
-        (None, _, _) => TokenStream2::new(),
+        (Some(_), None) => return compile_error("trait toolset cannot generate decode_call"),
+        (None, _) => TokenStream2::new(),
     };
 
     let expanded = quote! {

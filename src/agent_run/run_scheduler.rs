@@ -1,10 +1,5 @@
-use crate::CancellationToken;
-use crate::node::{Artifact, NodeScript, NodeTemplate, ProblemNode};
-use crate::types::{NodeId, NodeOperation, VerificationVerdict};
-use crate::workspace::WorkspaceIntegration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -19,137 +14,20 @@ use tokio::process::{Child, Command};
 use tokio::time::{sleep, timeout};
 use tracing::debug;
 
-#[derive(Debug, Clone)]
-pub struct AgentOperationContext {
-    pub node: ProblemNode,
-    pub operation: NodeOperation,
-    pub candidate: Option<Artifact>,
-    pub child_artifacts: Vec<Artifact>,
-    pub workspace_integration: Option<WorkspaceIntegration>,
-}
+use crate::CancellationToken;
 
-impl AgentOperationContext {
-    pub fn node_id(&self) -> NodeId {
-        self.node.id
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentRunRecord {
-    pub node_id: NodeId,
-    pub operation: NodeOperation,
-    pub report: String,
-    pub terminal_tool: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentRunResult {
-    pub report: String,
-    pub terminal_tool: Option<String>,
-    pub output: NodeOperationOutput,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentWorkerResult {
-    pub report: String,
-    #[serde(rename = "terminalCall")]
-    pub terminal_call: Option<AgentTerminalToolCall>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentToolSpec {
-    pub name: String,
-    pub description: String,
-    #[serde(rename = "inputSchema")]
-    pub input_schema: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AgentPromptSection {
-    pub title: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentRunKind {
-    EngineOperation,
-    AssistantTurn,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentToolChoice {
-    Required,
-    Tool { name: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentTerminalToolCall {
-    pub name: String,
-    pub arguments: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeOperationOutput {
-    Specified,
-    Acquired {
-        need: String,
-        evidence: String,
-        next_script: NodeScript,
-    },
-    Divided {
-        children: Vec<NodeTemplate>,
-    },
-    Executed {
-        output: String,
-        changed_paths: Vec<String>,
-        side_effects: Vec<String>,
-    },
-    Combined {
-        output: String,
-    },
-    Verified {
-        verdict: VerificationVerdict,
-    },
-    Committed,
-    Noop,
-}
+use super::run::{AgentRunRequest, AgentRunResponse};
 
 #[async_trait]
-pub trait AgentWorker: Send {
+pub trait AgentRunScheduler: Send {
     async fn run(
         &mut self,
         input: AgentRunRequest,
         cancellation: CancellationToken,
-    ) -> AgentWorkerResult;
+    ) -> AgentRunResponse;
 }
 
-pub trait AgentHarness {
-    fn build_run(&mut self, context: AgentOperationContext) -> AgentRunRequest;
-    fn decode_result(
-        &mut self,
-        context: &AgentOperationContext,
-        result: AgentWorkerResult,
-    ) -> AgentRunResult;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct AgentRunRequest {
-    #[serde(rename = "protocolVersion")]
-    pub protocol_version: u32,
-    pub kind: AgentRunKind,
-    pub objective: String,
-    pub prompt: Vec<AgentPromptSection>,
-    pub input: Value,
-    pub tools: Vec<AgentToolSpec>,
-    #[serde(rename = "terminalToolSet")]
-    pub terminal_tool_set: Vec<String>,
-    #[serde(rename = "toolChoice")]
-    pub tool_choice: AgentToolChoice,
-}
-
-pub struct AgentHostClient {
+pub struct ProcessAgentRunScheduler {
     command: String,
     args: Vec<String>,
     socket_path: PathBuf,
@@ -162,7 +40,7 @@ pub struct AgentHostClient {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum AgentHostError {
+pub enum ProcessAgentRunSchedulerError {
     #[error("failed to create agent host socket dir: {0}")]
     TempDir(#[source] std::io::Error),
     #[error("{0}")]
@@ -207,7 +85,7 @@ pub enum AgentHostError {
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum AgentHostClientMessage<'a> {
+enum ProcessAgentRunSchedulerMessage<'a> {
     Run {
         id: String,
         request: &'a AgentRunRequest,
@@ -219,10 +97,10 @@ enum AgentHostClientMessage<'a> {
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum AgentHostMessage {
+enum ProcessAgentRunSchedulerHostMessage {
     Result {
         id: String,
-        result: AgentWorkerResult,
+        result: AgentRunResponse,
     },
     Error {
         id: String,
@@ -230,7 +108,7 @@ enum AgentHostMessage {
     },
 }
 
-impl AgentHostClient {
+impl ProcessAgentRunScheduler {
     pub fn new(
         command: impl Into<String>,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -244,11 +122,11 @@ impl AgentHostClient {
     pub fn try_new(
         command: impl Into<String>,
         args: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Result<Self, AgentHostError> {
+    ) -> Result<Self, ProcessAgentRunSchedulerError> {
         let socket_dir = tempfile::Builder::new()
             .prefix("siko-agent-host-")
             .tempdir()
-            .map_err(AgentHostError::TempDir)?;
+            .map_err(ProcessAgentRunSchedulerError::TempDir)?;
         let socket_path = socket_dir.path().join("agent-host.sock");
         Ok(Self::with_socket_dir(
             command,
@@ -256,14 +134,6 @@ impl AgentHostClient {
             socket_path,
             Some(socket_dir),
         ))
-    }
-
-    pub fn with_socket_path(
-        command: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>,
-        socket_path: impl Into<PathBuf>,
-    ) -> Self {
-        Self::with_socket_dir(command, args, socket_path.into(), None)
     }
 
     fn with_socket_dir(
@@ -285,7 +155,7 @@ impl AgentHostClient {
         }
     }
 
-    fn unstarted_with_error_socket(command_error: AgentHostError) -> Self {
+    fn unstarted_with_error_socket(command_error: ProcessAgentRunSchedulerError) -> Self {
         let path = std::env::temp_dir().join("siko-agent-host-unavailable.sock");
         Self {
             command: "unavailable".to_string(),
@@ -300,9 +170,9 @@ impl AgentHostClient {
         }
     }
 
-    async fn ensure_started(&mut self) -> Result<(), AgentHostError> {
+    async fn ensure_started(&mut self) -> Result<(), ProcessAgentRunSchedulerError> {
         if let Some(error) = &self.startup_error {
-            return Err(AgentHostError::Unavailable(error.clone()));
+            return Err(ProcessAgentRunSchedulerError::Unavailable(error.clone()));
         }
 
         if self.child.is_some() {
@@ -320,7 +190,7 @@ impl AgentHostClient {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .spawn()
-            .map_err(AgentHostError::Spawn)?;
+            .map_err(ProcessAgentRunSchedulerError::Spawn)?;
         debug!(
             command = %self.command,
             socket = %self.socket_path.display(),
@@ -336,7 +206,7 @@ impl AgentHostClient {
         Ok(())
     }
 
-    async fn connect_socket(&self) -> Result<UnixStream, AgentHostError> {
+    async fn connect_socket(&self) -> Result<UnixStream, ProcessAgentRunSchedulerError> {
         let mut last_error = None;
         for _ in 0..100 {
             match UnixStream::connect(&self.socket_path).await {
@@ -352,11 +222,11 @@ impl AgentHostClient {
         }
 
         match last_error {
-            Some(source) => Err(AgentHostError::Connect {
+            Some(source) => Err(ProcessAgentRunSchedulerError::Connect {
                 path: self.socket_path.clone(),
                 source,
             }),
-            None => Err(AgentHostError::ConnectTimeout {
+            None => Err(ProcessAgentRunSchedulerError::ConnectTimeout {
                 path: self.socket_path.clone(),
             }),
         }
@@ -364,23 +234,33 @@ impl AgentHostClient {
 
     async fn send_message(
         &mut self,
-        message: &AgentHostClientMessage<'_>,
-    ) -> Result<(), AgentHostError> {
-        let writer = self.writer.as_mut().ok_or(AgentHostError::MissingWriter)?;
-        let mut line = serde_json::to_vec(message).map_err(AgentHostError::Encode)?;
+        message: &ProcessAgentRunSchedulerMessage<'_>,
+    ) -> Result<(), ProcessAgentRunSchedulerError> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or(ProcessAgentRunSchedulerError::MissingWriter)?;
+        let mut line =
+            serde_json::to_vec(message).map_err(ProcessAgentRunSchedulerError::Encode)?;
         line.push(b'\n');
         writer
             .write_all(&line)
             .await
-            .map_err(AgentHostError::Write)?;
-        writer.flush().await.map_err(AgentHostError::Flush)
+            .map_err(ProcessAgentRunSchedulerError::Write)?;
+        writer
+            .flush()
+            .await
+            .map_err(ProcessAgentRunSchedulerError::Flush)
     }
 
     async fn read_response(
         &mut self,
         expected_id: &str,
-    ) -> Result<AgentWorkerResult, AgentHostError> {
-        let reader = self.reader.as_mut().ok_or(AgentHostError::MissingReader)?;
+    ) -> Result<AgentRunResponse, ProcessAgentRunSchedulerError> {
+        let reader = self
+            .reader
+            .as_mut()
+            .ok_or(ProcessAgentRunSchedulerError::MissingReader)?;
 
         let mut line = String::new();
         loop {
@@ -388,22 +268,24 @@ impl AgentHostClient {
             let bytes = reader
                 .read_line(&mut line)
                 .await
-                .map_err(AgentHostError::Read)?;
+                .map_err(ProcessAgentRunSchedulerError::Read)?;
             if bytes == 0 {
-                return Err(AgentHostError::Closed);
+                return Err(ProcessAgentRunSchedulerError::Closed);
             }
 
-            let response: AgentHostMessage =
-                serde_json::from_str(line.trim_end()).map_err(AgentHostError::Decode)?;
+            let response: ProcessAgentRunSchedulerHostMessage =
+                serde_json::from_str(line.trim_end())
+                    .map_err(ProcessAgentRunSchedulerError::Decode)?;
 
             match response {
-                AgentHostMessage::Result { id, result } if id == expected_id => {
+                ProcessAgentRunSchedulerHostMessage::Result { id, result } if id == expected_id => {
                     return Ok(result);
                 }
-                AgentHostMessage::Error { id, message } if id == expected_id => {
-                    return Err(AgentHostError::Host(message));
+                ProcessAgentRunSchedulerHostMessage::Error { id, message } if id == expected_id => {
+                    return Err(ProcessAgentRunSchedulerError::Host(message));
                 }
-                AgentHostMessage::Result { .. } | AgentHostMessage::Error { .. } => {
+                ProcessAgentRunSchedulerHostMessage::Result { .. }
+                | ProcessAgentRunSchedulerHostMessage::Error { .. } => {
                     continue;
                 }
             }
@@ -414,31 +296,34 @@ impl AgentHostClient {
         &mut self,
         expected_id: &str,
         cancellation: &CancellationToken,
-    ) -> Result<AgentWorkerResult, AgentHostError> {
-        let reader = self.reader.as_mut().ok_or(AgentHostError::MissingReader)?;
+    ) -> Result<AgentRunResponse, ProcessAgentRunSchedulerError> {
+        let reader = self
+            .reader
+            .as_mut()
+            .ok_or(ProcessAgentRunSchedulerError::MissingReader)?;
 
         let mut line = String::new();
         loop {
             line.clear();
             tokio::select! {
-                _ = cancellation.cancelled() => return Err(AgentHostError::Cancelled),
+                _ = cancellation.cancelled() => return Err(ProcessAgentRunSchedulerError::Cancelled),
                 read = reader.read_line(&mut line) => {
-                    let bytes = read.map_err(AgentHostError::Read)?;
+                    let bytes = read.map_err(ProcessAgentRunSchedulerError::Read)?;
                     if bytes == 0 {
-                        return Err(AgentHostError::Closed);
+                        return Err(ProcessAgentRunSchedulerError::Closed);
                     }
 
-                    let response: AgentHostMessage =
-                        serde_json::from_str(line.trim_end()).map_err(AgentHostError::Decode)?;
+                    let response: ProcessAgentRunSchedulerHostMessage =
+                        serde_json::from_str(line.trim_end()).map_err(ProcessAgentRunSchedulerError::Decode)?;
 
                     match response {
-                        AgentHostMessage::Result { id, result } if id == expected_id => {
+                        ProcessAgentRunSchedulerHostMessage::Result { id, result } if id == expected_id => {
                             return Ok(result);
                         }
-                        AgentHostMessage::Error { id, message } if id == expected_id => {
-                            return Err(AgentHostError::Host(message));
+                        ProcessAgentRunSchedulerHostMessage::Error { id, message } if id == expected_id => {
+                            return Err(ProcessAgentRunSchedulerError::Host(message));
                         }
-                        AgentHostMessage::Result { .. } | AgentHostMessage::Error { .. } => {
+                        ProcessAgentRunSchedulerHostMessage::Result { .. } | ProcessAgentRunSchedulerHostMessage::Error { .. } => {
                             continue;
                         }
                     }
@@ -447,7 +332,7 @@ impl AgentHostClient {
         }
     }
 
-    pub async fn shutdown(&mut self) -> Result<(), AgentHostError> {
+    pub async fn shutdown(&mut self) -> Result<(), ProcessAgentRunSchedulerError> {
         if self.child.is_none() {
             self.cleanup_socket();
             return Ok(());
@@ -456,7 +341,7 @@ impl AgentHostClient {
         self.next_run_id += 1;
         let shutdown_id = format!("shutdown_{}", self.next_run_id);
         let send_result = self
-            .send_message(&AgentHostClientMessage::Shutdown {
+            .send_message(&ProcessAgentRunSchedulerMessage::Shutdown {
                 id: shutdown_id.clone(),
             })
             .await;
@@ -508,23 +393,24 @@ impl AgentHostClient {
         let _ = self.socket_dir.take();
     }
 
-    fn error_result(message: impl Into<String>) -> AgentWorkerResult {
-        AgentWorkerResult {
+    fn error_result(message: impl Into<String>) -> AgentRunResponse {
+        AgentRunResponse {
             report: message.into(),
+            tool_calls: Vec::new(),
             terminal_call: None,
         }
     }
 }
 
 #[async_trait]
-impl AgentWorker for AgentHostClient {
+impl AgentRunScheduler for ProcessAgentRunScheduler {
     async fn run(
         &mut self,
         input: AgentRunRequest,
         cancellation: CancellationToken,
-    ) -> AgentWorkerResult {
+    ) -> AgentRunResponse {
         if cancellation.is_cancelled() {
-            return Self::error_result(AgentHostError::Cancelled.to_string());
+            return Self::error_result(ProcessAgentRunSchedulerError::Cancelled.to_string());
         }
 
         if let Err(error) = self.ensure_started().await {
@@ -534,7 +420,7 @@ impl AgentWorker for AgentHostClient {
         self.next_run_id += 1;
         let run_id = format!("run_{}", self.next_run_id);
         if let Err(error) = self
-            .send_message(&AgentHostClientMessage::Run {
+            .send_message(&ProcessAgentRunSchedulerMessage::Run {
                 id: run_id.clone(),
                 request: &input,
             })
@@ -545,16 +431,16 @@ impl AgentWorker for AgentHostClient {
 
         match self.read_response_or_cancel(&run_id, &cancellation).await {
             Ok(result) => result,
-            Err(AgentHostError::Cancelled) => {
+            Err(ProcessAgentRunSchedulerError::Cancelled) => {
                 self.terminate().await;
-                Self::error_result(AgentHostError::Cancelled.to_string())
+                Self::error_result(ProcessAgentRunSchedulerError::Cancelled.to_string())
             }
             Err(error) => Self::error_result(error.to_string()),
         }
     }
 }
 
-impl Drop for AgentHostClient {
+impl Drop for ProcessAgentRunScheduler {
     fn drop(&mut self) {
         if self.child.is_none() {
             return;
@@ -569,11 +455,11 @@ impl Drop for AgentHostClient {
     }
 }
 
-async fn remove_socket_if_exists(path: &Path) -> Result<(), AgentHostError> {
+async fn remove_socket_if_exists(path: &Path) -> Result<(), ProcessAgentRunSchedulerError> {
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(AgentHostError::RemoveSocket {
+        Err(source) => Err(ProcessAgentRunSchedulerError::RemoveSocket {
             path: path.to_path_buf(),
             source,
         }),

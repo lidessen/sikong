@@ -4,15 +4,13 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::{
-    AgentPromptSection, AgentRunHarness, AgentRunRequest, AgentWorker, AssistantHarness,
-    CancellationToken,
-    tools::{AssistantDecisionKind, SubmitAssistantDecisionArgs},
+    AgentPromptSection, AgentRunRequest, AgentRunScheduler, AgentToolCall, AssistantHarness,
+    AssistantTaskStatus, CancellationToken, TaskBoard, TaskBoardSnapshot, TaskId, TaskStore,
+    TaskWorkerFactory,
 };
 
 use super::context::AssistantContext;
-use super::runtime::{AssistantWorkerFactory, TaskRuntime, TaskRuntimeSnapshot};
-use super::store::TaskStore;
-use super::task::{AssistantTaskStatus, TaskId};
+use super::tools::{CancelTaskArgs, CreateTaskArgs, FinishAssistantTurnArgs, InspectTaskArgs};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionState {
@@ -22,32 +20,30 @@ pub struct SessionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AssistantDecision {
-    CreateTask { request: String },
-    ListTasks,
-    InspectTask { task_id: TaskId },
-    CancelActiveTask,
-    Reply { response: String },
+pub struct AssistantTurn {
+    pub tool_calls: Vec<AgentToolCall>,
+    pub response: String,
+    pub task_ids: Vec<TaskId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssistantDecisionError {
+pub struct AssistantTurnError {
     pub message: String,
 }
 
 #[async_trait]
 pub trait AssistantLoop: Send {
-    async fn decide(
+    async fn run_turn(
         &mut self,
         context: &AssistantContext,
-    ) -> Result<AssistantDecision, AssistantDecisionError>;
+    ) -> Result<AssistantTurn, AssistantTurnError>;
 }
 
-pub struct AgentAssistantLoop<W: AgentWorker> {
+pub struct AgentAssistantLoop<W: AgentRunScheduler> {
     worker: W,
 }
 
-impl<W: AgentWorker> AgentAssistantLoop<W> {
+impl<W: AgentRunScheduler> AgentAssistantLoop<W> {
     pub fn new(worker: W) -> Self {
         Self { worker }
     }
@@ -56,29 +52,26 @@ impl<W: AgentWorker> AgentAssistantLoop<W> {
 #[async_trait]
 impl<W> AssistantLoop for AgentAssistantLoop<W>
 where
-    W: AgentWorker + Send,
+    W: AgentRunScheduler + Send,
 {
-    async fn decide(
+    async fn run_turn(
         &mut self,
         context: &AssistantContext,
-    ) -> Result<AssistantDecision, AssistantDecisionError> {
+    ) -> Result<AssistantTurn, AssistantTurnError> {
         let mut request = AssistantHarness::new(context.clone()).build_agent_run();
         let mut last_error: Option<String> = None;
 
         for attempt in 0..2 {
             if let Some(error) = &last_error {
-                request = decision_retry_request(&request, error);
+                request = retry_request(&request, error);
             }
 
             let result = self
                 .worker
                 .run(request.clone(), CancellationToken::new())
                 .await;
-            match decode_assistant_decision(
-                result.terminal_call.as_ref().map(|call| call.name.as_str()),
-                result.terminal_call.as_ref().map(|call| &call.arguments),
-            ) {
-                Ok(decision) => return Ok(decision),
+            match decode_assistant_turn(result.tool_calls, result.terminal_call) {
+                Ok(turn) => return Ok(turn),
                 Err(error) => {
                     last_error = Some(format!(
                         "attempt {} failed: {}; report: {}",
@@ -90,87 +83,98 @@ where
             }
         }
 
-        Err(AssistantDecisionError {
-            message: last_error.unwrap_or_else(|| "assistant agent did not decide".to_string()),
+        Err(AssistantTurnError {
+            message: last_error.unwrap_or_else(|| "assistant agent did not finish".to_string()),
         })
     }
 }
 
-fn decode_assistant_decision(
-    terminal_tool: Option<&str>,
-    arguments: Option<&serde_json::Value>,
-) -> Result<AssistantDecision, AssistantDecisionError> {
-    if terminal_tool != Some("submit_assistant_decision") {
-        return Err(AssistantDecisionError {
+fn decode_assistant_turn(
+    mut tool_calls: Vec<AgentToolCall>,
+    terminal_call: Option<AgentToolCall>,
+) -> Result<AssistantTurn, AssistantTurnError> {
+    if tool_calls.is_empty()
+        && let Some(call) = terminal_call.clone()
+    {
+        tool_calls.push(call);
+    }
+
+    let terminal_call = terminal_call
+        .or_else(|| tool_calls.last().cloned())
+        .ok_or_else(|| AssistantTurnError {
+            message: "assistant turn did not call a terminal tool".to_string(),
+        })?;
+
+    if terminal_call.name != "finish_assistant_turn" {
+        return Err(AssistantTurnError {
             message: format!(
-                "expected submit_assistant_decision terminal tool, got {}",
-                terminal_tool.unwrap_or("<none>")
+                "expected finish_assistant_turn terminal tool, got {}",
+                terminal_call.name
             ),
         });
     }
 
-    let arguments = arguments.ok_or_else(|| AssistantDecisionError {
-        message: "missing assistant decision arguments".to_string(),
-    })?;
-    let args = serde_json::from_value::<SubmitAssistantDecisionArgs>(arguments.clone()).map_err(
-        |error| AssistantDecisionError {
-            message: format!("invalid assistant decision arguments: {error}"),
-        },
-    )?;
-
-    match args.decision {
-        AssistantDecisionKind::CreateTask => Ok(AssistantDecision::CreateTask {
-            request: required_non_empty(args.request, "request")?,
-        }),
-        AssistantDecisionKind::ListTasks => Ok(AssistantDecision::ListTasks),
-        AssistantDecisionKind::InspectTask => Ok(AssistantDecision::InspectTask {
-            task_id: required_non_empty(args.task_id, "task_id")?,
-        }),
-        AssistantDecisionKind::CancelActiveTask => Ok(AssistantDecision::CancelActiveTask),
-        AssistantDecisionKind::Reply => Ok(AssistantDecision::Reply {
-            response: required_non_empty(Some(args.response), "response")?,
-        }),
+    let finish = serde_json::from_value::<FinishAssistantTurnArgs>(terminal_call.arguments.clone())
+        .map_err(|error| AssistantTurnError {
+            message: format!("invalid finish_assistant_turn arguments: {error}"),
+        })?;
+    if finish.response.trim().is_empty() {
+        return Err(AssistantTurnError {
+            message: "finish_assistant_turn response must not be empty".to_string(),
+        });
     }
+
+    Ok(AssistantTurn {
+        tool_calls,
+        response: finish.response,
+        task_ids: finish.task_ids,
+    })
 }
 
-fn required_non_empty(
-    value: Option<String>,
-    field: &'static str,
-) -> Result<String, AssistantDecisionError> {
-    value
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AssistantDecisionError {
-            message: format!("assistant decision missing required field {field}"),
-        })
-}
-
-fn decision_retry_request(request: &AgentRunRequest, error: &str) -> AgentRunRequest {
+fn retry_request(request: &AgentRunRequest, error: &str) -> AgentRunRequest {
     let mut retry = request.clone();
     retry.prompt.push(AgentPromptSection {
-        title: "Decision Repair".to_string(),
+        title: "Tool Repair".to_string(),
         content: format!(
-            "Your previous assistant decision was rejected by the protocol validator: {error}. Call submit_assistant_decision with a valid payload that satisfies the tool schema. Do not guess outside the provided context."
+            "Your previous assistant tool sequence was rejected by the protocol validator: {error}. Use the provided assistant tools with valid arguments, then finish with finish_assistant_turn. Do not guess outside the provided context."
         ),
     });
-    retry.input = with_decision_error(&retry.input, error);
+    retry.input = with_tool_error(&retry.input, error);
     retry
 }
 
-fn with_decision_error(input: &Value, error: &str) -> Value {
+fn with_tool_error(input: &Value, error: &str) -> Value {
     match input {
         Value::Object(object) => {
             let mut object = object.clone();
             object.insert(
-                "assistant_decision_error".to_string(),
+                "assistant_tool_error".to_string(),
                 Value::String(error.to_string()),
             );
             Value::Object(object)
         }
         _ => json!({
-            "assistant_decision_error": error,
+            "assistant_tool_error": error,
             "previous_input": input,
         }),
     }
+}
+
+fn decode_tool_args<T: serde::de::DeserializeOwned>(
+    call: &AgentToolCall,
+) -> Result<T, AssistantTurnError> {
+    serde_json::from_value::<T>(call.arguments.clone()).map_err(|error| AssistantTurnError {
+        message: format!("invalid {} arguments: {error}", call.name),
+    })
+}
+
+fn required_non_empty(value: String, field: &'static str) -> Result<String, AssistantTurnError> {
+    if value.trim().is_empty() {
+        return Err(AssistantTurnError {
+            message: format!("assistant tool missing required field {field}"),
+        });
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,20 +199,20 @@ impl Default for AssistantSessionConfig {
 pub struct AssistantSession<L: AssistantLoop> {
     focus_task: Option<TaskId>,
     loop_agent: L,
-    runtime: TaskRuntime,
+    task_board: TaskBoard,
 }
 
 impl<L: AssistantLoop> AssistantSession<L> {
     pub fn new<W>(loop_agent: L, engine_worker: W) -> Self
     where
-        W: AgentWorker + Clone + Send + Sync + 'static,
+        W: AgentRunScheduler + Clone + Send + Sync + 'static,
     {
         Self::with_config(loop_agent, engine_worker, AssistantSessionConfig::default())
     }
 
     pub fn with_config<W>(loop_agent: L, engine_worker: W, config: AssistantSessionConfig) -> Self
     where
-        W: AgentWorker + Clone + Send + Sync + 'static,
+        W: AgentRunScheduler + Clone + Send + Sync + 'static,
     {
         let engine_worker = Arc::new(engine_worker);
         Self::with_worker_factory(
@@ -227,19 +231,19 @@ impl<L: AssistantLoop> AssistantSession<L> {
         config: AssistantSessionConfig,
     ) -> Self
     where
-        W: AgentWorker + Send + 'static,
+        W: AgentRunScheduler + Send + 'static,
     {
-        let worker_factory = AssistantWorkerFactory::new(move || Box::new(make_worker()));
-        let runtime = TaskRuntime::new(config.max_parallel_tasks, worker_factory);
+        let worker_factory = TaskWorkerFactory::new(move || Box::new(make_worker()));
+        let task_board = TaskBoard::new(config.max_parallel_tasks, worker_factory);
         Self {
             focus_task: None,
             loop_agent,
-            runtime,
+            task_board,
         }
     }
 
     pub fn state(&self) -> SessionState {
-        let snapshot = self.runtime.snapshot();
+        let snapshot = self.task_board.snapshot();
         SessionState {
             focus_task: self.focus_task.clone(),
             running_tasks: snapshot.running_tasks,
@@ -247,28 +251,28 @@ impl<L: AssistantLoop> AssistantSession<L> {
         }
     }
 
-    pub async fn drain(&mut self, store: &mut impl TaskStore) -> TaskRuntimeSnapshot {
-        self.runtime.drain(store).await
+    pub async fn drain(&mut self, store: &mut impl TaskStore) -> TaskBoardSnapshot {
+        self.task_board.drain(store).await
     }
 
     pub async fn wait_for_all(
         &mut self,
         store: &mut impl TaskStore,
         timeout: Duration,
-    ) -> TaskRuntimeSnapshot {
-        self.runtime.wait_for_all(store, timeout).await
+    ) -> TaskBoardSnapshot {
+        self.task_board.wait_for_all(store, timeout).await
     }
 
     pub async fn cancel(&mut self, store: &mut impl TaskStore) -> SessionReply {
-        self.runtime.drain(store).await;
+        self.task_board.drain(store).await;
         let task_id = if let Some(task_id) = self.focus_task.clone() {
-            if self.runtime.cancel_task(store, &task_id).await {
+            if self.task_board.cancel_task(store, &task_id).await {
                 Some(task_id)
             } else {
-                self.runtime.cancel_first_active(store).await
+                self.task_board.cancel_first_active(store).await
             }
         } else {
-            self.runtime.cancel_first_active(store).await
+            self.task_board.cancel_first_active(store).await
         };
 
         let Some(task_id) = task_id else {
@@ -293,26 +297,103 @@ impl<L: AssistantLoop> AssistantSession<L> {
         store: &mut impl TaskStore,
         message: impl Into<String>,
     ) -> SessionReply {
-        self.runtime.drain(store).await;
+        self.task_board.drain(store).await;
         let context = AssistantContext::build(store, message);
-        let decision = match self.loop_agent.decide(&context).await {
-            Ok(decision) => decision,
+        let turn = match self.loop_agent.run_turn(&context).await {
+            Ok(turn) => turn,
             Err(error) => {
                 return SessionReply {
-                    text: format!("Assistant decision failed: {}", error.message),
+                    text: format!("Assistant turn failed: {}", error.message),
                     task_id: None,
                 };
             }
         };
-        match decision {
-            AssistantDecision::CreateTask { request } => self.create_task(store, request).await,
-            AssistantDecision::ListTasks => list_tasks(store),
-            AssistantDecision::InspectTask { task_id } => inspect_task(store, task_id),
-            AssistantDecision::CancelActiveTask => self.cancel(store).await,
-            AssistantDecision::Reply { response } => SessionReply {
-                text: response,
+        self.apply_turn(store, turn).await
+    }
+
+    async fn apply_turn(
+        &mut self,
+        store: &mut impl TaskStore,
+        turn: AssistantTurn,
+    ) -> SessionReply {
+        let mut touched_task_ids = Vec::new();
+        let mut saw_terminal = false;
+
+        for call in turn.tool_calls {
+            match call.name.as_str() {
+                "read_assistant_context" | "list_tasks" => {}
+                "inspect_task" => {
+                    let args = match decode_tool_args::<InspectTaskArgs>(&call) {
+                        Ok(args) => args,
+                        Err(error) => return tool_sequence_error(error),
+                    };
+                    let task_id = match required_non_empty(args.task_id, "task_id") {
+                        Ok(task_id) => task_id,
+                        Err(error) => return tool_sequence_error(error),
+                    };
+                    if store.get_task(&task_id).is_none() {
+                        return SessionReply {
+                            text: format!("Task {task_id} was not found."),
+                            task_id: None,
+                        };
+                    }
+                    push_unique(&mut touched_task_ids, task_id);
+                }
+                "create_task" => {
+                    let args = match decode_tool_args::<CreateTaskArgs>(&call) {
+                        Ok(args) => args,
+                        Err(error) => return tool_sequence_error(error),
+                    };
+                    let request = match required_non_empty(args.request, "request") {
+                        Ok(request) => request,
+                        Err(error) => return tool_sequence_error(error),
+                    };
+                    if let Some(task_id) = self.create_task(store, request).await.task_id {
+                        push_unique(&mut touched_task_ids, task_id);
+                    }
+                }
+                "cancel_task" => {
+                    let args = match decode_tool_args::<CancelTaskArgs>(&call) {
+                        Ok(args) => args,
+                        Err(error) => return tool_sequence_error(error),
+                    };
+                    let reply = match args.task_id.filter(|task_id| !task_id.trim().is_empty()) {
+                        Some(task_id) => self.cancel_specific_task(store, task_id).await,
+                        None => self.cancel(store).await,
+                    };
+                    if let Some(task_id) = reply.task_id {
+                        push_unique(&mut touched_task_ids, task_id);
+                    }
+                }
+                "finish_assistant_turn" => {
+                    saw_terminal = true;
+                    break;
+                }
+                other => {
+                    return SessionReply {
+                        text: format!("Assistant tool sequence failed: unsupported tool {other}"),
+                        task_id: None,
+                    };
+                }
+            }
+        }
+
+        if !saw_terminal {
+            return SessionReply {
+                text: "Assistant tool sequence failed: missing finish_assistant_turn.".to_string(),
                 task_id: None,
-            },
+            };
+        }
+
+        let task_id = turn
+            .task_ids
+            .iter()
+            .find(|task_id| !task_id.trim().is_empty())
+            .cloned()
+            .or_else(|| touched_task_ids.first().cloned());
+        SessionReply {
+            text: turn.response,
+            task_id,
         }
     }
 
@@ -320,7 +401,10 @@ impl<L: AssistantLoop> AssistantSession<L> {
         let task_id = store.create_task(request.clone());
         store.push_task_event(&task_id, "created from assistant message");
         self.focus_task = Some(task_id.clone());
-        let snapshot = self.runtime.enqueue(store, task_id.clone(), request).await;
+        let snapshot = self
+            .task_board
+            .enqueue(store, task_id.clone(), request)
+            .await;
         let status = store
             .get_task(&task_id)
             .map(|task| task.status.clone())
@@ -334,36 +418,44 @@ impl<L: AssistantLoop> AssistantSession<L> {
             task_id: Some(task_id),
         }
     }
+
+    async fn cancel_specific_task(
+        &mut self,
+        store: &mut impl TaskStore,
+        task_id: TaskId,
+    ) -> SessionReply {
+        self.task_board.drain(store).await;
+        if store.get_task(&task_id).is_none() {
+            return SessionReply {
+                text: format!("Task {task_id} was not found."),
+                task_id: None,
+            };
+        }
+        if !self.task_board.cancel_task(store, &task_id).await {
+            return SessionReply {
+                text: format!("Task {task_id} is not active."),
+                task_id: Some(task_id),
+            };
+        }
+        if self.focus_task.as_deref() == Some(task_id.as_str()) {
+            self.focus_task = None;
+        }
+        SessionReply {
+            text: format!("Cancelled task {task_id}."),
+            task_id: Some(task_id),
+        }
+    }
 }
 
-fn list_tasks(store: &impl TaskStore) -> SessionReply {
-    let tasks = store.list_tasks();
-    if tasks.is_empty() {
-        return SessionReply {
-            text: "No tasks yet.".to_string(),
-            task_id: None,
-        };
+fn push_unique(task_ids: &mut Vec<TaskId>, task_id: TaskId) {
+    if !task_ids.iter().any(|existing| existing == &task_id) {
+        task_ids.push(task_id);
     }
+}
 
+fn tool_sequence_error(error: AssistantTurnError) -> SessionReply {
     SessionReply {
-        text: tasks
-            .iter()
-            .map(|task| format!("{} {:?}: {}", task.id, task.status, task.title))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        text: format!("Assistant tool sequence failed: {}", error.message),
         task_id: None,
-    }
-}
-
-fn inspect_task(store: &impl TaskStore, task_id: TaskId) -> SessionReply {
-    match store.get_task(&task_id) {
-        Some(task) => SessionReply {
-            text: format!("{} {:?}: {}", task.id, task.status, task.title),
-            task_id: Some(task.id.clone()),
-        },
-        None => SessionReply {
-            text: format!("Task {task_id} was not found."),
-            task_id: None,
-        },
     }
 }

@@ -4,127 +4,111 @@ use serde_json::{Value, json};
 use siko::*;
 
 #[derive(Debug, Clone, Default)]
-pub struct TestAgentWorker;
+pub struct TestAgentRunScheduler;
 
 #[async_trait::async_trait]
-impl AgentWorker for TestAgentWorker {
+impl AgentRunScheduler for TestAgentRunScheduler {
     async fn run(
         &mut self,
         input: AgentRunRequest,
         _cancellation: CancellationToken,
-    ) -> AgentWorkerResult {
-        let terminal_tool = match &input.tool_choice {
-            AgentToolChoice::Tool { name } => input
-                .tools
-                .iter()
-                .find(|tool| input.terminal_tool_set.contains(&tool.name) && tool.name == *name),
-            AgentToolChoice::Required => input
-                .tools
-                .iter()
-                .find(|tool| input.terminal_tool_set.contains(&tool.name)),
-        };
+    ) -> AgentRunResponse {
+        let terminal_call = input
+            .tools
+            .iter()
+            .find(|tool| input.terminal_tool_set.contains(&tool.name))
+            .map(|tool| AgentToolCall {
+                name: tool.name.clone(),
+                arguments: mock_terminal_arguments(&input, &tool.name),
+            });
 
-        let terminal_call = match &input.tool_choice {
-            AgentToolChoice::Required => terminal_tool,
-            AgentToolChoice::Tool { name }
-                if terminal_tool.is_some_and(|tool| tool.name == *name) =>
-            {
-                terminal_tool
-            }
-            AgentToolChoice::Tool { .. } => None,
-        }
-        .map(|tool| AgentTerminalToolCall {
-            name: tool.name.clone(),
-            arguments: mock_terminal_arguments(&input, &tool.name),
-        });
-
-        AgentWorkerResult {
+        AgentRunResponse {
             report: format!("test agent worker completed {}", input.objective),
+            tool_calls: terminal_call.clone().into_iter().collect(),
             terminal_call,
         }
     }
 }
 
 fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
-    let script = input
+    let plan = input
         .input
-        .get("script")
+        .get("plan")
         .cloned()
-        .and_then(|value| serde_json::from_value::<NodeScript>(value).ok());
+        .and_then(|value| serde_json::from_value::<NodePlan>(value).ok());
+    let node = input
+        .input
+        .get("node")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let intent = node
+        .get("intent")
+        .and_then(Value::as_str)
+        .unwrap_or("mock output");
 
     match tool_name {
-        "submit_specification" => json!({ "report": format!("specified {}", input.objective) }),
-        "submit_evidence" => match script {
-            Some(NodeScript::NeedsInfo {
-                need,
-                acquired,
-                then,
-            }) => json!({
+        "submit_specification" => json!({}),
+        "submit_evidence" => match plan {
+            Some(NodePlan::NeedsInfo { need, then }) => json!({
                 "need": need,
-                "evidence": acquired,
-                "next_script": *then,
+                "evidence": format!("evidence for {intent}"),
+                "next_plan": *then,
             }),
             _ => json!({
                 "need": "missing_information",
                 "evidence": "mock evidence",
-                "next_script": NodeScript::Leaf {
-                    output: "mock acquired output".to_string(),
-                    changed_paths: Vec::new(),
-                    side_effects: Vec::new(),
-                    verdicts: vec![VerificationVerdict::Accept],
-                },
+                "next_plan": NodePlan::Execute,
             }),
         },
-        "submit_division" => match script {
-            Some(NodeScript::Divide { children, .. }) => json!({ "children": children }),
-            _ => json!({ "children": Vec::<NodeTemplate>::new() }),
-        },
-        "submit_work" => match script {
-            Some(NodeScript::Leaf {
-                output,
-                changed_paths,
-                side_effects,
-                ..
-            }) => json!({
-                "output": output,
-                "changed_paths": changed_paths,
-                "side_effects": side_effects,
+        "submit_plan_group" => match plan {
+            Some(NodePlan::Group(group)) => json!({
+                "mode": group.mode,
+                "items": group.items,
             }),
             _ => json!({
-                "output": "mock output",
-                "changed_paths": [],
-                "side_effects": [],
+                "mode": PlanGroupMode::Parallel,
+                "items": Vec::<NodeTemplate>::new(),
             }),
         },
-        "submit_combination" => match script {
-            Some(NodeScript::Divide { combine_output, .. }) => json!({
-                "output": combine_output,
-                "resolved_conflicts": string_array_at(&input.input, &["workspace_integration", "conflicts"]),
-            }),
-            _ => json!({
-                "output": "mock combined output",
-                "resolved_conflicts": [],
-            }),
-        },
+        "submit_work" => json!({
+            "output": intent,
+        }),
+        "submit_combination" => json!({
+            "output": intent,
+        }),
         "submit_verdict" => {
             let attempt = input
                 .input
                 .pointer("/node/verification_attempts")
                 .and_then(Value::as_u64)
                 .unwrap_or_default() as usize;
-            let verdict = match script {
-                Some(NodeScript::Leaf { verdicts, .. })
-                | Some(NodeScript::Divide { verdicts, .. }) => verdicts
-                    .get(attempt)
-                    .cloned()
-                    .unwrap_or(VerificationVerdict::Accept),
-                Some(NodeScript::NeedsInfo { .. }) | None => VerificationVerdict::Accept,
-            };
-            verdict_arguments(verdict)
+            verdict_arguments(verdict_for(intent, attempt))
         }
-        "submit_commit" => json!({ "report": format!("committed {}", input.objective) }),
+        "submit_commit" => json!({}),
         _ => json!({}),
     }
+}
+
+fn verdict_for(intent: &str, attempt: usize) -> VerificationVerdict {
+    if intent.contains("always bad") {
+        return VerificationVerdict::Reject {
+            failure_class: FailureClass::BadOutput,
+            reason: "bad output".to_string(),
+        };
+    }
+    if intent.contains("retry once") && attempt == 0 {
+        return VerificationVerdict::Reject {
+            failure_class: FailureClass::BadOutput,
+            reason: "bad output".to_string(),
+        };
+    }
+    if intent.contains("needs post-verify info") {
+        return VerificationVerdict::Uncertain {
+            missing_info: "missing citation".to_string(),
+            reason: "needs source".to_string(),
+        };
+    }
+    VerificationVerdict::Accept
 }
 
 fn verdict_arguments(verdict: VerificationVerdict) -> Value {
@@ -152,47 +136,27 @@ fn verdict_arguments(verdict: VerificationVerdict) -> Value {
     }
 }
 
-fn string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
-    let mut current = value;
-    for segment in path {
-        let Some(next) = current.get(*segment) else {
-            return Vec::new();
-        };
-        current = next;
-    }
-    current
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 #[derive(Debug, Clone, Default)]
 #[allow(dead_code)]
-pub struct RecordingAgentWorker {
+pub struct RecordingAgentRunScheduler {
     requests: Arc<Mutex<Vec<AgentRunRequest>>>,
 }
 
 #[allow(dead_code)]
-impl RecordingAgentWorker {
+impl RecordingAgentRunScheduler {
     pub fn requests(&self) -> Vec<AgentRunRequest> {
         self.requests.lock().unwrap().clone()
     }
 }
 
 #[async_trait::async_trait]
-impl AgentWorker for RecordingAgentWorker {
+impl AgentRunScheduler for RecordingAgentRunScheduler {
     async fn run(
         &mut self,
         input: AgentRunRequest,
         cancellation: CancellationToken,
-    ) -> AgentWorkerResult {
+    ) -> AgentRunResponse {
         self.requests.lock().unwrap().push(input.clone());
-        TestAgentWorker.run(input, cancellation).await
+        TestAgentRunScheduler.run(input, cancellation).await
     }
 }

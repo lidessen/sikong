@@ -3,26 +3,22 @@ export { runRuntimeHost } from "./runtime-host";
 export type { ToolLoopResult, ToolLoopStep } from "./mock-worker";
 export {
   agentHostMessageSchema,
-  agentRunKindSchema,
   agentRunRequestSchema,
-  agentTerminalToolCallSchema,
-  agentToolChoiceSchema,
+  agentRunResponseSchema,
+  agentToolCallSchema,
   agentToolSpecSchema,
-  agentWorkerResultSchema,
   jsonValueSchema,
   parseAgentRunRequest,
-  parseAgentWorkerResult,
+  parseAgentRunResponse,
   parseRuntimeClientMessage,
   runtimeClientMessageSchema,
 } from "./protocol";
 export type {
   AgentHostMessage,
-  AgentRunKind,
   AgentRunRequest,
-  AgentTerminalToolCall,
-  AgentToolChoice,
+  AgentRunResponse,
+  AgentToolCall,
   AgentToolSpec,
-  AgentWorkerResult,
   JsonValue,
   RuntimeClientMessage,
 } from "./protocol";

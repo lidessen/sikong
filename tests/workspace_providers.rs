@@ -6,27 +6,29 @@ fn memory_workspace_forks_and_combines_without_conflicts() {
     let mut workspace = MemoryWorkspace::default();
     let requirement = WorkspaceRequirement::memory();
     let snapshot = workspace.snapshot(&requirement).unwrap();
-    let instance = workspace.fork(&snapshot).unwrap();
-    let delta = workspace
-        .collect_delta(
-            &instance,
-            Vec::new(),
-            vec!["captured design artifact".to_string()],
+    let surface = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(1)])
+        .unwrap();
+    let change = workspace
+        .capture_changes(&surface, vec!["captured design artifact".to_string()])
+        .unwrap();
+
+    let merge_surface = workspace
+        .merge_changes(
+            std::slice::from_ref(&change),
+            vec![WorkspaceResourceRef::MergeSurface(1)],
         )
         .unwrap();
 
-    let integration = workspace.combine(std::slice::from_ref(&delta)).unwrap();
-
     assert_eq!(snapshot.provider, WorkspaceProvider::Memory);
-    assert_eq!(instance.provider, WorkspaceProvider::Memory);
-    assert_eq!(delta.provider, WorkspaceProvider::Memory);
-    assert_eq!(integration.deltas, vec![delta.id]);
-    assert!(integration.changed_paths.is_empty());
-    assert!(integration.conflicts.is_empty());
+    assert_eq!(surface.provider, WorkspaceProvider::Memory);
+    assert_eq!(change.provider, WorkspaceProvider::Memory);
+    assert!(merge_surface.changed_paths.is_empty());
+    assert!(merge_surface.conflicts.is_empty());
 }
 
 #[test]
-fn file_system_workspace_preserves_scope_and_does_not_merge_conflict_duplicate_paths() {
+fn file_system_workspace_preserves_scope_without_agent_reported_paths() {
     let mut workspace = FileSystemWorkspace::default();
     let requirement = WorkspaceRequirement {
         provider: WorkspaceProvider::FileSystem,
@@ -35,52 +37,57 @@ fn file_system_workspace_preserves_scope_and_does_not_merge_conflict_duplicate_p
         git: None,
     };
     let snapshot = workspace.snapshot(&requirement).unwrap();
-    let first = workspace.fork(&snapshot).unwrap();
-    let second = workspace.fork(&snapshot).unwrap();
-    let first_delta = workspace
-        .collect_delta(&first, vec!["target/report.txt".to_string()], Vec::new())
+    let first = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(1)])
         .unwrap();
-    let second_delta = workspace
-        .collect_delta(&second, vec!["target/report.txt".to_string()], Vec::new())
+    let second = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(2)])
         .unwrap();
+    let first_change = workspace.capture_changes(&first, Vec::new()).unwrap();
+    let second_change = workspace.capture_changes(&second, Vec::new()).unwrap();
 
-    let integration = workspace.combine(&[first_delta, second_delta]).unwrap();
+    let merge_surface = workspace
+        .merge_changes(
+            &[first_change, second_change],
+            vec![WorkspaceResourceRef::MergeSurface(1)],
+        )
+        .unwrap();
 
     assert_eq!(snapshot.provider, WorkspaceProvider::FileSystem);
     assert_eq!(
         snapshot.scope,
         vec!["src/*".to_string(), "target/report.txt".to_string()]
     );
-    assert_eq!(
-        integration.changed_paths,
-        vec![
-            "target/report.txt".to_string(),
-            "target/report.txt".to_string()
-        ]
-    );
-    assert!(integration.conflicts.is_empty());
+    assert!(merge_surface.changed_paths.is_empty());
+    assert!(merge_surface.conflicts.is_empty());
 }
 
 #[test]
-fn git_file_system_workspace_reports_duplicate_path_conflicts() {
+fn git_file_system_workspace_without_git_metadata_does_not_accept_reported_paths() {
     let mut workspace = GitFileSystemWorkspace::default();
     let requirement = WorkspaceRequirement::git(["src/lib.rs"]);
     let snapshot = workspace.snapshot(&requirement).unwrap();
-    let first = workspace.fork(&snapshot).unwrap();
-    let second = workspace.fork(&snapshot).unwrap();
-    let first_delta = workspace
-        .collect_delta(&first, vec!["src/lib.rs".to_string()], Vec::new())
+    let first = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(1)])
         .unwrap();
-    let second_delta = workspace
-        .collect_delta(&second, vec!["src/lib.rs".to_string()], Vec::new())
+    let second = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(2)])
         .unwrap();
+    let first_change = workspace.capture_changes(&first, Vec::new()).unwrap();
+    let second_change = workspace.capture_changes(&second, Vec::new()).unwrap();
 
-    let integration = workspace.combine(&[first_delta, second_delta]).unwrap();
+    let merge_surface = workspace
+        .merge_changes(
+            &[first_change, second_change],
+            vec![WorkspaceResourceRef::MergeSurface(1)],
+        )
+        .unwrap();
 
     assert_eq!(snapshot.provider, WorkspaceProvider::GitFileSystem);
     assert_eq!(first.provider, WorkspaceProvider::GitFileSystem);
     assert_eq!(second.provider, WorkspaceProvider::GitFileSystem);
-    assert_eq!(integration.conflicts, vec!["src/lib.rs".to_string()]);
+    assert!(merge_surface.changed_paths.is_empty());
+    assert!(merge_surface.conflicts.is_empty());
 }
 
 #[test]
@@ -98,8 +105,12 @@ fn git_file_system_workspace_commits_and_combines_real_worktrees() {
         ["left.txt", "right.txt"],
     );
     let snapshot = workspace.snapshot(&requirement).unwrap();
-    let left = workspace.fork(&snapshot).unwrap();
-    let right = workspace.fork(&snapshot).unwrap();
+    let left = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(1)])
+        .unwrap();
+    let right = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(2)])
+        .unwrap();
 
     fs::write(
         left.git.as_ref().unwrap().worktree_path.join("left.txt"),
@@ -112,28 +123,27 @@ fn git_file_system_workspace_commits_and_combines_real_worktrees() {
     )
     .unwrap();
 
-    let left_delta = workspace
-        .collect_delta(&left, Vec::new(), Vec::new())
-        .unwrap();
-    let right_delta = workspace
-        .collect_delta(&right, Vec::new(), Vec::new())
-        .unwrap();
-    let integration = workspace
-        .combine(&[left_delta.clone(), right_delta.clone()])
+    let left_change = workspace.capture_changes(&left, Vec::new()).unwrap();
+    let right_change = workspace.capture_changes(&right, Vec::new()).unwrap();
+    let merge_surface = workspace
+        .merge_changes(
+            &[left_change.clone(), right_change.clone()],
+            vec![WorkspaceResourceRef::MergeSurface(1)],
+        )
         .unwrap();
 
-    assert_eq!(left_delta.changed_paths, vec!["left.txt".to_string()]);
-    assert_eq!(right_delta.changed_paths, vec!["right.txt".to_string()]);
-    assert!(left_delta.git.as_ref().unwrap().commit_sha.is_some());
-    assert!(right_delta.git.as_ref().unwrap().commit_sha.is_some());
-    assert!(integration.conflicts.is_empty());
-    let integration_path = &integration.git.as_ref().unwrap().worktree_path;
+    assert_eq!(left_change.changed_paths, vec!["left.txt".to_string()]);
+    assert_eq!(right_change.changed_paths, vec!["right.txt".to_string()]);
+    assert!(left_change.git.as_ref().unwrap().commit_sha.is_some());
+    assert!(right_change.git.as_ref().unwrap().commit_sha.is_some());
+    assert!(merge_surface.conflicts.is_empty());
+    let merge_path = &merge_surface.git.as_ref().unwrap().worktree_path;
     assert_eq!(
-        fs::read_to_string(integration_path.join("left.txt")).unwrap(),
+        fs::read_to_string(merge_path.join("left.txt")).unwrap(),
         "left\n"
     );
     assert_eq!(
-        fs::read_to_string(integration_path.join("right.txt")).unwrap(),
+        fs::read_to_string(merge_path.join("right.txt")).unwrap(),
         "right\n"
     );
 }
@@ -149,8 +159,12 @@ fn git_file_system_workspace_reports_real_merge_conflicts() {
     let requirement =
         WorkspaceRequirement::git_repo(repo.root(), repo.worktrees(), "HEAD", ["shared.txt"]);
     let snapshot = workspace.snapshot(&requirement).unwrap();
-    let first = workspace.fork(&snapshot).unwrap();
-    let second = workspace.fork(&snapshot).unwrap();
+    let first = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(1)])
+        .unwrap();
+    let second = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(2)])
+        .unwrap();
 
     fs::write(
         first.git.as_ref().unwrap().worktree_path.join("shared.txt"),
@@ -168,20 +182,21 @@ fn git_file_system_workspace_reports_real_merge_conflicts() {
     )
     .unwrap();
 
-    let first_delta = workspace
-        .collect_delta(&first, Vec::new(), Vec::new())
+    let first_change = workspace.capture_changes(&first, Vec::new()).unwrap();
+    let second_change = workspace.capture_changes(&second, Vec::new()).unwrap();
+    let merge_surface = workspace
+        .merge_changes(
+            &[first_change, second_change],
+            vec![WorkspaceResourceRef::MergeSurface(1)],
+        )
         .unwrap();
-    let second_delta = workspace
-        .collect_delta(&second, Vec::new(), Vec::new())
-        .unwrap();
-    let integration = workspace.combine(&[first_delta, second_delta]).unwrap();
 
-    assert_eq!(integration.conflicts, vec!["shared.txt".to_string()]);
-    assert!(integration.git.as_ref().unwrap().worktree_path.exists());
+    assert_eq!(merge_surface.conflicts, vec!["shared.txt".to_string()]);
+    assert!(merge_surface.git.as_ref().unwrap().worktree_path.exists());
 }
 
 #[test]
-fn git_file_system_workspace_removes_worktree_and_branch() {
+fn git_file_system_workspace_cleans_worktree_and_branch_resources_independently() {
     let repo = TestGitRepo::new();
     repo.write("file.txt", "base\n");
     repo.git(["add", "."]);
@@ -191,12 +206,31 @@ fn git_file_system_workspace_removes_worktree_and_branch() {
     let requirement =
         WorkspaceRequirement::git_repo(repo.root(), repo.worktrees(), "HEAD", ["file.txt"]);
     let snapshot = workspace.snapshot(&requirement).unwrap();
-    let instance = workspace.fork(&snapshot).unwrap();
-    let git = instance.git.as_ref().unwrap().clone();
+    let surface = workspace
+        .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(1)])
+        .unwrap();
+    let git = surface.git.as_ref().unwrap().clone();
+    let worktree_resource = surface
+        .resources
+        .iter()
+        .find(|resource| resource.kind == WorkspaceResourceKind::GitWorktree)
+        .unwrap()
+        .clone();
+    let branch_resource = surface
+        .resources
+        .iter()
+        .find(|resource| resource.kind == WorkspaceResourceKind::GitBranch)
+        .unwrap()
+        .clone();
 
-    workspace.dispose_instance(&instance).unwrap();
+    workspace.cleanup(&worktree_resource).unwrap();
 
     assert!(!git.worktree_path.exists());
+    let branches = repo.git(["branch", "--list", &git.branch_name]);
+    assert!(!branches.trim().is_empty());
+
+    workspace.cleanup(&branch_resource).unwrap();
+
     let branches = repo.git(["branch", "--list", &git.branch_name]);
     assert!(branches.trim().is_empty());
 }

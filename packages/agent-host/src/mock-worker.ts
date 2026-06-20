@@ -1,17 +1,13 @@
 import { defineTool, type ToolDefinition, type ToolSet } from "agent-loop";
 import type {
   AgentRunRequest,
-  AgentTerminalToolCall,
+  AgentRunResponse,
+  AgentToolCall,
   AgentToolSpec,
-  AgentWorkerResult,
   JsonValue,
 } from "./protocol";
 
-interface DynamicTools {
-  tools: ToolSet;
-}
-
-export function createDynamicTools(specs: AgentToolSpec[]): DynamicTools {
+export function createDynamicTools(specs: AgentToolSpec[]): ToolSet {
   const tools: ToolSet = {};
 
   for (const spec of specs) {
@@ -24,18 +20,16 @@ export function createDynamicTools(specs: AgentToolSpec[]): DynamicTools {
     });
   }
 
-  return {
-    tools,
-  };
+  return tools;
 }
 
-export async function runMockAgentWorker(request: AgentRunRequest): Promise<AgentWorkerResult> {
+export async function runMockAgentWorker(request: AgentRunRequest): Promise<AgentRunResponse> {
   const delayMs = delayFromInput(request.input);
   if (delayMs > 0) {
     await Bun.sleep(delayMs);
   }
 
-  const { tools } = createDynamicTools(request.tools);
+  const tools = createDynamicTools(request.tools);
   const toolName = selectToolName(request);
   if (!toolName) {
     return {
@@ -49,20 +43,22 @@ export async function runMockAgentWorker(request: AgentRunRequest): Promise<Agen
       report: `mock agent worker could not find selected tool ${toolName}`,
     };
   }
+  const terminalArguments = await mockTerminalArguments(request, toolName);
+  const steps = mockToolSteps(request, toolName, terminalArguments);
 
   const agent = new ToolLoopAgent({
     tools,
     terminalToolSet: request.terminalToolSet,
   });
-  const loopResult = await agent.run([
-    { name: toolName, arguments: mockTerminalArguments(request, toolName) },
-  ]);
+  const loopResult = await agent.run(steps);
 
   const call = loopResult.terminalCall;
+  const callNames = loopResult.calls.map((toolCall) => toolCall.name).join(" -> ");
   return {
     report: call
-      ? `mock agent worker completed ${request.objective}; terminal tool ${call.name} called`
+      ? `mock agent worker completed ${request.objective}; tool calls ${callNames}; terminal tool ${call.name} called`
       : `mock agent worker completed ${request.objective}`,
+    toolCalls: loopResult.calls,
     ...(call ? { terminalCall: call } : {}),
   };
 }
@@ -81,8 +77,8 @@ export interface ToolLoopStep {
 }
 
 export interface ToolLoopResult {
-  calls: AgentTerminalToolCall[];
-  terminalCall?: AgentTerminalToolCall;
+  calls: AgentToolCall[];
+  terminalCall?: AgentToolCall;
 }
 
 export class ToolLoopAgent {
@@ -98,7 +94,7 @@ export class ToolLoopAgent {
   }
 
   async run(steps: ToolLoopStep[]): Promise<ToolLoopResult> {
-    const calls: AgentTerminalToolCall[] = [];
+    const calls: AgentToolCall[] = [];
 
     for (const step of steps) {
       const tool = this.options.tools[step.name];
@@ -123,131 +119,254 @@ export class ToolLoopAgent {
 }
 
 function selectToolName(request: AgentRunRequest): string | undefined {
-  if (request.toolChoice.type === "tool") {
-    return request.toolChoice.name;
-  }
-
   return request.terminalToolSet[0];
 }
 
-function mockTerminalArguments(
+function mockToolSteps(
   request: AgentRunRequest,
   toolName: string,
-): Record<string, unknown> {
+  terminalArguments: Record<string, unknown>,
+): ToolLoopStep[] {
+  if (toolName === "finish_assistant_turn") {
+    return mockAssistantToolSteps(request, terminalArguments);
+  }
+
+  const contextToolName = contextReaderToolName(request);
+  if (
+    contextToolName &&
+    contextToolName !== toolName &&
+    !request.terminalToolSet.includes(contextToolName)
+  ) {
+    return [
+      { name: contextToolName, arguments: {} },
+      { name: toolName, arguments: terminalArguments },
+    ];
+  }
+
+  return [{ name: toolName, arguments: terminalArguments }];
+}
+
+function mockAssistantToolSteps(
+  request: AgentRunRequest,
+  terminalArguments: Record<string, unknown>,
+): ToolLoopStep[] {
   const input = toRecord(request.input);
-  const script = toRecord(input.script);
+  const message = stringOr(input.current_message, "").trim();
+  const lowerMessage = message.toLowerCase();
+  const steps: ToolLoopStep[] = [];
+
+  if (request.tools.some((tool) => tool.name === "read_assistant_context")) {
+    steps.push({ name: "read_assistant_context", arguments: {} });
+  }
+
+  if (lowerMessage === "list" || lowerMessage === "tasks") {
+    steps.push({ name: "list_tasks", arguments: {} });
+  } else if (lowerMessage === "cancel") {
+    steps.push({ name: "cancel_task", arguments: {} });
+  } else if (lowerMessage.startsWith("status ")) {
+    steps.push({
+      name: "inspect_task",
+      arguments: { task_id: message.slice("status ".length).trim() },
+    });
+  } else if (message.length > 0) {
+    steps.push({ name: "create_task", arguments: { request: message } });
+  }
+
+  steps.push({ name: "finish_assistant_turn", arguments: terminalArguments });
+  return steps;
+}
+
+function contextReaderToolName(request: AgentRunRequest): string | undefined {
+  const preferred = request.terminalToolSet.includes("finish_assistant_turn")
+    ? "read_assistant_context"
+    : "read_operation_context";
+  if (request.tools.some((tool) => tool.name === preferred)) {
+    return preferred;
+  }
+  return request.tools.find(
+    (tool) => tool.name.startsWith("read_") && tool.name.endsWith("_context"),
+  )?.name;
+}
+
+async function mockTerminalArguments(
+  request: AgentRunRequest,
+  toolName: string,
+): Promise<Record<string, unknown>> {
+  const input = toRecord(request.input);
+  const plan = toRecord(input.plan);
   const operation = typeof input.operation === "string" ? input.operation : "";
 
   switch (toolName) {
     case "submit_specification":
-      return { report: `specified ${request.objective}` };
+      return {};
     case "submit_evidence":
-      return mockEvidenceArgs(script);
-    case "submit_division":
-      return mockDivisionArgs(script);
+      return mockEvidenceArgs(plan, input);
+    case "submit_plan_group":
+      return mockPlanGroupArgs(plan);
     case "submit_work":
-      return mockWorkArgs(script);
+      return await mockWorkArgs(input);
     case "submit_combination":
-      return mockCombinationArgs(script, input);
+      return mockCombinationArgs(input);
     case "submit_verdict":
-      return mockVerdictArgs(script, input);
+      return mockVerdictArgs(input);
     case "submit_commit":
-      return { report: `committed ${request.objective}` };
-    case "submit_assistant_decision":
-      return mockAssistantDecisionArgs(input);
+      return {};
+    case "finish_assistant_turn":
+      return mockFinishAssistantTurnArgs(input);
     default:
       return { operation };
   }
 }
 
-function mockAssistantDecisionArgs(input: Record<string, unknown>): Record<string, unknown> {
+function mockFinishAssistantTurnArgs(input: Record<string, unknown>): Record<string, unknown> {
   const message = stringOr(input.current_message, "").trim();
   const lowerMessage = message.toLowerCase();
 
   if (lowerMessage === "list" || lowerMessage === "tasks") {
     return {
-      decision: "list_tasks",
-      response: "Listing tasks.",
+      response: formatTaskList(input),
+      task_ids: [],
     };
   }
 
   if (lowerMessage === "cancel") {
     return {
-      decision: "cancel_active_task",
       response: "Cancelling active task.",
+      task_ids: [],
     };
   }
 
   if (lowerMessage.startsWith("status ")) {
+    const taskId = message.slice("status ".length).trim();
     return {
-      decision: "inspect_task",
-      task_id: message.slice("status ".length).trim(),
-      response: "Inspecting task.",
+      response: formatTaskStatus(input, taskId),
+      task_ids: [taskId],
     };
   }
 
   if (message.length === 0) {
     return {
-      decision: "reply",
       response: "Please provide a task request.",
+      task_ids: [],
     };
   }
 
   return {
-    decision: "create_task",
-    request: message,
     response: "Creating task.",
+    task_ids: [],
   };
 }
 
-function mockEvidenceArgs(script: Record<string, unknown>): Record<string, unknown> {
-  const needsInfo = toRecord(script.NeedsInfo);
+function formatTaskList(input: Record<string, unknown>): string {
+  const tasks = arrayOfRecords(input.tasks);
+  if (tasks.length === 0) {
+    return "No tasks yet.";
+  }
+  return tasks
+    .map(
+      (task) =>
+        `${stringOr(task.id, "<unknown>")} ${stringOr(task.status, "<unknown>")}: ${stringOr(task.title, "")}`,
+    )
+    .join("\n");
+}
+
+function formatTaskStatus(input: Record<string, unknown>, taskId: string): string {
+  const task = arrayOfRecords(input.tasks).find((item) => stringOr(item.id, "") === taskId);
+  if (!task) {
+    return `Task ${taskId} was not found.`;
+  }
+  return `${stringOr(task.id, taskId)} ${stringOr(task.status, "<unknown>")}: ${stringOr(task.title, "")}`;
+}
+
+function mockEvidenceArgs(
+  plan: Record<string, unknown>,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const needsInfo = toRecord(plan.NeedsInfo);
+  const node = toRecord(input.node);
   return {
     need: stringOr(needsInfo.need, "missing_information"),
-    evidence: stringOr(needsInfo.acquired, "mock evidence"),
-    next_script: needsInfo.then ?? { Leaf: defaultLeafScript("mock acquired output") },
+    evidence: `evidence for ${stringOr(node.intent, "mock work")}`,
+    next_plan: needsInfo.then ?? "Execute",
   };
 }
 
-function mockDivisionArgs(script: Record<string, unknown>): Record<string, unknown> {
-  const divide = toRecord(script.Divide);
+function mockPlanGroupArgs(plan: Record<string, unknown>): Record<string, unknown> {
+  const group = toRecord(plan.Group);
   return {
-    children: Array.isArray(divide.children) ? divide.children : [],
+    mode: stringOr(group.mode, "parallel"),
+    items: Array.isArray(group.items) ? group.items : [],
   };
 }
 
-function mockWorkArgs(script: Record<string, unknown>): Record<string, unknown> {
-  const leaf = toRecord(script.Leaf);
+async function mockWorkArgs(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const node = toRecord(input.node);
+  const changedPaths = changedPathsFor(input);
+  await writeWorkspaceSurfaceFiles(input, changedPaths);
   return {
-    output: stringOr(leaf.output, "mock output"),
-    changed_paths: stringArray(leaf.changed_paths),
-    side_effects: stringArray(leaf.side_effects),
+    output: stringOr(node.intent, "mock output"),
   };
 }
 
-function mockCombinationArgs(
-  script: Record<string, unknown>,
+async function writeWorkspaceSurfaceFiles(
   input: Record<string, unknown>,
-): Record<string, unknown> {
-  const divide = toRecord(script.Divide);
-  const integration = toRecord(input.workspace_integration);
+  changedPaths: string[],
+): Promise<void> {
+  const surface = toRecord(input.workspace_surface);
+  const worktreePath = stringOr(surface.git_worktree_path, "");
+  if (worktreePath.length === 0) {
+    return;
+  }
+
+  for (const relativePath of changedPaths) {
+    const filePath = `${worktreePath}/${relativePath}`;
+    const parent = filePath.slice(0, filePath.lastIndexOf("/"));
+    if (parent.length > 0) {
+      await Bun.$`mkdir -p ${parent}`.quiet();
+    }
+    await Bun.write(filePath, `mock write for ${relativePath}\n`);
+  }
+}
+
+function mockCombinationArgs(input: Record<string, unknown>): Record<string, unknown> {
+  const node = toRecord(input.node);
   return {
-    output: stringOr(divide.combine_output, "mock combined output"),
-    resolved_conflicts: stringArray(integration.conflicts),
+    output: stringOr(node.intent, "mock combined output"),
   };
 }
 
-function mockVerdictArgs(
-  script: Record<string, unknown>,
-  input: Record<string, unknown>,
-): Record<string, unknown> {
-  const variants = [toRecord(script.Leaf), toRecord(script.Divide)];
-  const verdicts = variants.flatMap((variant) =>
-    Array.isArray(variant.verdicts) ? variant.verdicts : [],
-  );
+function mockVerdictArgs(input: Record<string, unknown>): Record<string, unknown> {
   const node = toRecord(input.node);
   const attempt = typeof node.verification_attempts === "number" ? node.verification_attempts : 0;
-  return verdictToArgs(verdicts[attempt] ?? "Accept");
+  return verdictToArgs(verdictFor(stringOr(node.intent, ""), attempt));
+}
+
+function changedPathsFor(input: Record<string, unknown>): string[] {
+  const node = toRecord(input.node);
+  const workspace = toRecord(node.workspace);
+  const intent = stringOr(node.intent, "");
+  if (intent.includes("read only must not write")) {
+    return ["development-log/report.md"];
+  }
+  return stringArray(workspace.write_scope).filter((path) => path !== "**/*");
+}
+
+function verdictFor(intent: string, attempt: number): unknown {
+  if (intent.includes("always bad")) {
+    return { Reject: { failure_class: "BadOutput", reason: "bad output" } };
+  }
+  if (intent.includes("retry once") && attempt === 0) {
+    return { Reject: { failure_class: "BadOutput", reason: "bad output" } };
+  }
+  if (intent.includes("needs post-verify info")) {
+    return {
+      Uncertain: {
+        missing_info: "missing citation",
+        reason: "needs source",
+      },
+    };
+  }
+  return "Accept";
 }
 
 function verdictToArgs(verdict: unknown): Record<string, unknown> {
@@ -277,15 +396,6 @@ function verdictToArgs(verdict: unknown): Record<string, unknown> {
   return { verdict: "accept", reason: "mock accepted" };
 }
 
-function defaultLeafScript(output: string): Record<string, unknown> {
-  return {
-    output,
-    changed_paths: [],
-    side_effects: [],
-    verdicts: ["Accept"],
-  };
-}
-
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -299,6 +409,15 @@ function stringOr(value: unknown, fallback: string): string {
 function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function arrayOfRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> =>
+          item !== null && typeof item === "object" && !Array.isArray(item),
+      )
     : [];
 }
 

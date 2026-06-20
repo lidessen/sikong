@@ -1,18 +1,15 @@
 mod acp;
 mod context;
-mod runtime;
+mod harness;
 mod session;
-mod store;
-mod task;
+mod tools;
 
 pub use acp::{
     AcpRequest, AcpResponse, AcpServer, AcpServerConfig, JsonRpcError, run_acp_stdio_server,
 };
 pub use context::{AssistantContext, AssistantContextTask};
-pub use runtime::{AssistantWorkerFactory, TaskRuntime, TaskRuntimeSnapshot};
+pub use harness::{AssistantHarness, AssistantTurnContextPacket};
 pub use session::{
-    AgentAssistantLoop, AssistantDecision, AssistantDecisionError, AssistantLoop, AssistantSession,
-    AssistantSessionConfig, SessionReply, SessionState,
+    AgentAssistantLoop, AssistantLoop, AssistantSession, AssistantSessionConfig, AssistantTurn,
+    AssistantTurnError, SessionReply, SessionState,
 };
-pub use store::{FileTaskStore, MemoryTaskStore, TaskStore};
-pub use task::{AssistantTask, AssistantTaskEvent, AssistantTaskStatus, TaskId};

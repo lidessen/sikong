@@ -1,45 +1,50 @@
-mod agent_worker;
+mod agent_run;
 mod assistant;
-mod cancel;
 mod config;
 mod engine;
-mod harness;
+mod engine_resources;
 mod node;
-mod tools;
+mod task_board;
+mod task_run;
 mod types;
 mod workspace;
 
-pub use agent_worker::{
-    AgentHarness, AgentHostClient, AgentOperationContext, AgentPromptSection, AgentRunKind,
-    AgentRunRecord, AgentRunRequest, AgentRunResult, AgentTerminalToolCall, AgentToolChoice,
-    AgentToolSpec, AgentWorker, AgentWorkerResult, NodeOperationOutput,
+pub use agent_run::{
+    AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRunScheduler, AgentToolCall,
+    AgentToolSpec, ProcessAgentRunScheduler, ProcessAgentRunSchedulerError,
 };
 pub use assistant::{
     AcpRequest, AcpResponse, AcpServer, AcpServerConfig, AgentAssistantLoop, AssistantContext,
-    AssistantContextTask, AssistantDecision, AssistantDecisionError, AssistantLoop,
-    AssistantSession, AssistantSessionConfig, AssistantTask, AssistantTaskEvent,
-    AssistantTaskStatus, AssistantWorkerFactory, FileTaskStore, JsonRpcError, MemoryTaskStore,
-    SessionReply, SessionState, TaskId, TaskRuntime, TaskRuntimeSnapshot, TaskStore,
-    run_acp_stdio_server,
+    AssistantContextTask, AssistantHarness, AssistantLoop, AssistantSession,
+    AssistantSessionConfig, AssistantTurn, AssistantTurnContextPacket, AssistantTurnError,
+    JsonRpcError, SessionReply, SessionState, run_acp_stdio_server,
 };
-pub use cancel::CancellationToken;
 pub use config::{AssistantConfig, DebugConfig, SikoConfig, default_config_path};
 pub use engine::Engine;
-pub use harness::{
-    AgentRunHarness, AssistantHarness, AssistantTurnContextPacket, EngineAgentArtifactPacket,
-    EngineAgentContextPacket, EngineAgentGitRequirementPacket, EngineAgentHarness,
-    EngineAgentNodePacket, EngineAgentWorkspaceIntegrationPacket,
-    EngineAgentWorkspaceRequirementPacket, OperationHarness,
+pub use node::{
+    Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroup, PlanGroupMode, ProblemNode,
 };
-pub use node::{Artifact, ArtifactKind, NodeScript, NodeTemplate, ProblemNode};
+pub use task_board::{
+    AssistantTask, AssistantTaskEvent, AssistantTaskEventRecord, AssistantTaskStatus,
+    FileTaskStore, MemoryTaskStore, TaskBoard, TaskBoardSnapshot, TaskEngineRunner,
+    TaskEngineRunnerFactory, TaskId, TaskStore, TaskWorkerFactory,
+};
+pub use task_run::{
+    AgentOperationContext, AgentRunDecodeError, AgentRunResult, EngineAgentArtifactPacket,
+    EngineAgentContextPacket, EngineAgentGitRequirementPacket, EngineAgentNodePacket,
+    EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, NodeOperationOutput,
+    OperationHarness,
+};
 pub use types::{
-    ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError, EngineReport, FailureClass,
-    NodeId, NodeOperation, NodeStatus, OperationEvent, ProblemKey, VerificationResult,
-    VerificationVerdict, WorkspaceDeltaId, WorkspaceInstanceId, WorkspaceSnapshotId,
+    AgentRunRecord, ArtifactId, AttemptRecord, Budget, CancellationToken, CapabilityProfile,
+    EngineError, EngineReport, FailureClass, NodeId, NodeOperation, NodeStatus, OperationEvent,
+    ProblemKey, VerificationVerdict, WorkspaceResourceId, WorkspaceSnapshotId,
 };
 pub use workspace::{
-    FileSystemWorkspace, GitFileSystemWorkspace, GitWorkspaceDelta, GitWorkspaceInstance,
-    GitWorkspaceIntegration, GitWorkspaceRequirement, GitWorkspaceSnapshot, MemoryWorkspace,
-    Workspace, WorkspaceDelta, WorkspaceError, WorkspaceInstance, WorkspaceIntegration,
-    WorkspaceProvider, WorkspaceRequirement, WorkspaceResult, WorkspaceSnapshot, Workspaces,
+    FileSystemWorkspace, GitBranchResource, GitCommitResource, GitFileSystemWorkspace,
+    GitWorkspaceChange, GitWorkspaceRequirement, GitWorkspaceSnapshot, GitWorkspaceSurface,
+    GitWorktreeResource, MemoryWorkspace, Workspace, WorkspaceChange, WorkspaceError,
+    WorkspaceProvider, WorkspaceRequirement, WorkspaceResource, WorkspaceResourceKind,
+    WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceResult,
+    WorkspaceSnapshot, WorkspaceSurface, Workspaces,
 };

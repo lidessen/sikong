@@ -1,5 +1,4 @@
-use super::store::TaskStore;
-use super::task::{AssistantTaskStatus, TaskId};
+use crate::{AssistantTaskStatus, TaskId, TaskStore};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantContext {

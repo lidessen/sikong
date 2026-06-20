@@ -1,3 +1,11 @@
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+
 use crate::workspace::WorkspaceError;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -5,14 +13,38 @@ use serde::{Deserialize, Serialize};
 pub type NodeId = u64;
 pub type ArtifactId = u64;
 pub type WorkspaceSnapshotId = u64;
-pub type WorkspaceInstanceId = u64;
-pub type WorkspaceDeltaId = u64;
+pub type WorkspaceResourceId = u64;
+
+#[derive(Debug, Clone, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    pub async fn cancelled(&self) {
+        while !self.is_cancelled() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodeOperation {
     Specify,
     Acquire,
-    Divide,
+    Plan,
     Execute,
     Combine,
     Verify,
@@ -53,7 +85,7 @@ pub enum NodeStatus {
     New,
     Specified,
     WaitingForInfo,
-    Divided,
+    Planned,
     Running,
     Combining,
     Verifying,
@@ -87,15 +119,18 @@ pub enum FailureClass {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VerificationResult {
-    pub verdict: VerificationVerdict,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperationEvent {
     pub node_id: NodeId,
     pub operation: NodeOperation,
     pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunRecord {
+    pub node_id: NodeId,
+    pub operation: NodeOperation,
+    pub report: String,
+    pub terminal_tool: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +146,7 @@ pub enum EngineError {
     MissingArtifact(ArtifactId),
     NoCandidate(NodeId),
     Cancelled,
+    AgentProtocol(String),
     Workspace(WorkspaceError),
 }
 
@@ -125,4 +161,6 @@ pub struct EngineReport {
     pub root: NodeId,
     pub status: NodeStatus,
     pub artifact: Option<ArtifactId>,
+    pub events: Vec<OperationEvent>,
+    pub agent_runs: Vec<AgentRunRecord>,
 }

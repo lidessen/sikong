@@ -2,31 +2,8 @@ import * as zod from "zod";
 
 const z = ((zod as unknown as { z?: typeof zod }).z ?? zod) as typeof zod;
 
-export const jsonValueSchema: zod.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.boolean(),
-    z.number(),
-    z.string(),
-    z.array(jsonValueSchema),
-    z.record(z.string(), jsonValueSchema.optional()),
-  ]),
-);
-
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue | undefined };
-
-export const agentToolChoiceSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("required") }).strict(),
-  z.object({ type: z.literal("tool"), name: z.string().min(1) }).strict(),
-]);
-
-export type AgentToolChoice = zod.infer<typeof agentToolChoiceSchema>;
+export const jsonValueSchema = z.json();
+export type JsonValue = zod.infer<typeof jsonValueSchema>;
 
 export const agentToolSpecSchema = z
   .object({
@@ -47,45 +24,37 @@ export const agentPromptSectionSchema = z
 
 export type AgentPromptSection = zod.infer<typeof agentPromptSectionSchema>;
 
-export const agentRunKindSchema = z.union([
-  z.literal("engine_operation"),
-  z.literal("assistant_turn"),
-]);
-
-export type AgentRunKind = zod.infer<typeof agentRunKindSchema>;
-
 export const agentRunRequestSchema = z
   .object({
     protocolVersion: z.literal(1),
-    kind: agentRunKindSchema,
     objective: z.string().min(1),
     prompt: z.array(agentPromptSectionSchema).min(1),
     input: jsonValueSchema,
     tools: z.array(agentToolSpecSchema),
     terminalToolSet: z.array(z.string().min(1)),
-    toolChoice: agentToolChoiceSchema,
   })
   .strict();
 
 export type AgentRunRequest = zod.infer<typeof agentRunRequestSchema>;
 
-export const agentTerminalToolCallSchema = z
+export const agentToolCallSchema = z
   .object({
     name: z.string().min(1),
     arguments: jsonValueSchema,
   })
   .strict();
 
-export type AgentTerminalToolCall = zod.infer<typeof agentTerminalToolCallSchema>;
+export type AgentToolCall = zod.infer<typeof agentToolCallSchema>;
 
-export const agentWorkerResultSchema = z
+export const agentRunResponseSchema = z
   .object({
     report: z.string(),
-    terminalCall: agentTerminalToolCallSchema.optional(),
+    toolCalls: z.array(agentToolCallSchema).optional(),
+    terminalCall: agentToolCallSchema.optional(),
   })
   .strict();
 
-export type AgentWorkerResult = zod.infer<typeof agentWorkerResultSchema>;
+export type AgentRunResponse = zod.infer<typeof agentRunResponseSchema>;
 
 export const runtimeClientMessageSchema = z.discriminatedUnion("type", [
   z
@@ -110,7 +79,7 @@ export const agentHostMessageSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("result"),
       id: z.string(),
-      result: agentWorkerResultSchema,
+      result: agentRunResponseSchema,
     })
     .strict(),
   z
@@ -132,6 +101,6 @@ export function parseRuntimeClientMessage(input: unknown): RuntimeClientMessage 
   return runtimeClientMessageSchema.parse(input);
 }
 
-export function parseAgentWorkerResult(input: unknown): AgentWorkerResult {
-  return agentWorkerResultSchema.parse(input);
+export function parseAgentRunResponse(input: unknown): AgentRunResponse {
+  return agentRunResponseSchema.parse(input);
 }

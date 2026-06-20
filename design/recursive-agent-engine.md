@@ -18,7 +18,7 @@ Resolve(node):
   specify the problem
   acquire missing information
   if the problem is atomic, execute it
-  otherwise divide it into child nodes and resolve each child
+  otherwise plan one local child group and resolve each item
   combine accepted child results
   verify the candidate result
   commit only verified results
@@ -47,7 +47,7 @@ Rust owns the control layer:
 
 - task, node, workspace-instance, and artifact state machines;
 - dynamic programming tables;
-- dependency and frontier scheduling;
+- stage/parallel group scheduling;
 - budgets, attempt ledgers, and retry ceilings;
 - scope leases and commit ordering;
 - deterministic verification gates;
@@ -101,13 +101,11 @@ wire request is:
 ```ts
 type AgentRunRequest = {
   protocolVersion: 1;
-  kind: "engine_operation" | "assistant_turn";
   objective: string;
   prompt: AgentPromptSection[];
   input: JsonValue;
   tools: AgentToolSpec[];
   terminalToolSet: string[];
-  toolChoice: { type: "required" } | { type: "tool"; name: string };
 };
 
 type AgentPromptSection = {
@@ -122,40 +120,39 @@ type AgentToolSpec = {
 };
 ```
 
-Rust harnesses are typed context holders. The shared generic wrapper owns the
-context for one agent-loop invocation. The context itself implements the run
-contract:
+Rust harnesses are typed context holders. Each harness owns the context for one
+agent-loop invocation and builds the exact run request for that context:
 
 ```rust
-struct Harness<C> {
-    context: C,
+struct OperationHarness {
+    context: AgentOperationContext,
 }
 
-trait AgentRunContext {
-    type Tool;
+struct AssistantHarness {
+    context: AssistantContext,
+}
 
-    fn kind(&self) -> AgentRunKind;
-    fn objective(&self) -> String;
-    fn prompt(&self) -> Vec<AgentPromptSection>;
-    fn input(&self) -> JsonValue;
-    fn tools(&self) -> Vec<Self::Tool>;
-    fn terminal_tools(&self) -> Vec<Self::Tool>;
+impl OperationHarness {
+    fn build_agent_run(&self) -> AgentRunRequest;
+}
+
+impl AssistantHarness {
+    fn build_agent_run(&self) -> AgentRunRequest;
 }
 ```
 
 The current harness families are:
 
-- `OperationHarness = Harness<AgentOperationContext>`: owns
-  `AgentOperationContext`, meaning the selected `NodeOperation`, problem node,
-  candidate artifact, child artifacts, and workspace integration evidence. It
-  produces `kind: "engine_operation"`.
-- `AssistantHarness = Harness<AssistantContext>`: owns
-  assistant/task context for one operator message, including current message,
-  active task, and task list. It produces `kind: "assistant_turn"`.
+- `OperationHarness`: owns `AgentOperationContext`, meaning the selected
+  `NodeOperation`, problem node, candidate artifact, child artifacts, and
+  workspace integration evidence. It builds an engine operation run.
+- `AssistantHarness`: owns assistant/task context for one operator message,
+  including current message, active task, and task list. It builds an assistant
+  turn run.
 
-`Harness<C>` performs the common `AgentRunRequest` assembly: `protocolVersion`,
-prompt, structured input, tool specs, terminal tool set, and tool choice. The
-context supplies the differences for that run family.
+Both harnesses assemble the same wire protocol shape: `protocolVersion`,
+prompt, structured input, tool specs, and terminal tool set. The difference is
+local to the concrete harness instead of hidden behind a generic wrapper.
 
 Tool definitions live outside harnesses:
 
@@ -190,9 +187,6 @@ Field meanings:
   name appears here. This is a set, not a single terminal. A future operation
   can expose separate success/failure terminal tools without changing the run
   protocol.
-- `toolChoice`: optional forcing/requirement for the loop's terminal choice.
-  Harnesses use `required` when any terminal tool from `terminalToolSet` is
-  acceptable.
 
 The transport JSONL message wraps the request with a connection-local id:
 
@@ -205,8 +199,12 @@ type RuntimeClientMessage =
 The response is:
 
 ```ts
-type AgentWorkerResult = {
+type AgentRunResponse = {
   report: string;
+  toolCalls?: Array<{
+    name: string;
+    arguments: JsonValue;
+  }>;
   terminalCall?: {
     name: string;
     arguments: JsonValue;
@@ -220,14 +218,15 @@ operation, Rust records a protocol violation and deterministic state transition
 code decides what happens next.
 
 The worker does not need to know whether the run is `Specify`, `Acquire`,
-`Divide`, `Execute`, `Combine`, `Verify`, or `Commit`; that protocol
+`Plan`, `Execute`, `Combine`, `Verify`, or `Commit`; that protocol
 distinction is made by the engine harness before and after the generic worker
-run. The harness injects operation-specific terminal tools, forces or requires
-`tool_choice`, and rejects runs that end without the required terminal tool.
-Rust still owns state transition, workspace isolation, side-effect gates, memo
-writes, and durable event recording. An agent can propose a child DAG,
-candidate artifact, verification verdict, or commit report through terminal tool
-arguments; it cannot directly mutate the main world.
+run. The harness injects operation-specific terminal tools, sets the terminal
+stop set, and rejects runs that end without an expected terminal tool. Rust
+still owns state transition, workspace isolation, side-effect gates,
+memo writes, and durable event recording. An agent can propose one local
+stage/parallel child group, candidate artifact, verification verdict, or commit
+report through terminal tool arguments; it cannot directly mutate the main
+world.
 
 The Rust prototype defines only the `AgentWorker` client boundary. Rust-side
 tests may use a test-only worker under `tests/`, but the real Bun mock belongs
@@ -254,7 +253,7 @@ and planning are policy packs or compositions, not node operations.
 enum NodeOperation {
     Specify,
     Acquire,
-    Divide,
+    Plan,
     Execute,
     Combine,
     Verify,
@@ -265,10 +264,10 @@ enum NodeOperation {
 Use the following naming layers:
 
 ```text
-NodeOperation = Specify / Acquire / Divide / Execute / Combine / Verify / Commit
+NodeOperation = Specify / Acquire / Plan / Execute / Combine / Verify / Commit
 NodePolicy    = fast_path / design / research / code_change / debug / release
 WorkspaceProvider = memory / file_system / git_file_system / temp_directory / browser / database
-RuntimeRole   = specifier / acquirer / divider / executor / combiner / verifier
+RuntimeRole   = specifier / acquirer / planner / executor / combiner / verifier
 ```
 
 This prevents the kernel from confusing "what operation is being applied to
@@ -314,12 +313,12 @@ Allowed sources include user input, file system reads, workspace memory, search,
 RAG, databases, APIs, and low-trust model inference. Asking the user is only
 `Acquire(User)`, where the node becomes pending until the user replies.
 
-`Acquire` cannot complete the task, change the DAG, or commit to the world. It
-only produces evidence.
+`Acquire` cannot complete the task, change the plan structure, or commit to the
+world. It only produces evidence.
 
-### Divide
+### Plan
 
-`Divide` is the divide step.
+`Plan` is the recursive decomposition step.
 
 Input:
 
@@ -330,11 +329,34 @@ Input:
 
 Output:
 
-- one or more child DAG candidates.
+- one local `PlanGroup`.
 
-Each child node receives its own spec, capability profile, budget, acceptance
-rules, and dependency edges. A failed parent can be divided differently on a
-later attempt, but that is still `Divide`, not a separate repair operation.
+```rust
+enum PlanGroupMode {
+    Stage,
+    Parallel,
+}
+
+struct PlanGroup {
+    mode: PlanGroupMode,
+    items: Vec<NodeTemplate>,
+}
+```
+
+The planner must first identify the main contradiction of the current problem:
+the dominant blocking tension that determines the next useful decomposition.
+The group mode follows from that analysis:
+
+- `stage`: use when the work contains qualitatively different phases that must
+  converge in order, such as understand -> change -> verify.
+- `parallel`: use when the work is one phase split across independent items,
+  such as inspecting several modules or producing several same-level design
+  options.
+
+Do not encode arbitrary dependency graphs inside one planning step. If an item
+needs more structure, give that item its own `NodePlan::Group` and let the same
+recursive mechanism plan it later. A failed parent can be planned differently
+on a later attempt, but that is still `Plan`, not a separate repair operation.
 
 ### Execute
 
@@ -363,7 +385,7 @@ Input:
 
 - parent `ProblemNode`;
 - accepted child artifacts;
-- dependency graph completion state.
+- child group completion state.
 
 Output:
 
@@ -393,14 +415,35 @@ Input:
 Output:
 
 ```ts
-type VerificationResult = {
-  verdict: "accept" | "reject" | "uncertain";
-  reasons: string[];
-  missingInfo?: InformationNeed[];
-  failureClass?: FailureClass;
-  retryHint?: string;
-};
+type VerificationVerdict =
+  | "accept"
+  | {
+      reject: {
+        failureClass: FailureClass;
+        reason: string;
+      };
+    }
+  | {
+      uncertain: {
+        missingInfo: string;
+        reason: string;
+      };
+    };
 ```
+
+Rust records verification attempts directly as operation attempts instead of
+wrapping the verdict in a second result type:
+
+```rust
+struct AttemptRecord {
+    node_id: NodeId,
+    operation: NodeOperation,
+    verdict: Option<VerificationVerdict>,
+}
+```
+
+Earlier design sketches used a separate verification wrapper with retry hints;
+that shape is intentionally not part of the current core state.
 
 Verification should prefer deterministic checks:
 
@@ -478,18 +521,19 @@ Every node operation run records:
 - token, time, and tool budgets used.
 
 Repeated failure classes force the engine to choose a different structural
-action: acquire more evidence, divide differently, prune, or fail.
+action: acquire more evidence, plan a different local group, prune, or fail.
 
 ### Frontier
 
-`frontier` contains nodes ready for work. A node becomes ready when:
+`frontier` contains nodes ready for work. A node becomes ready when its parent
+group allows it:
 
-- its dependencies are committed, or
-- it has no dependencies, or
-- a policy marks it as speculative and safe to run in parallel.
+- `stage` groups expose only the next unfinished item.
+- `parallel` groups expose all unfinished items in the group.
+- root nodes are ready when the task is admitted.
 
-The frontier scheduler can run workspace instances concurrently, but commit
-remains controlled by scope leases and dependency order.
+The frontier scheduler can run independent workspace instances concurrently,
+but commit remains controlled by scope leases and parent group convergence.
 
 ## Workspace Abstraction
 
@@ -500,7 +544,7 @@ ProblemNode       = semantic unit, answers what problem should be solved
 NodeOperation     = operation applied to a ProblemNode
 Workspace         = isolated environment where an operation may run
 WorkspaceInstance = one concrete forked workspace for one operation run
-WorkspaceDelta    = observed output/change from a workspace instance
+WorkspaceChange   = provider-captured filesystem/git change facts
 ```
 
 `Fork` is not a node and not a `NodeOperation`. It is a `WorkspaceProvider`
@@ -545,15 +589,15 @@ trait Workspace {
         instance: &WorkspaceInstance,
     ) -> Result<ExecutionContext>;
 
-    fn collect_delta(
+    fn collect_change(
         &self,
         instance: &WorkspaceInstance,
-    ) -> Result<WorkspaceDelta>;
+    ) -> Result<WorkspaceChange>;
 
     fn combine(
         &self,
         base: &WorkspaceSnapshot,
-        deltas: &[WorkspaceDelta],
+        changes: &[WorkspaceChange],
         policy: &CombinePolicy,
     ) -> Result<WorkspaceIntegration>;
 
@@ -618,7 +662,7 @@ struct GitWorkspaceInstance {
     base_sha: String,
 }
 
-struct GitWorkspaceDelta {
+struct GitWorkspaceChange {
     base_sha: String,
     head_sha: String,
     patch_ref: ArtifactRef,
@@ -635,7 +679,7 @@ git merge --no-ff <accepted-child-branch-2>
 ```
 
 If integration conflicts, the provider returns a conflict delta. The kernel can
-then divide a conflict-resolution node and solve it through the same recursive
+then plan a conflict-resolution node and solve it through the same recursive
 mechanism.
 
 `Commit` for Git is controlled by policy:
@@ -668,15 +712,35 @@ struct ProblemNode {
     workspace: WorkspaceRequirement,
     capabilities: CapabilityProfile,
     budget: Budget,
-    dependencies: Vec<NodeId>,
+    plan: NodePlan,
+    children: Vec<NodeId>,
     status: NodeStatus,
+}
+
+enum NodePlan {
+    Execute,
+    NeedsInfo {
+        need: String,
+        then: Box<NodePlan>,
+    },
+    Group(PlanGroup),
+}
+
+struct PlanGroup {
+    mode: PlanGroupMode,
+    items: Vec<NodeTemplate>,
+}
+
+enum PlanGroupMode {
+    Stage,
+    Parallel,
 }
 
 enum NodeStatus {
     New,
     Specified,
     WaitingForInfo,
-    Divided,
+    Planned,
     Running,
     Combining,
     Verifying,
@@ -700,10 +764,8 @@ struct NodeOperationRun {
 struct Artifact {
     id: ArtifactId,
     node_id: NodeId,
-    kind: ArtifactKind,
+    content_kind: ArtifactContentKind,
     payload_ref: ArtifactRef,
-    evidence: Vec<EvidenceRef>,
-    side_effects: Vec<SideEffect>,
 }
 
 struct WorkspaceSnapshot {
@@ -722,10 +784,9 @@ struct WorkspaceInstance {
     policy: WorkspacePolicy,
 }
 
-struct WorkspaceDelta {
-    id: DeltaId,
+struct WorkspaceChange {
+    id: WorkspaceChangeId,
     instance_id: WorkspaceInstanceId,
-    kind: DeltaKind,
     changed_paths: Vec<PathRef>,
     payload_ref: ArtifactRef,
     side_effects: Vec<SideEffect>,
@@ -734,29 +795,21 @@ struct WorkspaceDelta {
 struct WorkspaceIntegration {
     id: IntegrationId,
     base_snapshot: SnapshotId,
-    deltas: Vec<DeltaId>,
+    changes: Vec<WorkspaceChangeId>,
     payload_ref: ArtifactRef,
     conflicts: Vec<Conflict>,
 }
 
-enum ArtifactKind {
-    Spec,
-    Evidence,
-    ChildDag,
-    Work,
-    Combined,
-    Verification,
-    CommitPatch,
+enum ArtifactContentKind {
+    Text,
+    Json,
+    FileRef,
 }
 
 struct AttemptRecord {
     node_id: NodeId,
-    problem_key: ProblemKey,
-    attempt: u32,
-    operation_trace: Vec<NodeOperationEvent>,
-    artifact: Option<ArtifactId>,
-    verification: Option<VerificationResult>,
-    budget_used: BudgetUsage,
+    operation: NodeOperation,
+    verdict: Option<VerificationVerdict>,
 }
 ```
 
@@ -785,13 +838,13 @@ while task is not terminal:
     frontier.push(node)
     continue
 
-  if policy says node should divide:
-    child_dag = run_operation(Divide, node)
-    register child nodes and edges
+  if policy says node should plan a child group:
+    group = run_operation(Plan, node)
+    register child nodes under the local group
     continue
 
   if node has unresolved children:
-    enqueue ready children
+    enqueue children allowed by the group mode
     continue
 
   if node has accepted children and no candidate artifact:
@@ -823,7 +876,7 @@ while task is not terminal:
 
 ```text
 missing information     -> Acquire
-same failure repeated   -> Divide differently or prune
+same failure repeated   -> Plan differently or prune
 spec ambiguity          -> Specify again with failure evidence
 executor mismatch       -> Execute with a different capability profile
 unsafe side effect      -> prune workspace instance and record violation
@@ -834,12 +887,12 @@ human decision required -> Acquire(User)
 Every path consumes retry, time, and token budget. When budget is exhausted the
 node must become `Pruned`, `Rejected`, or `WaitingForInfo`. It cannot loop.
 
-## Divide And Conquer Semantics
+## Plan And Conquer Semantics
 
-`Divide` and `Combine` are symmetric:
+`Plan` and `Combine` are symmetric:
 
 ```text
-Divide(parent) -> Child DAG
+Plan(parent) -> one child group
 Resolve(child_1)
 Resolve(child_2)
 ...
@@ -848,8 +901,9 @@ Verify(parent candidate)
 Commit(parent result)
 ```
 
-Each child is solved with the same `Resolve` mechanism as the parent. This is
-what makes the model recursive rather than a fixed pipeline.
+Each child is solved with the same `Resolve` mechanism as the parent. A child
+can itself plan a `stage` or `parallel` group, which is what makes the model
+recursive rather than a fixed pipeline.
 
 The engine can support multiple decomposition attempts:
 
@@ -859,12 +913,12 @@ attempt 2: split by risk class
 attempt 3: split into information gathering + implementation + verification
 ```
 
-The attempt ledger decides when a decomposition strategy has failed repeatedly
+The attempt ledger decides when a local group strategy has failed repeatedly
 and should be replaced or pruned.
 
 ## Workspace, Fork, And Commit
 
-`Divide` is semantic. It creates child problems.
+`Plan` is semantic. It creates child problems.
 
 `Fork` is mechanical. It asks a `WorkspaceProvider` to create an isolated
 `WorkspaceInstance` for a ready node operation. It is not a `ProblemNode` and
@@ -874,10 +928,10 @@ only answers where and with what isolation the operation should run.
 `Commit` is controlled mutation. It merges only verified artifacts.
 
 ```text
-Divide  = decide what subproblems exist
+Plan    = decide what local child group exists
 Fork    = create a WorkspaceInstance for a node operation run
 Execute = run inside that WorkspaceInstance
-Collect = convert workspace changes into WorkspaceDelta and Artifact
+Collect = let the workspace provider capture WorkspaceChange; keep agent artifacts separate
 Commit  = merge accepted results into durable world state
 ```
 
@@ -885,8 +939,15 @@ Workspace instances may perform tool calls only through their capability
 profile. A read-only workspace instance must not receive write tools. Prompt
 instructions are not a security boundary.
 
-All side effects must be recorded in a side-effect ledger. Verification must
-reject artifacts whose side effects violate the node policy.
+`WorkspaceChange` is not an agent-submitted artifact content type. The agent
+submits artifacts; the workspace provider captures changed paths, commits,
+merge facts, and side-effect facts. Normal agent runs should not see these
+facts. Conflict resolution is the exception: when an integration surface has
+conflicts, the engine may expose the conflict paths needed to resolve them.
+
+All provider-captured side effects must be recorded in a side-effect ledger.
+Verification must reject workspace changes whose side effects violate the node
+policy.
 
 ## Policy Packs
 
@@ -905,7 +966,7 @@ Examples:
 Policy packs can define:
 
 - leaf detection rules;
-- default divide strategy;
+- default planning strategy;
 - allowed acquire sources;
 - capability profiles;
 - artifact schemas;
@@ -928,7 +989,7 @@ Verify  -> preserve meaning, no new facts
 Commit  -> task result
 ```
 
-No divide, no concurrent workspace instance, no complex review.
+No group planning, no concurrent workspace instance, no complex review.
 
 ### Pure Design Task
 
@@ -936,7 +997,7 @@ Request: "Design an agent workflow state machine."
 
 ```text
 Specify -> design node with acceptance rules
-Divide  -> state machine, data model, failure handling, UI projection
+Plan    -> parallel group: state machine, data model, failure handling, UI projection
 Resolve each child
 Combine -> full design document
 Verify  -> coverage, consistency, no contradictory states
@@ -948,7 +1009,7 @@ If failure handling is incomplete:
 ```text
 Verify rejects child
 Specify child with failure evidence
-Divide child into retry policy + budget policy + prune policy
+Plan child as parallel group: retry policy + budget policy + prune policy
 Resolve children
 Combine and verify again
 ```
@@ -961,7 +1022,7 @@ Request: "Plan a trip."
 Specify -> extract dates, budget, preferences
 Acquire(User) -> ask for missing origin city
 Acquire(Search/Tool) -> transport and lodging evidence
-Divide -> route, lodging, transport, constraints
+Plan -> parallel group: route, lodging, transport, constraints
 Resolve children
 Combine -> itinerary candidate
 Verify -> date coverage, budget, travel feasibility
@@ -977,7 +1038,8 @@ Request: "Fix the work detail page."
 ```text
 Specify -> UI/code-change node with scoped acceptance
 Acquire(FileSystem) -> existing components and projection shape
-Divide -> data projection, stage/round layout, drawer detail, focused verification
+Plan -> stage group: understand current projection, update UI model, verify interaction
+Resolve each stage; stages may plan parallel items internally
 Execute child workspace instances -> patch artifacts
 Verify children -> diff scope, no unrelated edits, focused checks
 Combine -> patch set
@@ -1035,7 +1097,7 @@ over this kernel:
 
 - task request becomes a root `ProblemNode`;
 - accepted `PlanDef` stages are coarse child nodes;
-- `StageRoundDef` is a divide candidate for one active stage;
+- `StageRoundDef` is a plan group candidate for one active stage;
 - `StageWorkUnitDef` is a child node;
 - worker run result is a `WorkArtifact`;
 - stage review is a `Verify` run over accumulated stage artifacts;
@@ -1048,7 +1110,7 @@ does not need those terms as primitive concepts.
 ## Non-Goals
 
 - Do not add a `Repair` operation. Repair is `Verify` failure evidence flowing
-  back into `Specify`, `Acquire`, `Divide`, or `Execute`.
+  back into `Specify`, `Acquire`, `Plan`, or `Execute`.
 - Do not add task-type operations such as `Research`, `CodeChange`, or `Debug`.
   These are policy packs.
 - Do not let Bun runners mutate durable state directly.

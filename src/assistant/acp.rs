@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 
 use super::session::{AssistantLoop, AssistantSession};
-use super::store::TaskStore;
+use crate::TaskStore;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AcpRequest {

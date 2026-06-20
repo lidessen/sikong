@@ -10,46 +10,91 @@ use std::{
 use siko::*;
 
 mod support;
-use support::TestAgentWorker;
+use support::TestAgentRunScheduler;
 
 #[derive(Debug, Default)]
 struct TestAssistantLoop;
 
 #[async_trait::async_trait]
 impl AssistantLoop for TestAssistantLoop {
-    async fn decide(
+    async fn run_turn(
         &mut self,
         context: &AssistantContext,
-    ) -> Result<AssistantDecision, AssistantDecisionError> {
+    ) -> Result<AssistantTurn, AssistantTurnError> {
         let text = context.current_message.trim();
         if text.eq_ignore_ascii_case("list") || text.eq_ignore_ascii_case("tasks") {
-            return Ok(AssistantDecision::ListTasks);
+            return Ok(assistant_turn(
+                vec![tool_call("list_tasks", serde_json::json!({}))],
+                "Listing tasks.",
+                vec![],
+            ));
         }
         if text.eq_ignore_ascii_case("cancel") {
-            return Ok(AssistantDecision::CancelActiveTask);
+            return Ok(assistant_turn(
+                vec![tool_call("cancel_task", serde_json::json!({}))],
+                "Cancelling active task.",
+                vec![],
+            ));
         }
         if let Some(rest) = text.strip_prefix("status ") {
-            return Ok(AssistantDecision::InspectTask {
-                task_id: rest.trim().to_string(),
-            });
+            let task_id = rest.trim().to_string();
+            return Ok(assistant_turn(
+                vec![tool_call(
+                    "inspect_task",
+                    serde_json::json!({ "task_id": task_id }),
+                )],
+                "Inspecting task.",
+                vec![rest.trim().to_string()],
+            ));
         }
-        Ok(AssistantDecision::CreateTask {
-            request: text.to_string(),
-        })
+        Ok(assistant_turn(
+            vec![tool_call(
+                "create_task",
+                serde_json::json!({ "request": text }),
+            )],
+            "Creating task.",
+            vec![],
+        ))
+    }
+}
+
+fn assistant_turn(
+    mut calls: Vec<AgentToolCall>,
+    response: &str,
+    task_ids: Vec<String>,
+) -> AssistantTurn {
+    calls.push(tool_call(
+        "finish_assistant_turn",
+        serde_json::json!({
+            "response": response,
+            "task_ids": task_ids,
+        }),
+    ));
+    AssistantTurn {
+        tool_calls: calls,
+        response: response.to_string(),
+        task_ids,
+    }
+}
+
+fn tool_call(name: &str, arguments: serde_json::Value) -> AgentToolCall {
+    AgentToolCall {
+        name: name.to_string(),
+        arguments,
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assistant_prompt_creates_task_and_runtime_completes_it() {
     let mut store = MemoryTaskStore::new();
-    let mut session = AssistantSession::new(TestAssistantLoop, TestAgentWorker);
+    let mut session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
 
     let reply = session
         .handle_message(&mut store, "write a concise design")
         .await;
 
     let task_id = reply.task_id.expect("task id");
-    assert!(reply.text.contains("running") || reply.text.contains("queued"));
+    assert!(reply.text.contains("Creating task."));
     session
         .wait_for_all(&mut store, Duration::from_secs(1))
         .await;
@@ -67,7 +112,7 @@ async fn assistant_runtime_completes_task_through_agent_host() {
     let mut store = MemoryTaskStore::new();
     let mut session = AssistantSession::with_worker_factory(
         TestAssistantLoop,
-        || AgentHostClient::new("bun", ["packages/agent-host/src/runtime-host.ts"]),
+        || ProcessAgentRunScheduler::new("bun", ["packages/agent-host/src/runtime-host.ts"]),
         AssistantSessionConfig::default(),
     );
 
@@ -89,14 +134,55 @@ async fn assistant_runtime_completes_task_through_agent_host() {
             .iter()
             .any(|event| event.message == "engine run completed")
     );
+    assert!(task.events.iter().any(|event| event.kind == "agent.run"));
+    assert!(task.events.iter().all(|event| event.seq > 0));
+    assert!(task.events.iter().all(|event| event.timestamp_ms > 0));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn assistant_decision_repair_is_agent_driven() {
+async fn assistant_agent_host_loop_handles_create_status_list_and_reply() {
+    if skip_without_bun("assistant_agent_host_loop_handles_create_status_list_and_reply") {
+        return;
+    }
+
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::with_worker_factory(
+        AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
+            "bun",
+            ["packages/agent-host/src/runtime-host.ts"],
+        )),
+        || ProcessAgentRunScheduler::new("bun", ["packages/agent-host/src/runtime-host.ts"]),
+        AssistantSessionConfig::default(),
+    );
+
+    let created = session.handle_message(&mut store, "host loop task").await;
+    let task_id = created.task_id.expect("created task id");
+    session
+        .wait_for_all(&mut store, Duration::from_secs(3))
+        .await;
+
+    let inspected = session
+        .handle_message(&mut store, format!("status {task_id}"))
+        .await;
+    assert_eq!(inspected.task_id.as_deref(), Some(task_id.as_str()));
+    assert!(inspected.text.contains("Completed"));
+
+    let listed = session.handle_message(&mut store, "list").await;
+    assert!(listed.text.contains(&task_id));
+    assert!(listed.text.contains("Completed"));
+
+    let reply = session.handle_message(&mut store, "   ").await;
+    assert!(reply.text.contains("Please provide a task request."));
+    assert!(reply.task_id.is_none());
+    assert_eq!(store.list_tasks().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_tool_sequence_repair_is_agent_driven() {
     let worker = RepairingAssistantWorker::default();
     let requests = worker.requests.clone();
     let mut store = MemoryTaskStore::new();
-    let mut session = AssistantSession::new(AgentAssistantLoop::new(worker), TestAgentWorker);
+    let mut session = AssistantSession::new(AgentAssistantLoop::new(worker), TestAgentRunScheduler);
 
     let reply = session.handle_message(&mut store, "original request").await;
 
@@ -106,12 +192,12 @@ async fn assistant_decision_repair_is_agent_driven() {
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[1].prompt.iter().any(|section| {
-        section.title == "Decision Repair"
+        section.title == "Tool Repair"
             && section
                 .content
-                .contains("invalid assistant decision arguments")
+                .contains("invalid finish_assistant_turn arguments")
     }));
-    assert!(requests[1].input.get("assistant_decision_error").is_some());
+    assert!(requests[1].input.get("assistant_tool_error").is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -122,7 +208,7 @@ async fn assistant_accepts_new_prompt_while_another_task_is_running() {
         TestAssistantLoop,
         {
             let state = state.clone();
-            move || SlowAgentWorker {
+            move || SlowAgentRunScheduler {
                 state: state.clone(),
             }
         },
@@ -151,6 +237,41 @@ async fn assistant_accepts_new_prompt_while_another_task_is_running() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_board_uses_injected_engine_runner() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let factory = TaskEngineRunnerFactory::new({
+        let calls = calls.clone();
+        move || {
+            Box::new(RecordingTaskEngineRunner {
+                calls: calls.clone(),
+            })
+        }
+    });
+    let mut task_board = TaskBoard::with_engine_runner(1, factory);
+    let mut store = MemoryTaskStore::new();
+    let task_id = store.create_task("injected runtime task".to_string());
+
+    task_board
+        .enqueue(
+            &mut store,
+            task_id.clone(),
+            "injected runtime task".to_string(),
+        )
+        .await;
+    task_board
+        .wait_for_all(&mut store, Duration::from_secs(1))
+        .await;
+
+    let task = store.get_task(&task_id).expect("task");
+    assert_eq!(task.status, AssistantTaskStatus::Completed);
+    assert_eq!(task.root_node, Some(42));
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        &[(task_id, "injected runtime task".to_string())]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assistant_cancel_marks_active_task_cancelled() {
     let state = Arc::new(ConcurrentWorkerState::default());
     let mut store = MemoryTaskStore::new();
@@ -158,7 +279,7 @@ async fn assistant_cancel_marks_active_task_cancelled() {
         TestAssistantLoop,
         {
             let state = state.clone();
-            move || SlowAgentWorker {
+            move || SlowAgentRunScheduler {
                 state: state.clone(),
             }
         },
@@ -190,7 +311,7 @@ async fn file_task_store_persists_task_status_and_report() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store_path = temp_dir.path().join("tasks.json");
     let mut store = FileTaskStore::open(&store_path).unwrap();
-    let mut session = AssistantSession::new(TestAssistantLoop, TestAgentWorker);
+    let mut session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
 
     let reply = session
         .handle_message(&mut store, "persist this assistant task")
@@ -210,12 +331,23 @@ async fn file_task_store_persists_task_status_and_report() {
             .iter()
             .any(|event| event.message == "engine run completed")
     );
+    assert!(
+        task.events
+            .iter()
+            .any(|event| event.kind == "engine.operation")
+    );
+    assert!(task.events.iter().any(|event| event.kind == "agent.run"));
+    assert!(
+        task.events
+            .iter()
+            .any(|event| event.node_id.is_some() && event.operation.is_some())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acp_initialize_session_and_prompt_returns_started_task() {
     let store = MemoryTaskStore::new();
-    let session = AssistantSession::new(TestAssistantLoop, TestAgentWorker);
+    let session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
     let mut server = AcpServer::new(store, session);
 
     let init = server
@@ -249,7 +381,7 @@ async fn acp_initialize_session_and_prompt_returns_started_task() {
         prompt.result.as_ref().unwrap()["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("Task")
+            .contains("Creating task.")
     );
     assert!(prompt.result.as_ref().unwrap()["metadata"]["taskId"].is_string());
 }
@@ -262,7 +394,7 @@ async fn acp_stdio_server_processes_jsonl_requests() {
     ]
     .join("\n");
     let store = MemoryTaskStore::new();
-    let session = AssistantSession::new(TestAssistantLoop, TestAgentWorker);
+    let session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
     let server = AcpServer::new(store, session);
     let mut output = Vec::new();
 
@@ -283,18 +415,47 @@ struct ConcurrentWorkerState {
     cancelled_seen: AtomicUsize,
 }
 
+struct RecordingTaskEngineRunner {
+    calls: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+#[async_trait::async_trait]
+impl TaskEngineRunner for RecordingTaskEngineRunner {
+    async fn run_task(
+        &mut self,
+        task_id: &str,
+        request: &str,
+        _cancellation: CancellationToken,
+    ) -> Result<(NodeId, EngineReport), EngineError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((task_id.to_string(), request.to_string()));
+        Ok((
+            42,
+            EngineReport {
+                root: 42,
+                status: NodeStatus::Committed,
+                artifact: None,
+                events: Vec::new(),
+                agent_runs: Vec::new(),
+            },
+        ))
+    }
+}
+
 #[derive(Clone)]
-struct SlowAgentWorker {
+struct SlowAgentRunScheduler {
     state: Arc<ConcurrentWorkerState>,
 }
 
 #[async_trait::async_trait]
-impl AgentWorker for SlowAgentWorker {
+impl AgentRunScheduler for SlowAgentRunScheduler {
     async fn run(
         &mut self,
         input: AgentRunRequest,
         cancellation: CancellationToken,
-    ) -> AgentWorkerResult {
+    ) -> AgentRunResponse {
         let current = self.state.current.fetch_add(1, Ordering::SeqCst) + 1;
         self.state.max_seen.fetch_max(current, Ordering::SeqCst);
         let cancelled = tokio::select! {
@@ -305,7 +466,7 @@ impl AgentWorker for SlowAgentWorker {
             self.state.cancelled_seen.fetch_add(1, Ordering::SeqCst);
         }
         self.state.current.fetch_sub(1, Ordering::SeqCst);
-        TestAgentWorker.run(input, cancellation).await
+        TestAgentRunScheduler.run(input, cancellation).await
     }
 }
 
@@ -316,34 +477,45 @@ struct RepairingAssistantWorker {
 }
 
 #[async_trait::async_trait]
-impl AgentWorker for RepairingAssistantWorker {
+impl AgentRunScheduler for RepairingAssistantWorker {
     async fn run(
         &mut self,
         input: AgentRunRequest,
         _cancellation: CancellationToken,
-    ) -> AgentWorkerResult {
+    ) -> AgentRunResponse {
         self.requests.lock().unwrap().push(input);
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
-            return AgentWorkerResult {
-                report: "invalid assistant decision".to_string(),
-                terminal_call: Some(AgentTerminalToolCall {
-                    name: "submit_assistant_decision".to_string(),
+            return AgentRunResponse {
+                report: "invalid assistant tool sequence".to_string(),
+                tool_calls: vec![AgentToolCall {
+                    name: "finish_assistant_turn".to_string(),
+                    arguments: serde_json::json!({}),
+                }],
+                terminal_call: Some(AgentToolCall {
+                    name: "finish_assistant_turn".to_string(),
                     arguments: serde_json::json!({}),
                 }),
             };
         }
 
-        AgentWorkerResult {
-            report: "repaired assistant decision".to_string(),
-            terminal_call: Some(AgentTerminalToolCall {
-                name: "submit_assistant_decision".to_string(),
-                arguments: serde_json::json!({
-                    "decision": "create_task",
-                    "request": "agent repaired request",
-                    "response": "Creating repaired task."
-                }),
+        let create = AgentToolCall {
+            name: "create_task".to_string(),
+            arguments: serde_json::json!({
+                "request": "agent repaired request",
             }),
+        };
+        let finish = AgentToolCall {
+            name: "finish_assistant_turn".to_string(),
+            arguments: serde_json::json!({
+                "response": "Creating repaired task.",
+                "task_ids": [],
+            }),
+        };
+        AgentRunResponse {
+            report: "repaired assistant tool sequence".to_string(),
+            tool_calls: vec![create, finish.clone()],
+            terminal_call: Some(finish),
         }
     }
 }

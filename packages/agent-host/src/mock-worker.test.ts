@@ -1,17 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createDynamicTools, runMockAgentWorker, ToolLoopAgent } from "./mock-worker";
 import type { AgentRunRequest } from "./protocol";
 
 const baseRequest: AgentRunRequest = {
   protocolVersion: 1,
-  kind: "engine_operation",
   objective: "Execute node 1",
   prompt: [
     { title: "Operation", content: "Solve the node." },
     { title: "Completion", content: "Call submit_work." },
   ],
   input: { kind: "engine_operation", operation: "Execute" },
-  toolChoice: { type: "tool", name: "submit_work" },
   tools: [
     {
       name: "read_operation_context",
@@ -35,33 +36,62 @@ describe("mock engine worker", () => {
       name: "submit_work",
       arguments: {
         output: "mock output",
-        changed_paths: [],
-        side_effects: [],
       },
     });
     expect(result.report).toContain("terminal tool submit_work called");
   });
 
-  test("required tool choice selects the first terminal tool", async () => {
+  test("selects the first terminal tool", async () => {
     const result = await runMockAgentWorker({
       ...baseRequest,
-      toolChoice: { type: "required" },
     });
 
     expect(result.terminalCall?.name).toBe("submit_work");
   });
 
-  test("non-terminal tool calls do not end the worker run", async () => {
+  test("engine runs read context before the terminal tool", async () => {
     const result = await runMockAgentWorker({
       ...baseRequest,
-      toolChoice: { type: "tool", name: "read_operation_context" },
     });
 
-    expect(result.terminalCall).toBeUndefined();
+    expect(result.report).toContain("tool calls read_operation_context -> submit_work");
+    expect(result.terminalCall?.name).toBe("submit_work");
+  });
+
+  test("work runs write changed paths into a provided workspace surface", async () => {
+    const worktree = await mkdtemp(join(tmpdir(), "siko-agent-host-worktree-"));
+    try {
+      const result = await runMockAgentWorker({
+        ...baseRequest,
+        input: {
+          kind: "engine_operation",
+          operation: "Execute",
+          node: {
+            intent: "write files",
+            workspace: {
+              write_scope: ["src/generated.txt"],
+            },
+          },
+          workspace_surface: {
+            git_worktree_path: worktree,
+            conflicts: [],
+          },
+        },
+      });
+
+      expect(result.terminalCall?.arguments).toMatchObject({
+        output: "write files",
+      });
+      await expect(readFile(join(worktree, "src/generated.txt"), "utf8")).resolves.toBe(
+        "mock write for src/generated.txt\n",
+      );
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
   });
 
   test("loop stop condition is driven by the terminal tool set", async () => {
-    const { tools } = createDynamicTools(baseRequest.tools);
+    const tools = createDynamicTools(baseRequest.tools);
     const agent = new ToolLoopAgent({
       tools,
       terminalToolSet: baseRequest.terminalToolSet,
@@ -79,10 +109,9 @@ describe("mock engine worker", () => {
     expect(result.terminalCall?.name).toBe("submit_work");
   });
 
-  test("assistant decision payload is produced by the agent loop mock", async () => {
+  test("assistant tool sequence is produced by the agent loop mock", async () => {
     const result = await runMockAgentWorker({
       ...baseRequest,
-      kind: "assistant_turn",
       objective: "Assistant turn",
       input: {
         kind: "assistant_turn",
@@ -90,7 +119,6 @@ describe("mock engine worker", () => {
         active_task: null,
         tasks: [],
       },
-      toolChoice: { type: "required" },
       tools: [
         {
           name: "read_assistant_context",
@@ -98,22 +126,33 @@ describe("mock engine worker", () => {
           inputSchema: emptySchema(),
         },
         {
-          name: "submit_assistant_decision",
-          description: "Submit assistant decision.",
+          name: "create_task",
+          description: "Create task.",
+          inputSchema: emptySchema(),
+        },
+        {
+          name: "finish_assistant_turn",
+          description: "Finish assistant turn.",
           inputSchema: emptySchema(),
         },
       ],
-      terminalToolSet: ["submit_assistant_decision"],
+      terminalToolSet: ["finish_assistant_turn"],
     });
 
     expect(result.terminalCall).toEqual({
-      name: "submit_assistant_decision",
+      name: "finish_assistant_turn",
       arguments: {
-        decision: "create_task",
-        request: "analyze this repo",
         response: "Creating task.",
+        task_ids: [],
       },
     });
+    expect(result.toolCalls?.map((call) => call.name)).toEqual([
+      "read_assistant_context",
+      "create_task",
+      "finish_assistant_turn",
+    ]);
+    expect(result.toolCalls?.[1]?.arguments).toEqual({ request: "analyze this repo" });
+    expect(result.report).toContain("tool calls read_assistant_context -> create_task");
   });
 });
 

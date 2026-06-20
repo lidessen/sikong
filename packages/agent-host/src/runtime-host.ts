@@ -3,11 +3,11 @@ import {
   parseRuntimeClientMessage,
   type AgentHostMessage,
   type AgentRunRequest,
-  type AgentWorkerResult,
+  type AgentRunResponse,
   type RuntimeClientMessage,
 } from "./protocol";
 
-export type RuntimeWorker = (request: AgentRunRequest) => Promise<AgentWorkerResult>;
+export type RuntimeWorker = (request: AgentRunRequest) => Promise<AgentRunResponse>;
 
 export interface RuntimeHostOptions {
   worker?: RuntimeWorker;

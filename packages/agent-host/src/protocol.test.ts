@@ -3,14 +3,12 @@ import { parseAgentRunRequest, parseRuntimeClientMessage, type AgentRunRequest }
 
 const validRequest: AgentRunRequest = {
   protocolVersion: 1,
-  kind: "engine_operation",
   objective: "Execute node 1",
   prompt: [
     { title: "Operation", content: "Solve the node." },
     { title: "Completion", content: "Call submit_work." },
   ],
   input: { kind: "engine_operation", operation: "Execute" },
-  toolChoice: { type: "tool", name: "submit_work" },
   tools: [
     {
       name: "submit_work",
@@ -30,11 +28,11 @@ describe("agent-host protocol schemas", () => {
     expect(parseAgentRunRequest(validRequest)).toEqual(validRequest);
   });
 
-  test("reject malformed tool choices", () => {
+  test("reject legacy tool choice field", () => {
     expect(() =>
       parseAgentRunRequest({
         ...validRequest,
-        toolChoice: { type: "tool" },
+        toolChoice: { type: "required" },
       }),
     ).toThrow();
   });

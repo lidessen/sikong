@@ -3,22 +3,21 @@ use std::collections::HashMap;
 use async_recursion::async_recursion;
 
 use crate::CancellationToken;
-use crate::agent_worker::{
-    AgentHarness, AgentOperationContext, AgentRunRecord, AgentRunResult, AgentWorker,
-    NodeOperationOutput,
+use crate::agent_run::AgentRunScheduler;
+use crate::engine_resources::WorkspaceResourceRegistry;
+use crate::node::{Artifact, ArtifactContentKind, NodePlan, NodeTemplate, ProblemNode};
+use crate::task_run::{
+    AgentOperationContext, AgentRunResult, NodeOperationOutput, OperationHarness,
 };
-use crate::harness::EngineAgentHarness;
-use crate::node::{Artifact, ArtifactKind, NodeScript, NodeTemplate, ProblemNode};
 use crate::types::{
-    ArtifactId, AttemptRecord, EngineError, EngineReport, FailureClass, NodeId, NodeOperation,
-    NodeStatus, OperationEvent, ProblemKey, VerificationVerdict,
+    AgentRunRecord, ArtifactId, AttemptRecord, EngineError, EngineReport, FailureClass, NodeId,
+    NodeOperation, NodeStatus, OperationEvent, ProblemKey, VerificationVerdict,
 };
-use crate::workspace::{Workspace, WorkspaceDelta};
+use crate::workspace::{Workspace, WorkspaceChange, WorkspaceResourceRef, WorkspaceSurface};
 
-pub struct Engine<W: Workspace, A: AgentWorker, H: AgentHarness = EngineAgentHarness> {
+pub struct Engine<W: Workspace, A: AgentRunScheduler> {
     workspace: W,
-    agent_worker: A,
-    agent_harness: H,
+    agent: A,
     next_node_id: NodeId,
     next_artifact_id: ArtifactId,
     nodes: HashMap<NodeId, ProblemNode>,
@@ -27,29 +26,18 @@ pub struct Engine<W: Workspace, A: AgentWorker, H: AgentHarness = EngineAgentHar
     attempts: HashMap<ProblemKey, Vec<AttemptRecord>>,
     events: Vec<OperationEvent>,
     agent_runs: Vec<AgentRunRecord>,
+    workspace_resources: WorkspaceResourceRegistry,
 }
 
-impl<W, A> Engine<W, A, EngineAgentHarness>
+impl<W, A> Engine<W, A>
 where
     W: Workspace + Send,
-    A: AgentWorker + Send,
+    A: AgentRunScheduler + Send,
 {
-    pub fn new(workspace: W, agent_worker: A) -> Self {
-        Self::with_agent(workspace, agent_worker, EngineAgentHarness)
-    }
-}
-
-impl<W, A, H> Engine<W, A, H>
-where
-    W: Workspace + Send,
-    A: AgentWorker + Send,
-    H: AgentHarness + Send,
-{
-    pub fn with_agent(workspace: W, agent_worker: A, agent_harness: H) -> Self {
+    pub fn new(workspace: W, agent: A) -> Self {
         Self {
             workspace,
-            agent_worker,
-            agent_harness,
+            agent,
             next_node_id: 0,
             next_artifact_id: 0,
             nodes: HashMap::new(),
@@ -58,6 +46,7 @@ where
             attempts: HashMap::new(),
             events: Vec::new(),
             agent_runs: Vec::new(),
+            workspace_resources: WorkspaceResourceRegistry::default(),
         }
     }
 
@@ -74,12 +63,18 @@ where
         root: NodeId,
         cancellation: CancellationToken,
     ) -> Result<EngineReport, EngineError> {
-        let artifact = self.resolve(root, &cancellation).await?;
+        let result = self.resolve(root, &cancellation).await;
+        self.workspace_resources.release_all_refs();
+        let cleanup_result = self.cleanup_releasable_resources();
+        let artifact = result?;
+        cleanup_result?;
         let status = self.node(root)?.status;
         Ok(EngineReport {
             root,
             status,
             artifact,
+            events: self.events.clone(),
+            agent_runs: self.agent_runs.clone(),
         })
     }
 
@@ -133,8 +128,8 @@ where
             return self.resolve(node_id, cancellation).await;
         }
 
-        if self.should_divide(node_id)? {
-            self.divide(node_id, cancellation).await?;
+        if self.should_plan(node_id)? {
+            self.plan_group(node_id, cancellation).await?;
             let child_ids = self.node(node_id)?.children.clone();
             for child_id in child_ids {
                 self.resolve(child_id, cancellation).await?;
@@ -165,7 +160,7 @@ where
         node_id: NodeId,
         cancellation: &CancellationToken,
     ) -> Result<bool, EngineError> {
-        if !matches!(self.node(node_id)?.script, NodeScript::NeedsInfo { .. }) {
+        if !matches!(self.node(node_id)?.plan, NodePlan::NeedsInfo { .. }) {
             return Ok(false);
         }
 
@@ -175,15 +170,20 @@ where
         if let NodeOperationOutput::Acquired {
             need,
             evidence,
-            next_script,
+            next_plan,
         } = result.output
         {
-            let artifact_id =
-                self.push_artifact(node_id, ArtifactKind::Evidence, evidence, None, Vec::new());
+            let artifact_id = self.push_artifact(
+                node_id,
+                ArtifactContentKind::Text,
+                evidence,
+                None,
+                Vec::new(),
+            );
             self.node_mut(node_id)?
                 .acquired
                 .push(format!("{need}={artifact_id}"));
-            self.node_mut(node_id)?.script = next_script;
+            self.node_mut(node_id)?.plan = next_plan;
             self.node_mut(node_id)?.status = NodeStatus::Specified;
             return Ok(true);
         }
@@ -191,30 +191,29 @@ where
         Ok(false)
     }
 
-    fn should_divide(&self, node_id: NodeId) -> Result<bool, EngineError> {
-        Ok(
-            matches!(self.node(node_id)?.script, NodeScript::Divide { .. })
-                && self.node(node_id)?.children.is_empty(),
-        )
+    fn should_plan(&self, node_id: NodeId) -> Result<bool, EngineError> {
+        Ok(matches!(self.node(node_id)?.plan, NodePlan::Group(_))
+            && self.node(node_id)?.children.is_empty())
     }
 
-    async fn divide(
+    async fn plan_group(
         &mut self,
         node_id: NodeId,
         cancellation: &CancellationToken,
     ) -> Result<(), EngineError> {
         let result = self
-            .run_agent(node_id, NodeOperation::Divide, cancellation)
+            .run_agent(node_id, NodeOperation::Plan, cancellation)
             .await?;
-        let NodeOperationOutput::Divided { children } = result.output else {
+        let NodeOperationOutput::Planned { group } = result.output else {
             return Ok(());
         };
-        let child_ids: Vec<_> = children
+        let child_ids: Vec<_> = group
+            .items
             .into_iter()
             .map(|template| self.insert_node(Some(node_id), template))
             .collect();
         self.node_mut(node_id)?.children = child_ids;
-        self.node_mut(node_id)?.status = NodeStatus::Divided;
+        self.node_mut(node_id)?.status = NodeStatus::Planned;
         Ok(())
     }
 
@@ -223,27 +222,42 @@ where
         node_id: NodeId,
         cancellation: &CancellationToken,
     ) -> Result<(), EngineError> {
+        let workspace = self.node(node_id)?.workspace.clone();
+        let snapshot = self.workspace.snapshot(&workspace)?;
+        let surface = self
+            .workspace
+            .open_surface(&snapshot, vec![WorkspaceResourceRef::RunningNode(node_id)])?;
+        self.workspace_resources
+            .track_all(surface.resources.clone());
+
         let result = self
-            .run_agent(node_id, NodeOperation::Execute, cancellation)
+            .run_agent_with_surface(
+                node_id,
+                NodeOperation::Execute,
+                surface.clone(),
+                cancellation,
+            )
             .await?;
-        let NodeOperationOutput::Executed {
-            output,
-            changed_paths,
-            side_effects,
-        } = result.output
-        else {
+        let NodeOperationOutput::Executed { output } = result.output else {
             return Ok(());
         };
 
-        let workspace = self.node(node_id)?.workspace.clone();
-        let snapshot = self.workspace.snapshot(&workspace)?;
-        let instance = self.workspace.fork(&snapshot)?;
-        let delta = self
-            .workspace
-            .collect_delta(&instance, changed_paths, side_effects)?;
+        let change = self.workspace.capture_changes(&surface, Vec::new())?;
+        self.workspace_resources.track_all(change.resources.clone());
 
-        let artifact_id =
-            self.push_artifact(node_id, ArtifactKind::Work, output, Some(delta), Vec::new());
+        let artifact_id = self.push_artifact(
+            node_id,
+            ArtifactContentKind::Text,
+            output,
+            Some(change.clone()),
+            Vec::new(),
+        );
+        self.retain_change_resources(
+            &change,
+            WorkspaceResourceRef::CandidateArtifact(artifact_id),
+        );
+        self.release_surface_resources(&surface, WorkspaceResourceRef::RunningNode(node_id));
+        self.cleanup_releasable_resources()?;
         let node = self.node_mut(node_id)?;
         node.execution_attempts += 1;
         node.candidate = Some(artifact_id);
@@ -259,22 +273,31 @@ where
         let child_ids = self.node(node_id)?.children.clone();
 
         let mut child_artifacts = Vec::new();
-        let mut child_deltas = Vec::new();
+        let mut child_changes = Vec::new();
         for child_id in child_ids {
             if let Some(artifact_id) = self.node(child_id)?.accepted_artifact {
                 child_artifacts.push(artifact_id);
-                if let Some(delta) = self.artifact(artifact_id)?.workspace_delta.clone() {
-                    child_deltas.push(delta);
+                if let Some(change) = self.artifact(artifact_id)?.workspace_change.clone() {
+                    child_changes.push(change);
                 }
             }
         }
 
-        let integration = self.workspace.combine(&child_deltas)?;
+        let child_ref = WorkspaceResourceRef::ChildInputForCombine(node_id);
+        for change in &child_changes {
+            self.retain_change_resources(change, child_ref.clone());
+        }
+        let merge_ref = WorkspaceResourceRef::MergeSurface(node_id);
+        let merge_surface = self
+            .workspace
+            .merge_changes(&child_changes, vec![merge_ref.clone()])?;
+        self.workspace_resources
+            .track_all(merge_surface.resources.clone());
         let result = self
-            .run_agent_with_integration(
+            .run_agent_with_surface(
                 node_id,
                 NodeOperation::Combine,
-                integration.clone(),
+                merge_surface.clone(),
                 cancellation,
             )
             .await?;
@@ -282,21 +305,24 @@ where
             return Ok(());
         };
 
-        let synthetic_delta = WorkspaceDelta {
-            id: 0,
-            instance_id: 0,
-            provider: self.node(node_id)?.workspace.provider,
-            changed_paths: integration.changed_paths,
-            side_effects: Vec::new(),
-            git: None,
-        };
+        let change = self.workspace.capture_changes(&merge_surface, Vec::new())?;
+        self.workspace_resources.track_all(change.resources.clone());
         let artifact_id = self.push_artifact(
             node_id,
-            ArtifactKind::Combined,
+            ArtifactContentKind::Text,
             output,
-            Some(synthetic_delta),
+            Some(change.clone()),
             child_artifacts,
         );
+        self.retain_change_resources(
+            &change,
+            WorkspaceResourceRef::CandidateArtifact(artifact_id),
+        );
+        self.release_surface_resources(&merge_surface, merge_ref);
+        for child_change in &child_changes {
+            self.release_change_resources(child_change, &child_ref);
+        }
+        self.cleanup_releasable_resources()?;
         self.node_mut(node_id)?.candidate = Some(artifact_id);
         self.node_mut(node_id)?.status = NodeStatus::Verifying;
         Ok(())
@@ -354,30 +380,30 @@ where
             return Ok(VerificationVerdict::Accept);
         };
 
-        if let Some(delta) = &self.artifact(artifact_id)?.workspace_delta {
+        if let Some(change) = &self.artifact(artifact_id)?.workspace_change {
             let node = self.node(node_id)?;
             if !node.capabilities.allow_write
-                && (!delta.changed_paths.is_empty() || !delta.side_effects.is_empty())
+                && (!change.changed_paths.is_empty() || !change.side_effects.is_empty())
             {
                 return Ok(VerificationVerdict::Reject {
                     failure_class: FailureClass::UnsafeSideEffect,
-                    reason: "read-only node produced workspace delta".to_string(),
+                    reason: "read-only node produced workspace change".to_string(),
                 });
             }
 
-            if delta
+            if change
                 .side_effects
                 .iter()
                 .any(|effect| effect.starts_with("conflict:"))
             {
                 return Ok(VerificationVerdict::Reject {
                     failure_class: FailureClass::MergeConflict,
-                    reason: "workspace integration conflict".to_string(),
+                    reason: "workspace merge surface conflict".to_string(),
                 });
             }
 
             if node.capabilities.allow_write {
-                let out_of_scope = delta
+                let out_of_scope = change
                     .changed_paths
                     .iter()
                     .any(|path| !path_allowed(path, &node.workspace.write_scope));
@@ -462,10 +488,9 @@ where
                 workspace: template.workspace,
                 capabilities: template.capabilities,
                 budget: template.budget,
-                dependencies: Vec::new(),
                 children: Vec::new(),
                 status: NodeStatus::New,
-                script: template.script,
+                plan: template.plan,
                 acquired: Vec::new(),
                 candidate: None,
                 accepted_artifact: None,
@@ -479,9 +504,9 @@ where
     fn push_artifact(
         &mut self,
         node_id: NodeId,
-        kind: ArtifactKind,
+        content_kind: ArtifactContentKind,
         text: String,
-        workspace_delta: Option<WorkspaceDelta>,
+        workspace_change: Option<WorkspaceChange>,
         children: Vec<ArtifactId>,
     ) -> ArtifactId {
         self.next_artifact_id += 1;
@@ -491,9 +516,9 @@ where
             Artifact {
                 id,
                 node_id,
-                kind,
+                content_kind,
                 text,
-                workspace_delta,
+                workspace_change,
                 children,
             },
         );
@@ -518,14 +543,14 @@ where
         self.run_agent_with_context(context, cancellation).await
     }
 
-    async fn run_agent_with_integration(
+    async fn run_agent_with_surface(
         &mut self,
         node_id: NodeId,
         operation: NodeOperation,
-        integration: crate::workspace::WorkspaceIntegration,
+        workspace_surface: WorkspaceSurface,
         cancellation: &CancellationToken,
     ) -> Result<AgentRunResult, EngineError> {
-        let context = self.agent_context(node_id, operation, Some(integration))?;
+        let context = self.agent_context(node_id, operation, Some(workspace_surface))?;
         self.run_agent_with_context(context, cancellation).await
     }
 
@@ -537,10 +562,23 @@ where
         check_cancelled(cancellation)?;
         let node_id = context.node.id;
         let operation = context.operation;
-        let input = self.agent_harness.build_run(context.clone());
-        let worker_result = self.agent_worker.run(input, cancellation.clone()).await;
+        let harness = OperationHarness::new(context.clone());
+        let input = harness.build_agent_run();
+        let worker_result = self.agent.run(input, cancellation.clone()).await;
         check_cancelled(cancellation)?;
-        let result = self.agent_harness.decode_result(&context, worker_result);
+        let result = match harness.decode_result(worker_result) {
+            Ok(result) => result,
+            Err(error) => {
+                self.agent_runs.push(AgentRunRecord {
+                    node_id,
+                    operation,
+                    report: error.message.clone(),
+                    terminal_tool: error.terminal_tool.clone(),
+                });
+                self.record(node_id, operation, error.message.clone());
+                return Err(EngineError::AgentProtocol(error.message));
+            }
+        };
         self.agent_runs.push(AgentRunRecord {
             node_id,
             operation,
@@ -555,7 +593,7 @@ where
         &self,
         node_id: NodeId,
         operation: NodeOperation,
-        workspace_integration: Option<crate::workspace::WorkspaceIntegration>,
+        workspace_surface: Option<WorkspaceSurface>,
     ) -> Result<AgentOperationContext, EngineError> {
         let node = self.node(node_id)?.clone();
         let candidate = node
@@ -575,7 +613,7 @@ where
             operation,
             candidate,
             child_artifacts,
-            workspace_integration,
+            workspace_surface,
         })
     }
 
@@ -591,6 +629,53 @@ where
             operation,
             verdict,
         });
+        Ok(())
+    }
+
+    fn retain_change_resources(
+        &mut self,
+        change: &WorkspaceChange,
+        resource_ref: WorkspaceResourceRef,
+    ) {
+        for id in &change.resource_ids {
+            self.workspace_resources.retain(*id, resource_ref.clone());
+        }
+    }
+
+    fn release_change_resources(
+        &mut self,
+        change: &WorkspaceChange,
+        resource_ref: &WorkspaceResourceRef,
+    ) {
+        for id in &change.resource_ids {
+            self.workspace_resources.release(*id, resource_ref);
+        }
+    }
+
+    fn release_surface_resources(
+        &mut self,
+        surface: &WorkspaceSurface,
+        resource_ref: WorkspaceResourceRef,
+    ) {
+        for resource in &surface.resources {
+            self.workspace_resources.release(resource.id, &resource_ref);
+        }
+    }
+
+    fn cleanup_releasable_resources(&mut self) -> Result<(), EngineError> {
+        let ids = self.workspace_resources.releasable_ids();
+        for id in ids {
+            let Some(resource) = self.workspace_resources.resource(id).cloned() else {
+                continue;
+            };
+            match self.workspace.cleanup(&resource) {
+                Ok(()) => self.workspace_resources.mark_released(id),
+                Err(error) => {
+                    self.workspace_resources.mark_failed_cleanup(id);
+                    return Err(EngineError::Workspace(error));
+                }
+            }
+        }
         Ok(())
     }
 

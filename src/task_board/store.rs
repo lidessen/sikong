@@ -4,15 +4,31 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::task::{AssistantTask, AssistantTaskEvent, TaskId};
+use super::{AssistantTask, AssistantTaskEventRecord, AssistantTaskStatus, TaskId};
 use crate::{EngineReport, NodeId};
+use serde_json::Value;
+use tracing::Level;
 
 pub trait TaskStore {
     fn create_task(&mut self, request: String) -> TaskId;
     fn get_task(&self, id: &str) -> Option<&AssistantTask>;
     fn list_tasks(&self) -> Vec<AssistantTask>;
-    fn set_task_status(&mut self, id: &str, status: super::task::AssistantTaskStatus);
-    fn push_task_event(&mut self, id: &str, message: impl Into<String>);
+    fn set_task_status(&mut self, id: &str, status: AssistantTaskStatus);
+    fn record_task_event(&mut self, id: &str, record: AssistantTaskEventRecord);
+    fn push_task_event(&mut self, id: &str, message: impl Into<String>) {
+        self.record_task_event(
+            id,
+            AssistantTaskEventRecord {
+                level: Level::INFO,
+                kind: "task.event".to_string(),
+                source: "assistant".to_string(),
+                message: message.into(),
+                node_id: None,
+                operation: None,
+                payload: Value::Null,
+            },
+        );
+    }
     fn apply_task_report(&mut self, id: &str, root: NodeId, report: EngineReport);
 }
 
@@ -43,17 +59,15 @@ impl TaskStore for MemoryTaskStore {
         self.tasks.values().cloned().collect()
     }
 
-    fn set_task_status(&mut self, id: &str, status: super::task::AssistantTaskStatus) {
+    fn set_task_status(&mut self, id: &str, status: AssistantTaskStatus) {
         if let Some(task) = self.tasks.get_mut(id) {
             task.status = status;
         }
     }
 
-    fn push_task_event(&mut self, id: &str, message: impl Into<String>) {
+    fn record_task_event(&mut self, id: &str, record: AssistantTaskEventRecord) {
         if let Some(task) = self.tasks.get_mut(id) {
-            task.events.push(AssistantTaskEvent {
-                message: message.into(),
-            });
+            task.record_event(record);
         }
     }
 
@@ -134,18 +148,16 @@ impl TaskStore for FileTaskStore {
         self.tasks.values().cloned().collect()
     }
 
-    fn set_task_status(&mut self, id: &str, status: super::task::AssistantTaskStatus) {
+    fn set_task_status(&mut self, id: &str, status: AssistantTaskStatus) {
         if let Some(task) = self.tasks.get_mut(id) {
             task.status = status;
             self.persist();
         }
     }
 
-    fn push_task_event(&mut self, id: &str, message: impl Into<String>) {
+    fn record_task_event(&mut self, id: &str, record: AssistantTaskEventRecord) {
         if let Some(task) = self.tasks.get_mut(id) {
-            task.events.push(AssistantTaskEvent {
-                message: message.into(),
-            });
+            task.record_event(record);
             self.persist();
         }
     }

@@ -1,11 +1,12 @@
 mod file_system;
+mod git_cli;
 mod git_file_system;
 mod memory;
 mod workspaces;
 
 use std::path::PathBuf;
 
-use crate::types::{WorkspaceDeltaId, WorkspaceInstanceId, WorkspaceSnapshotId};
+use crate::types::{ArtifactId, NodeId, WorkspaceResourceId, WorkspaceSnapshotId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -83,13 +84,6 @@ impl WorkspaceRequirement {
             }),
         }
     }
-
-    pub fn with_git_fetch_remote(mut self, remote: impl Into<String>) -> Self {
-        if let Some(git) = &mut self.git {
-            git.fetch_remote = Some(remote.into());
-        }
-        self
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,54 +103,110 @@ pub struct GitWorkspaceSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceInstance {
-    pub id: WorkspaceInstanceId,
+pub struct WorkspaceResource {
+    pub id: WorkspaceResourceId,
+    pub provider: WorkspaceProvider,
+    pub kind: WorkspaceResourceKind,
+    pub state: WorkspaceResourceState,
+    pub refs: Vec<WorkspaceResourceRef>,
+    pub metadata: WorkspaceResourceMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceResourceKind {
+    Memory,
+    Directory,
+    GitWorktree,
+    GitBranch,
+    GitCommit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceResourceState {
+    Active,
+    Released,
+    FailedCleanup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceResourceRef {
+    RunningNode(NodeId),
+    CandidateArtifact(ArtifactId),
+    ChildInputForCombine(NodeId),
+    MergeSurface(NodeId),
+    DebugRetain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceResourceMetadata {
+    None,
+    GitWorktree(GitWorktreeResource),
+    GitBranch(GitBranchResource),
+    GitCommit(GitCommitResource),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitWorktreeResource {
+    pub repo_root: PathBuf,
+    pub worktree_path: PathBuf,
+    pub branch_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitBranchResource {
+    pub repo_root: PathBuf,
+    pub worktree_root: PathBuf,
+    pub base_sha: String,
+    pub branch_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitCommitResource {
+    pub repo_root: PathBuf,
+    pub branch_name: String,
+    pub commit_sha: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSurface {
     pub snapshot_id: WorkspaceSnapshotId,
     pub provider: WorkspaceProvider,
-    pub git: Option<GitWorkspaceInstance>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitWorkspaceInstance {
-    pub repo_root: PathBuf,
-    pub worktree_root: PathBuf,
-    pub base_sha: String,
-    pub worktree_path: PathBuf,
-    pub branch_name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceDelta {
-    pub id: WorkspaceDeltaId,
-    pub instance_id: WorkspaceInstanceId,
-    pub provider: WorkspaceProvider,
-    pub changed_paths: Vec<String>,
-    pub side_effects: Vec<String>,
-    pub git: Option<GitWorkspaceDelta>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitWorkspaceDelta {
-    pub repo_root: PathBuf,
-    pub worktree_root: PathBuf,
-    pub base_sha: String,
-    pub branch_name: String,
-    pub worktree_path: PathBuf,
-    pub commit_sha: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceIntegration {
-    pub deltas: Vec<WorkspaceDeltaId>,
+    pub resources: Vec<WorkspaceResource>,
     pub changed_paths: Vec<String>,
     pub conflicts: Vec<String>,
-    pub git: Option<GitWorkspaceIntegration>,
+    pub git: Option<GitWorkspaceSurface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitWorkspaceIntegration {
+pub struct GitWorkspaceSurface {
+    pub repo_root: PathBuf,
+    pub worktree_root: PathBuf,
+    pub base_sha: String,
     pub worktree_path: PathBuf,
     pub branch_name: String,
+    pub worktree_resource_id: WorkspaceResourceId,
+    pub branch_resource_id: WorkspaceResourceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceChange {
+    pub provider: WorkspaceProvider,
+    pub resources: Vec<WorkspaceResource>,
+    pub resource_ids: Vec<WorkspaceResourceId>,
+    pub changed_paths: Vec<String>,
+    pub side_effects: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub git: Option<GitWorkspaceChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitWorkspaceChange {
+    pub repo_root: PathBuf,
+    pub worktree_root: PathBuf,
+    pub base_sha: String,
+    pub branch_name: String,
+    pub worktree_path: Option<PathBuf>,
+    pub commit_sha: Option<String>,
 }
 
 pub type WorkspaceResult<T> = Result<T, WorkspaceError>;
@@ -184,21 +234,28 @@ pub trait Workspace {
         &mut self,
         requirement: &WorkspaceRequirement,
     ) -> WorkspaceResult<WorkspaceSnapshot>;
-    fn fork(&mut self, snapshot: &WorkspaceSnapshot) -> WorkspaceResult<WorkspaceInstance>;
-    fn collect_delta(
+    fn open_surface(
         &mut self,
-        instance: &WorkspaceInstance,
-        changed_paths: Vec<String>,
+        snapshot: &WorkspaceSnapshot,
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceResult<WorkspaceSurface>;
+    fn capture_changes(
+        &mut self,
+        surface: &WorkspaceSurface,
         side_effects: Vec<String>,
-    ) -> WorkspaceResult<WorkspaceDelta>;
-    fn combine(&self, deltas: &[WorkspaceDelta]) -> WorkspaceResult<WorkspaceIntegration>;
+    ) -> WorkspaceResult<WorkspaceChange>;
+    fn merge_changes(
+        &mut self,
+        changes: &[WorkspaceChange],
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceResult<WorkspaceSurface>;
+    fn cleanup(&mut self, resource: &WorkspaceResource) -> WorkspaceResult<()>;
 }
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct WorkspaceIds {
     next_snapshot_id: WorkspaceSnapshotId,
-    next_instance_id: WorkspaceInstanceId,
-    next_delta_id: WorkspaceDeltaId,
+    next_resource_id: WorkspaceResourceId,
 }
 
 impl WorkspaceIds {
@@ -207,13 +264,8 @@ impl WorkspaceIds {
         self.next_snapshot_id
     }
 
-    pub(super) fn next_instance_id(&mut self) -> WorkspaceInstanceId {
-        self.next_instance_id += 1;
-        self.next_instance_id
-    }
-
-    pub(super) fn next_delta_id(&mut self) -> WorkspaceDeltaId {
-        self.next_delta_id += 1;
-        self.next_delta_id
+    pub(super) fn next_resource_id(&mut self) -> WorkspaceResourceId {
+        self.next_resource_id += 1;
+        self.next_resource_id
     }
 }
