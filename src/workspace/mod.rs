@@ -400,3 +400,149 @@ fn segment_chars_match(pattern: &[char], segment: &[char], pi: usize, si: usize)
     }
     segment_chars_match(pattern, segment, pi + 1, si + 1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn workspace_requirement_memory_constructor() {
+        let req = WorkspaceRequirement::memory();
+        assert_eq!(req.provider, WorkspaceProvider::Memory);
+        assert!(req.read_scope.is_empty());
+        assert!(req.write_scope.is_empty());
+        assert!(req.git.is_none());
+    }
+
+    #[test]
+    fn workspace_requirement_read_only_files_constructor() {
+        let req = WorkspaceRequirement::read_only_files();
+        assert_eq!(req.provider, WorkspaceProvider::FileSystem);
+        assert_eq!(req.read_scope, vec!["**/*"]);
+        assert!(req.write_scope.is_empty());
+        assert!(req.git.is_none());
+    }
+
+    #[test]
+    fn workspace_requirement_git_constructor_with_single_path() {
+        let req = WorkspaceRequirement::git(["src/main.rs"]);
+        assert_eq!(req.provider, WorkspaceProvider::GitFileSystem);
+        assert_eq!(req.read_scope, vec!["**/*"]);
+        assert_eq!(req.write_scope, vec!["src/main.rs"]);
+        assert!(req.git.is_none());
+    }
+
+    #[test]
+    fn workspace_requirement_git_constructor_with_multiple_paths() {
+        let req = WorkspaceRequirement::git(["src/**/*.rs", "design/**/*.md"]);
+        assert_eq!(req.provider, WorkspaceProvider::GitFileSystem);
+        assert_eq!(req.read_scope, vec!["**/*"]);
+        assert_eq!(req.write_scope.len(), 2);
+        assert!(req.write_scope.contains(&"src/**/*.rs".to_string()));
+        assert!(req.write_scope.contains(&"design/**/*.md".to_string()));
+        assert!(req.git.is_none());
+    }
+
+    #[test]
+    fn workspace_requirement_git_constructor_empty_write_scope() {
+        let req = WorkspaceRequirement::git(Vec::<String>::new());
+        assert_eq!(req.provider, WorkspaceProvider::GitFileSystem);
+        assert_eq!(req.read_scope, vec!["**/*"]);
+        assert!(req.write_scope.is_empty());
+        assert!(req.git.is_none());
+    }
+
+    #[test]
+    fn workspace_requirement_git_repo_constructor() {
+        let req = WorkspaceRequirement::git_repo("/repo", "/worktrees", "main", ["src/*"]);
+        assert_eq!(req.provider, WorkspaceProvider::GitFileSystem);
+        assert_eq!(req.read_scope, vec!["**/*"]);
+        assert_eq!(req.write_scope, vec!["src/*"]);
+        let git = req.git.expect("git requirement");
+        assert_eq!(git.repo_root, PathBuf::from("/repo"));
+        assert_eq!(git.worktree_root, PathBuf::from("/worktrees"));
+        assert_eq!(git.base_ref, "main");
+        assert!(git.fetch_remote.is_none());
+    }
+
+    #[test]
+    fn workspace_requirement_git_repo_constructor_with_fetch_remote() {
+        let mut req = WorkspaceRequirement::git_repo("/repo", "/worktrees", "main", Vec::<String>::new());
+        req.git.as_mut().unwrap().fetch_remote = Some("origin".to_string());
+        let git = req.git.expect("git requirement");
+        assert_eq!(git.fetch_remote.as_deref(), Some("origin"));
+    }
+
+    #[test]
+    fn workspace_ids_produce_unique_ids() {
+        let mut ids = WorkspaceIds::default();
+        let a = ids.next_snapshot_id();
+        let b = ids.next_snapshot_id();
+        assert!(b > a);
+        let c = ids.next_resource_id();
+        let d = ids.next_resource_id();
+        assert!(d > c);
+    }
+
+    #[test]
+    fn workspace_ids_separate_counters_for_snapshots_and_resources() {
+        let mut ids = WorkspaceIds::default();
+        assert_eq!(ids.next_snapshot_id(), 1);
+        assert_eq!(ids.next_snapshot_id(), 2);
+        assert_eq!(ids.next_resource_id(), 1);
+        assert_eq!(ids.next_resource_id(), 2);
+        assert_eq!(ids.next_snapshot_id(), 3);
+        assert_eq!(ids.next_resource_id(), 3);
+    }
+
+    #[test]
+    fn workspace_ids_cloned_instance_shares_state() {
+        let ids_a = WorkspaceIds::default();
+        let mut ids_b = ids_a.clone();
+        assert_eq!(ids_b.next_snapshot_id(), 1);
+        assert_eq!(ids_b.next_snapshot_id(), 2);
+        // The original should see the same state because they share an Arc<Mutex<>>
+        let mut ids_a = ids_a;
+        assert_eq!(ids_a.next_snapshot_id(), 3);
+    }
+
+    #[test]
+    fn workspace_provider_serde_roundtrip() {
+        let cases = [
+            WorkspaceProvider::Memory,
+            WorkspaceProvider::FileSystem,
+            WorkspaceProvider::GitFileSystem,
+        ];
+        for provider in cases {
+            let json = serde_json::to_string(&provider).unwrap();
+            let back: WorkspaceProvider = serde_json::from_str(&json).unwrap();
+            assert_eq!(provider, back);
+        }
+    }
+
+    #[test]
+    fn workspace_requirement_serde_roundtrip() {
+        let req = WorkspaceRequirement::git(["src/**/*.rs"]);
+        let json = serde_json::to_string(&req).unwrap();
+        let back: WorkspaceRequirement = serde_json::from_str(&json).unwrap();
+        assert_eq!(req.provider, back.provider);
+        assert_eq!(req.read_scope, back.read_scope);
+        assert_eq!(req.write_scope, back.write_scope);
+        assert_eq!(req.git, back.git);
+    }
+
+    #[test]
+    fn workspace_resource_ref_variants() {
+        // Verify all variants can be constructed and debug-printed
+        let variants = vec![
+            WorkspaceResourceRef::RunningNode(1),
+            WorkspaceResourceRef::CandidateArtifact(42),
+            WorkspaceResourceRef::ChildInputForCombine(7),
+            WorkspaceResourceRef::MergeSurface(3),
+            WorkspaceResourceRef::DebugRetain,
+        ];
+        assert_eq!(variants.len(), 5);
+        assert!(format!("{:?}", variants).contains("RunningNode(1)"));
+    }
+}
