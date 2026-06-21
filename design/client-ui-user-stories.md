@@ -1,5 +1,10 @@
 # Client UI User Stories
 
+> **Status:** ✗ Superseded  
+> **Replacement:** None — the UI interaction model is being reworked in the Rust mainline.  
+> **Reason:** This document describes the Go/Bun-era client UI user stories and interaction model, which are being replaced as part of the Rust mainline migration.  
+> **Last reviewed:** 2026-06-22  
+
 This document defines the operator-facing interaction model for the Sikong
 client UI. The operator is not a worker supervisor and should not need to watch
 internal agent plumbing. The UI should expose goals, plans, progress, decisions,

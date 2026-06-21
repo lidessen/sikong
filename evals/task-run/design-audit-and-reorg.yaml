@@ -1,0 +1,76 @@
+id: design-audit-and-reorg
+task: |
+  Audit and reorganize the design/ directory of this Sikong project.
+
+  Background:
+  - The project has migrated from a Go/Bun architecture to a Rust mainline.
+  - Several design docs still describe the old Go/Bun architecture and are misleading.
+  - Some critical areas have no design doc at all.
+  - The design registry at design/README.md tracks document statuses.
+
+  Your job:
+
+  1. Read every document in design/*.md. For each, assess:
+     - Is its content about the current Rust mainline, or the old Go/Bun architecture?
+     - Is it accurate compared to the actual code in src/ and packages/?
+     - Is it complete, or missing important aspects?
+     - What would need to change to make it current?
+
+  2. Identify gaps: areas of the codebase with no design coverage.
+     Key code areas to check:
+     - src/task_run/ (engine.rs, harness.rs, tools.rs, types.rs, node.rs, resources.rs)
+     - src/agent_run/ (run.rs, run_scheduler.rs)
+     - src/task_board/ (board.rs, store.rs)
+     - src/assistant/ (session.rs, context.rs, pack.rs, tools.rs, acp.rs)
+     - src/workspace/ (memory.rs, file_system.rs, git_file_system.rs, mod.rs)
+     - packages/agent-host/src/ (runtime-host.ts, agent-loop-worker.ts, protocol.ts, mock-worker.ts)
+     - packages/agent-loop/src/
+     - src/cli.rs (the CLI commands)
+     - evals/task-run/*.yaml (eval scenarios and framework)
+
+  3. Based on your analysis:
+     a. For any document that describes old Go/Bun architecture:
+        - Add a clear header note: "SUPERSEDED — This document describes the legacy Go/Bun architecture. For the current Rust mainline, see [replacement]."
+        - Update its status in design/README.md to ✗ Superseded
+     b. For documents that are mostly correct but need updates:
+        - Make the necessary updates to align with current code
+        - Update their status and last-reviewed date
+     c. For missing topics that are critical:
+        - Create new design documents. The most important missing ones are:
+          - eval-framework.md: How eval scenarios work (YAML format, judge protocol, transcript, route-only)
+          - cli-architecture.md: Current Rust CLI command tree, config loading, agent host resolution
+        - Add them to design/README.md with appropriate status
+     d. Update design/README.md to reflect all changes.
+
+  4. Do NOT modify any source code (src/, packages/). Only touch design/ files.
+
+  5. After all changes, run `cargo build 2>&1 | tail -5` to ensure nothing is broken
+     (the build should pass since you're only changing .md files).
+
+  6. If cargo build fails, investigate and fix.
+
+  Important notes:
+  - design/client-agent.md, design/client-ui-user-stories.md, design/console-ui-generation.md
+    are already marked ✗ Superseded. Leave them as-is.
+  - design/development-philosophy.md, design/governance-model.md, design/prompt-guidance.md,
+    design/dogfood.md, design/recursive-agent-engine.md, design/workspace-management.md
+    are current ✓ documents. Verify they're still accurate but don't change them unless
+    you find significant inaccuracies.
+  - design/project-shape.md, design/coordination-engine.md, design/implementation-plan.md,
+    design/command-surface.md, design/cli.md, design/daemon-runtime.md are the ones that
+    likely describe old architecture and need to be superseded.
+  - design/assistant-agent-loop.md is about the current Rust assistant — verify accuracy.
+
+  Write clear, useful design documents. A good design doc explains the what and why,
+  not just the how. Include architecture diagrams in text form where helpful.
+expectation: |
+  The engine should produce a thorough audit and reorganization of the design directory.
+  Passing requires: all outdated docs updated or superseded, at least 2 new documents
+  created for missing topics, the registry updated, and cargo build passing at the end.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - design/
+  allow_write: true

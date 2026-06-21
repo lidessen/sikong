@@ -1,5 +1,10 @@
 # Implementation Plan
 
+> **Status:** ✗ Superseded  
+> **Replacement:** [`recursive-agent-engine.md`](recursive-agent-engine.md) and [`dogfood.md`](dogfood.md) for the current Rust mainline development sequence.  
+> **Reason:** This document describes the Go/Bun/TypeScript implementation sequence. The Rust mainline has diverged from many of these phases, following its own recursive engine development path.  
+> **Last reviewed:** 2026-06-22  
+
 ## Purpose
 
 This document records the current implementation sequence for the Sikong

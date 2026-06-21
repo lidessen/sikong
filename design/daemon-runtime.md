@@ -1,5 +1,10 @@
 # Daemon And Runtime Processes
 
+> **Status:** ✗ Superseded  
+> **Replacement:** None — the Go daemon is being replaced by Rust-native process management in the recursive agent engine.  
+> **Reason:** This document describes the Go daemon architecture, which is the legacy/transitional runtime layer. The Rust mainline replaces the Go daemon with native process management in `src/agent_run/`.  
+> **Last reviewed:** 2026-06-22  
+
 ## Purpose
 
 The Go CLI and daemon layer exists to own host process concerns. It must not

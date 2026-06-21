@@ -1,5 +1,10 @@
 # Coordination Engine
 
+> **Status:** ✗ Superseded  
+> **Replacement:** [`recursive-agent-engine.md`](recursive-agent-engine.md)  
+> **Reason:** This document describes the TypeScript/Go coordination engine, which has been superseded by the Rust recursive agent engine. The Rust mainline owns the current coordination model via `Engine` in `src/task_run/`.  
+> **Last reviewed:** 2026-06-22  
+
 ## Purpose
 
 The Sikong coordination engine is the durable multi-worker layer above

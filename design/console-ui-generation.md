@@ -1,5 +1,10 @@
 # Console UI Generation Spec
 
+> **Status:** ✗ Superseded  
+> **Replacement:** None — the console UI generation is being reworked in the Rust mainline.  
+> **Reason:** This document describes the Go/Bun-era console UI generation rules and design tokens, which are being replaced as part of the Rust mainline migration.  
+> **Last reviewed:** 2026-06-22  
+
 This document defines the visual generation rules for Sikong's console UI.
 Generated components and pages should feel compact, operational, status-driven,
 dark-first, and consistent with the same semantic color and interaction model.

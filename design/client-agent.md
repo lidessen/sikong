@@ -1,5 +1,10 @@
 # Client Agent
 
+> **Status:** ✗ Superseded  
+> **Replacement:** None — the client architecture is being reworked in the Rust mainline and no replacement design doc exists yet.  
+> **Reason:** This document describes the Go/Bun-era client agent architecture, which is being replaced as part of the Rust mainline migration.  
+> **Last reviewed:** 2026-06-22  
+
 ## Purpose
 
 Sikong may be used from a UI that runs a custom `Client Agent`.
