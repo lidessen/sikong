@@ -125,7 +125,7 @@ impl GovernanceGate {
                 "Combine introduces facts not present in accepted child artifacts or parent context."
             }
             Self::PassWithHardViolation => {
-                "Verify returns accept while listing a hard expectation violation."
+                "Verify returns accept while listing a hard gate violation."
             }
             Self::Protocol => "The agent run violates the terminal tool or payload protocol.",
             Self::CheckFail => "A deterministic check required for acceptance failed.",
@@ -254,4 +254,64 @@ pub struct EngineReport {
     pub artifact_text: Option<String>,
     pub events: Vec<OperationEvent>,
     pub agent_runs: Vec<AgentRunRecord>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_governance_gates_have_non_empty_ids_and_descriptions() {
+        let gates = [
+            GovernanceGate::ArchEscape,
+            GovernanceGate::ScopeWiden,
+            GovernanceGate::ParallelDependency,
+            GovernanceGate::SynthesisChild,
+            GovernanceGate::UnsupportedFact,
+            GovernanceGate::PassWithHardViolation,
+            GovernanceGate::Protocol,
+            GovernanceGate::CheckFail,
+        ];
+        for gate in gates {
+            let id = gate.id();
+            let desc = gate.description();
+            assert!(!id.is_empty(), "gate {:?} has empty id", gate);
+            assert!(
+                id.starts_with("G-"),
+                "gate {:?} id '{}' does not start with G-",
+                gate,
+                id
+            );
+            assert!(!desc.is_empty(), "gate {:?} id={} has empty description", gate, id);
+            assert!(
+                desc.len() > 10,
+                "gate {:?} id={} description too short: '{}'",
+                gate,
+                id,
+                desc
+            );
+        }
+    }
+
+    #[test]
+    fn governance_layer_is_some_for_all_agent_operations() {
+        for op in [
+            NodeOperation::Specify,
+            NodeOperation::Plan,
+            NodeOperation::Execute,
+            NodeOperation::Combine,
+            NodeOperation::Verify,
+        ] {
+            assert!(
+                op.governance_layer().is_some(),
+                "operation {:?} has no governance layer",
+                op
+            );
+        }
+    }
+
+    #[test]
+    fn commit_has_no_governance_layer() {
+        assert_eq!(NodeOperation::Commit.governance_layer(), None);
+    }
 }
