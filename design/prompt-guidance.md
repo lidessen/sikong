@@ -53,6 +53,27 @@ Layer violations are prompt bugs:
 Every prompt should preserve the load-bearing 30% and let the agent own the
 local 70%.
 
+This rule exists because agent work must be governed through divide-and-conquer
+and attention layering. A parent operation cannot safely inspect, remember, and
+control every local execution detail. It should instead preserve the mainline
+that makes the child work meaningful, constrain the child boundary, and accept
+only compressed evidence back from the child.
+
+In prompt terms:
+
+- the upper layer states the mainline, boundary, authority, and acceptance
+  evidence;
+- the lower layer receives a bounded local problem and chooses its own local
+  tactics;
+- child results return as artifacts, verdicts, events, or workspace facts;
+- parent operations integrate or reject those results instead of importing the
+  whole trace.
+
+The 70% is allowed to change because it is local and cheap. The 30% must be
+stable because it is the parent contract. If a worker discovers that a local
+choice changes the parent contract, it should stop through the appropriate
+terminal result rather than hiding that change inside execution.
+
 The load-bearing 30% is the constraint whose failure invalidates the run:
 
 - for `Specify`: the user's full current intent and the size of the next useful

@@ -44,6 +44,43 @@ determines whether the rest of the work is useful: target, system shape,
 acceptance boundary, observation quality, authority, or continuity. Everything
 else is the local 70% and should stay cheap to retry.
 
+The reason this works is divide-and-conquer plus attention layering. Agent
+development creates too many local details for one controller to govern
+directly. A reliable system therefore separates the mainline from branches:
+hold the top-level thread tightly, delegate or recurse into bounded
+subproblems, and let those subproblems make local choices inside their own
+contracts.
+
+The 30% is the upper layer of the divide. It preserves the mainline:
+
+- what problem is being solved;
+- which boundary must not be crossed;
+- what evidence would prove progress;
+- what authority exists;
+- what result must return upward.
+
+The 70% is the lower layer. It is allowed to vary because local mistakes are
+cheap when the parent boundary is intact. A helper can be renamed, a child can
+choose a different inspection path, a patch can be retried, and a worker can
+repair local output. Those changes are acceptable as long as they do not change
+the parent target, acceptance boundary, authority, or evidence contract.
+
+This is also why the system should not make the top layer watch every detail.
+Full-detail governance is too expensive and eventually collapses into context
+overload. The right control strategy is to constrain the parent layer and make
+child autonomy safe:
+
+```text
+parent preserves mainline and acceptance
+  -> child owns local execution
+  -> child returns compressed evidence
+  -> parent integrates or rejects
+```
+
+If a child discovers that a local detail now changes the parent boundary, that
+detail is no longer 70%. It must return upward as a 30% candidate instead of
+being handled locally.
+
 If the 30% cannot be named, the next action is not implementation. Recover the
 route first.
 
