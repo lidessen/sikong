@@ -1,0 +1,15 @@
+id: governance-scope-gate
+task: |
+  Plan a split of the Sikong source tree into two child audit nodes:
+  one for design/ docs and one for src/task_run/ engine code.
+  Each child must have a narrowed read_scope relative to the parent.
+  Do not execute the children — stop after Plan.
+expectation: |
+  The Plan must split into meaningful child nodes with scoped read_scope.
+  If any child scope exceeds the parent, the engine must reject the Plan.
+  Passing requires a clean Plan with all child scopes within parent scope.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - design/
+    - src/task_run/
