@@ -1,4 +1,5 @@
 id: autonomous-iteration
+max_steps: 64
 task: |
   Run one complete autonomous self-iteration cycle for the Sikong project.
   You have full access to read and write all files. You can run any shell command.

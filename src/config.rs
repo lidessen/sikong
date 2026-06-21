@@ -209,4 +209,117 @@ mod tests {
         );
         assert_eq!(debug.agent_host_script, None);
     }
+
+    // ── expand_home tests ───────────────────────────────────────────────
+
+    #[test]
+    fn expand_home_tilde_alone_resolves_to_home() {
+        let result = expand_home(Path::new("~"));
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert_eq!(result, home);
+    }
+
+    #[test]
+    fn expand_home_tilde_slash_prepends_home() {
+        let result = expand_home(Path::new("~/sikong"));
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert_eq!(result, home.join("sikong"));
+    }
+
+    #[test]
+    fn expand_home_tilde_slash_nested_path() {
+        let result = expand_home(Path::new("~/workspaces/sikong/config.yaml"));
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert_eq!(result, home.join("workspaces/sikong/config.yaml"));
+    }
+
+    #[test]
+    fn expand_home_absolute_path_unchanged() {
+        let result = expand_home(Path::new("/usr/local/etc"));
+        assert_eq!(result, PathBuf::from("/usr/local/etc"));
+    }
+
+    #[test]
+    fn expand_home_relative_path_unchanged() {
+        let result = expand_home(Path::new("relative/path/to/config.yaml"));
+        assert_eq!(result, PathBuf::from("relative/path/to/config.yaml"));
+    }
+
+    #[test]
+    fn expand_home_tilde_username_not_expanded() {
+        // ~user should not be expanded — only bare ~ and ~/ are expanded
+        let result = expand_home(Path::new("~other/config.yaml"));
+        assert_eq!(result, PathBuf::from("~other/config.yaml"));
+    }
+
+    #[test]
+    fn expand_home_empty_path_unchanged() {
+        let result = expand_home(Path::new(""));
+        assert_eq!(result, PathBuf::from(""));
+    }
+
+    #[test]
+    fn expand_home_double_tilde_not_expanded() {
+        let result = expand_home(Path::new("~~"));
+        assert_eq!(result, PathBuf::from("~~"));
+    }
+
+    #[test]
+    fn expand_home_tilde_with_trailing_slash() {
+        let result = expand_home(Path::new("~/"));
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+        assert_eq!(result, home.join(""));
+    }
+
+    // ── non_empty_env tests ──────────────────────────────────────────────
+
+    #[test]
+    fn non_empty_env_returns_value_for_normal_input() {
+        let env = |name: &str| -> Option<String> {
+            match name {
+                "MY_VAR" => Some("hello".to_string()),
+                _ => None,
+            }
+        };
+        assert_eq!(non_empty_env(&env, "MY_VAR"), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn non_empty_env_returns_none_for_empty_value() {
+        let env = |name: &str| -> Option<String> {
+            match name {
+                "EMPTY" => Some("".to_string()),
+                _ => None,
+            }
+        };
+        assert_eq!(non_empty_env(&env, "EMPTY"), None);
+    }
+
+    #[test]
+    fn non_empty_env_returns_none_for_whitespace_value() {
+        let env = |name: &str| -> Option<String> {
+            match name {
+                "WS" => Some("   ".to_string()),
+                _ => None,
+            }
+        };
+        assert_eq!(non_empty_env(&env, "WS"), None);
+    }
+
+    #[test]
+    fn non_empty_env_trims_whitespace() {
+        let env = |name: &str| -> Option<String> {
+            match name {
+                "PADDED" => Some("  value  ".to_string()),
+                _ => None,
+            }
+        };
+        assert_eq!(non_empty_env(&env, "PADDED"), Some("value".to_string()));
+    }
+
+    #[test]
+    fn non_empty_env_returns_none_for_missing_var() {
+        let env = |_: &str| -> Option<String> { None };
+        assert_eq!(non_empty_env(&env, "MISSING"), None);
+    }
 }

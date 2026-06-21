@@ -1354,6 +1354,7 @@ fn select_task_run_split_eval_scenarios(
             task,
             expectation: "Evaluate whether the task-run engine selected an appropriate execution shape for this custom request, without requiring decomposition when an atomic run is sufficient.".to_string(),
             workspace: TaskRunSplitWorkspace::Memory,
+            max_steps: None,
         }]);
     }
 
@@ -1391,6 +1392,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
             task: "Answer in two short paragraphs: what is a task-run engine, and when should it avoid splitting work?".to_string(),
             expectation: "This is a simple answer task. The engine may keep it atomic or use a very small plan; do not require child decomposition. Pass if it avoids unnecessary orchestration and produces a clear final answer.".to_string(),
             workspace: TaskRunSplitWorkspace::Memory,
+            max_steps: None,
         },
         TaskRunSplitScenario {
             id: "design-analysis".to_string(),
@@ -1398,12 +1400,14 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                 .to_string(),
             expectation: "This is a self-contained analysis task with one primary recommendation artifact. The engine may keep it atomic if the final analysis covers planning, execution, verification, and logging with coherent reliability improvements; do not require decomposition solely because the output is structured.".to_string(),
             workspace: TaskRunSplitWorkspace::Memory,
+            max_steps: None,
         },
         TaskRunSplitScenario {
             id: "small-app".to_string(),
             task: "Develop a tiny static counter application concept for a developer preview: include the HTML, CSS, JavaScript behavior, and a short run instruction. The current workspace is memory-only, so produce implementation artifacts rather than editing files.".to_string(),
             expectation: "This is a tiny application delivery task in a memory workspace. The engine may keep it atomic if the final artifact covers HTML, CSS, JavaScript behavior, and run instructions without hidden steps; do not require decomposition for such a small static artifact.".to_string(),
             workspace: TaskRunSplitWorkspace::Memory,
+            max_steps: None,
         },
         TaskRunSplitScenario {
             id: "preview-runtime".to_string(),
@@ -1411,6 +1415,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                 .to_string(),
             expectation: "This is a broad product-engineering task. The engine should split it into meaningful child work, execute those children, combine evidence, verify readiness, and commit or explain a terminal state.".to_string(),
             workspace: TaskRunSplitWorkspace::Memory,
+            max_steps: None,
         },
         TaskRunSplitScenario {
             id: "sikong-project-analysis".to_string(),
@@ -1427,6 +1432,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                 ],
                 write_scope: Vec::new(),
             },
+            max_steps: None,
         },
         TaskRunSplitScenario {
             id: "sikong-redundancy-audit".to_string(),
@@ -1443,6 +1449,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                 ],
                 write_scope: Vec::new(),
             },
+            max_steps: None,
         },
         TaskRunSplitScenario {
             id: "sikong-design-doc-draft".to_string(),
@@ -1458,6 +1465,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                 ],
                 write_scope: Vec::new(),
             },
+            max_steps: None,
         },
     ]
 }
@@ -1469,6 +1477,8 @@ struct TaskRunSplitScenarioFile {
     task: String,
     expectation: String,
     workspace: TaskRunSplitScenarioFileWorkspace,
+    #[serde(default)]
+    max_steps: Option<usize>,
 }
 
 impl TaskRunSplitScenarioFile {
@@ -1478,6 +1488,7 @@ impl TaskRunSplitScenarioFile {
             task: self.task,
             expectation: self.expectation,
             workspace: self.workspace.into_workspace()?,
+            max_steps: self.max_steps,
         })
     }
 }
@@ -1595,6 +1606,7 @@ struct TaskRunSplitScenario {
     task: String,
     expectation: String,
     workspace: TaskRunSplitWorkspace,
+    max_steps: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1622,6 +1634,9 @@ impl TaskRunSplitWorkspace {
 
 impl TaskRunSplitScenario {
     fn actor_max_steps(&self) -> usize {
+        if let Some(steps) = self.max_steps {
+            return steps;
+        }
         match &self.workspace {
             TaskRunSplitWorkspace::Memory => 24,
             TaskRunSplitWorkspace::CurrentFileSystem { .. }
@@ -3089,6 +3104,7 @@ workspace:
             task: "Test task.".to_string(),
             expectation: "Test expectation.".to_string(),
             workspace: TaskRunSplitWorkspace::Memory,
+            max_steps: None,
         };
         let judgement = TaskRunSplitJudgement {
             passed: true,
@@ -3493,5 +3509,320 @@ workspace:
                 command: DogfoodCommand::List,
             })
         ));
+    }
+
+    // ── Utility function tests ──────────────────────────────────────────
+
+    #[test]
+    fn is_leap_returns_true_for_typical_leap_years() {
+        assert!(is_leap(2000));
+        assert!(is_leap(2024));
+        assert!(is_leap(1996));
+        assert!(is_leap(2400));
+    }
+
+    #[test]
+    fn is_leap_returns_false_for_common_years() {
+        assert!(!is_leap(2023));
+        assert!(!is_leap(1900));
+        assert!(!is_leap(2100));
+        assert!(!is_leap(2025));
+    }
+
+    #[test]
+    fn is_leap_handles_century_rule() {
+        assert!(!is_leap(1700));
+        assert!(!is_leap(1800));
+        assert!(!is_leap(1900));
+        assert!(is_leap(1600));
+        assert!(is_leap(2000));
+        assert!(is_leap(2400));
+    }
+
+    #[test]
+    fn sum_usage_adds_actor_and_judge() {
+        let actor = AgentTokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            active_tokens: 150,
+            total_tokens: 150,
+            cache_read_tokens: 10,
+            cache_creation_tokens: 5,
+        };
+        let judge = AgentTokenUsage {
+            input_tokens: 200,
+            output_tokens: 100,
+            active_tokens: 300,
+            total_tokens: 300,
+            cache_read_tokens: 20,
+            cache_creation_tokens: 10,
+        };
+        let total = sum_usage(Some(&actor), Some(&judge));
+        assert_eq!(total.input_tokens, 300);
+        assert_eq!(total.output_tokens, 150);
+        assert_eq!(total.active_tokens, 450);
+        assert_eq!(total.total_tokens, 450);
+        assert_eq!(total.cache_read_tokens, 30);
+        assert_eq!(total.cache_creation_tokens, 15);
+    }
+
+    #[test]
+    fn sum_usage_with_actor_only() {
+        let actor = AgentTokenUsage {
+            input_tokens: 100,
+            active_tokens: 100,
+            total_tokens: 100,
+            ..AgentTokenUsage::default()
+        };
+        let total = sum_usage(Some(&actor), None);
+        assert_eq!(total.input_tokens, 100);
+        assert_eq!(total.output_tokens, 0);
+    }
+
+    #[test]
+    fn sum_usage_with_judge_only() {
+        let judge = AgentTokenUsage {
+            input_tokens: 50,
+            active_tokens: 50,
+            total_tokens: 50,
+            ..AgentTokenUsage::default()
+        };
+        let total = sum_usage(None, Some(&judge));
+        assert_eq!(total.input_tokens, 50);
+    }
+
+    #[test]
+    fn sum_usage_with_both_none_returns_default() {
+        let total = sum_usage(None, None);
+        assert_eq!(total.input_tokens, 0);
+        assert_eq!(total.total_tokens, 0);
+    }
+
+    #[test]
+    fn sum_usage_does_not_mutate_inputs() {
+        let actor = AgentTokenUsage {
+            input_tokens: 100,
+            active_tokens: 100,
+            total_tokens: 100,
+            ..AgentTokenUsage::default()
+        };
+        let judge = AgentTokenUsage {
+            input_tokens: 200,
+            active_tokens: 200,
+            total_tokens: 200,
+            ..AgentTokenUsage::default()
+        };
+        let _total = sum_usage(Some(&actor), Some(&judge));
+        assert_eq!(actor.input_tokens, 100);
+        assert_eq!(judge.input_tokens, 200);
+    }
+
+    #[test]
+    fn sum_agent_run_usage_empty_slice() {
+        let total = sum_agent_run_usage(&[]);
+        assert_eq!(total.input_tokens, 0);
+    }
+
+    #[test]
+    fn sum_agent_run_usage_single_run() {
+        let runs = [AgentRunRecord {
+            node_id: 1,
+            operation: NodeOperation::Execute,
+            report: "done".to_string(),
+            terminal_tool: Some("submit_work".to_string()),
+            terminal_payload: None,
+            duration_ms: 100,
+            usage: Some(AgentTokenUsage {
+                input_tokens: 500,
+                output_tokens: 200,
+                active_tokens: 700,
+                total_tokens: 700,
+                cache_read_tokens: 50,
+                cache_creation_tokens: 25,
+            }),
+            events: Vec::new(),
+        }];
+        let total = sum_agent_run_usage(&runs);
+        assert_eq!(total.input_tokens, 500);
+        assert_eq!(total.output_tokens, 200);
+        assert_eq!(total.cache_read_tokens, 50);
+        assert_eq!(total.cache_creation_tokens, 25);
+    }
+
+    #[test]
+    fn sum_agent_run_usage_skips_runs_without_usage() {
+        let runs = [
+            AgentRunRecord {
+                node_id: 1,
+                operation: NodeOperation::Execute,
+                report: "no usage".to_string(),
+                terminal_tool: Some("submit_work".to_string()),
+                terminal_payload: None,
+                duration_ms: 50,
+                usage: None,
+                events: Vec::new(),
+            },
+            AgentRunRecord {
+                node_id: 2,
+                operation: NodeOperation::Specify,
+                report: "with usage".to_string(),
+                terminal_tool: Some("submit_specification".to_string()),
+                terminal_payload: None,
+                duration_ms: 30,
+                usage: Some(AgentTokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 50,
+                    active_tokens: 150,
+                    total_tokens: 150,
+                    cache_read_tokens: 10,
+                    cache_creation_tokens: 5,
+                }),
+                events: Vec::new(),
+            },
+            AgentRunRecord {
+                node_id: 3,
+                operation: NodeOperation::Verify,
+                report: "no usage either".to_string(),
+                terminal_tool: Some("submit_verdict".to_string()),
+                terminal_payload: None,
+                duration_ms: 20,
+                usage: None,
+                events: Vec::new(),
+            },
+        ];
+        let total = sum_agent_run_usage(&runs);
+        assert_eq!(total.input_tokens, 100);
+        assert_eq!(total.output_tokens, 50);
+        assert_eq!(total.cache_read_tokens, 10);
+    }
+
+    #[test]
+    fn sum_agent_run_usage_multiple_runs() {
+        let make_run = |id: u64, input: u64| AgentRunRecord {
+            node_id: id,
+            operation: NodeOperation::Execute,
+            report: "run".to_string(),
+            terminal_tool: Some("submit_work".to_string()),
+            terminal_payload: None,
+            duration_ms: 10,
+            usage: Some(AgentTokenUsage {
+                input_tokens: input,
+                active_tokens: input,
+                total_tokens: input,
+                ..AgentTokenUsage::default()
+            }),
+            events: Vec::new(),
+        };
+        let runs = vec![make_run(1, 100), make_run(2, 200), make_run(3, 300)];
+        let total = sum_agent_run_usage(&runs);
+        assert_eq!(total.input_tokens, 600);
+    }
+
+    #[test]
+    fn truncate_text_preserves_short_input() {
+        assert_eq!(truncate_text("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_text_exact_fit() {
+        assert_eq!(truncate_text("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_text_appends_ellipsis_when_exceeding() {
+        assert_eq!(truncate_text("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn truncate_text_handles_empty_string() {
+        assert_eq!(truncate_text("", 10), "");
+    }
+
+    #[test]
+    fn truncate_text_handles_multi_byte_chars() {
+        assert_eq!(truncate_text("日本語", 2), "日本...");
+    }
+
+    #[test]
+    fn truncate_text_handles_zero_max_chars() {
+        assert_eq!(truncate_text("hello", 0), "...");
+    }
+
+    #[test]
+    fn compact_json_formats_value() {
+        let value = serde_json::json!({"a": 1, "b": "two"});
+        let result = compact_json(&value);
+        assert_eq!(result, r#"{"a":1,"b":"two"}"#);
+    }
+
+    #[test]
+    fn compact_json_handles_null() {
+        assert_eq!(compact_json(&serde_json::Value::Null), "null");
+    }
+
+    #[test]
+    fn compact_json_handles_array() {
+        let value = serde_json::json!([1, 2, 3]);
+        assert_eq!(compact_json(&value), "[1,2,3]");
+    }
+
+    #[test]
+    fn format_usage_includes_all_fields() {
+        let usage = AgentTokenUsage {
+            input_tokens: 100,
+            output_tokens: 200,
+            active_tokens: 300,
+            total_tokens: 500,
+            cache_read_tokens: 50,
+            cache_creation_tokens: 25,
+        };
+        let formatted = format_usage(&usage);
+        assert!(formatted.contains("active=300"));
+        assert!(formatted.contains("total=500"));
+        assert!(formatted.contains("in=100"));
+        assert!(formatted.contains("out=200"));
+        assert!(formatted.contains("cache=75"));
+        assert!(formatted.contains("cache_read=50"));
+        assert!(formatted.contains("cache_create=25"));
+    }
+
+    #[test]
+    fn format_usage_handles_zero_values() {
+        let usage = AgentTokenUsage::default();
+        let formatted = format_usage(&usage);
+        assert!(formatted.contains("active=0"));
+        assert!(formatted.contains("total=0"));
+    }
+
+    #[test]
+    fn optional_eq_both_none_returns_true() {
+        let a: Option<&str> = None;
+        let b: Option<&str> = None;
+        assert!(optional_eq(a, b));
+    }
+
+    #[test]
+    fn optional_eq_filter_none_always_passes() {
+        let filter: Option<&str> = None;
+        assert!(optional_eq(filter, Some("anything")));
+        assert!(optional_eq(filter, None));
+    }
+
+    #[test]
+    fn optional_eq_case_insensitive_match() {
+        assert!(optional_eq(Some("Hello"), Some("hello")));
+        assert!(optional_eq(Some("WORLD"), Some("world")));
+        assert!(optional_eq(Some("MiXeD"), Some("mixed")));
+    }
+
+    #[test]
+    fn optional_eq_mismatch_returns_false() {
+        assert!(!optional_eq(Some("hello"), Some("world")));
+        assert!(!optional_eq(Some("abc"), Some("xyz")));
+    }
+
+    #[test]
+    fn optional_eq_filter_none_with_actual_none_returns_true() {
+        assert!(optional_eq(None, None));
     }
 }
