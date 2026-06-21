@@ -180,6 +180,50 @@ fn plan_item_key(input: &str, index: usize) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accept_with_hard_violations_is_rejected() {
+        let args = SubmitVerdictArgs {
+            verdict: VerdictDecision::Accept,
+            reason: "looks good but has issues".to_string(),
+            failure_class: None,
+            missing_info: None,
+            hard_violations: Some(vec!["G-SCOPE-WIDEN".to_string()]),
+        };
+        let verdict = args.into_verdict();
+        assert!(matches!(verdict, VerificationVerdict::Reject { .. }));
+    }
+
+    #[test]
+    fn accept_without_hard_violations_is_accepted() {
+        let args = SubmitVerdictArgs {
+            verdict: VerdictDecision::Accept,
+            reason: "all good".to_string(),
+            failure_class: None,
+            missing_info: None,
+            hard_violations: None,
+        };
+        let verdict = args.into_verdict();
+        assert_eq!(verdict, VerificationVerdict::Accept);
+    }
+
+    #[test]
+    fn accept_with_empty_hard_violations_is_accepted() {
+        let args = SubmitVerdictArgs {
+            verdict: VerdictDecision::Accept,
+            reason: "all good".to_string(),
+            failure_class: None,
+            missing_info: None,
+            hard_violations: Some(Vec::new()),
+        };
+        let verdict = args.into_verdict();
+        assert_eq!(verdict, VerificationVerdict::Accept);
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubmitWorkArgs {
@@ -199,9 +243,11 @@ pub(crate) struct SubmitVerdictArgs {
     pub reason: String,
     pub failure_class: Option<String>,
     pub missing_info: Option<String>,
+    #[serde(default)]
+    pub hard_violations: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[schemars(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum VerdictDecision {
@@ -212,6 +258,21 @@ pub(crate) enum VerdictDecision {
 
 impl SubmitVerdictArgs {
     fn into_verdict(self) -> VerificationVerdict {
+        // G-PASS-WITH-HARD-VIOLATION: Accept with hard violations is a reject.
+        if self.verdict == VerdictDecision::Accept
+            && self
+                .hard_violations
+                .as_ref()
+                .is_some_and(|v| !v.is_empty())
+        {
+            return VerificationVerdict::Reject {
+                failure_class: FailureClass::BadOutput,
+                reason: format!(
+                    "accept verdict with hard violations violates G-PASS-WITH-HARD-VIOLATION: {}",
+                    self.hard_violations.unwrap_or_default().join(", ")
+                ),
+            };
+        }
         match self.verdict {
             VerdictDecision::Accept => VerificationVerdict::Accept,
             VerdictDecision::Reject => VerificationVerdict::Reject {
