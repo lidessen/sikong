@@ -26,13 +26,15 @@ self-iteration loop needs adjustment — record why.
 
 Sikong's workspace: `/Users/lidessen/workspaces/sikong`
 Agent host binary: `dist/siko-agent-host`
-Default provider: DeepSeek v4 Flash + Claude Code runtime
-(Set `SIKONG_AGENT_HOST_WORKER=agent-loop` for real agents;
-without it, mock mode is used for fast pipeline validation.)
+Default provider: DeepSeek v4 Flash
+Default runtime: ai-sdk (with custom Bash tool via Bun.spawn — no sandbox restrictions)
+(Set `SIKONG_AGENT_HOST_RUNTIME=claude-code` to use Claude Code runtime instead.)
 
 The engine runs via `cargo run --quiet -- dogfood run ...` —
 this is the CLI surface you use to invoke Sikong. Everything else
-Sikong does itself.
+Sikong does itself. The self-iteration loop is fully closed:
+Sikong can analyze, implement, build, test, commit, and record
+autonomously in a single `dogfood run`.
 
 ## Workflow
 
@@ -68,7 +70,7 @@ The cycle is:
 To start or advance a cycle, invoke Sikong:
 
 ```bash
-SIKONG_AGENT_HOST_WORKER=agent-loop cargo run --quiet -- dogfood run \
+cargo run --quiet -- dogfood run \
   --scenario-file evals/task-run/<scenario>.yaml \
   --artifact-dir /tmp/siko-cycle-N --json
 ```
