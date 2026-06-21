@@ -99,7 +99,7 @@ pub struct ProblemNode {
     pub candidate: Option<ArtifactId>,
     pub accepted_artifact: Option<ArtifactId>,
     pub execution_attempts: u32,
-    pub verification_attempts: usize,
+    pub verification_attempts: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

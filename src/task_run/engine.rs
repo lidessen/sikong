@@ -1140,11 +1140,57 @@ fn remap_artifact_id(
 }
 
 fn path_allowed(path: &str, scopes: &[String]) -> bool {
-    scopes.iter().any(|scope| {
-        scope == "**/*"
-            || scope == path
-            || (scope.ends_with('*') && path.starts_with(scope.trim_end_matches('*')))
-    })
+    scopes.iter().any(|scope| glob_matches_path(scope, path))
+}
+
+/// Check whether a glob-like scope pattern matches a concrete file path.
+///
+/// Supported patterns:
+/// - `**/*`              → matches any path
+/// - Exact literal       → matches only that exact path
+/// - `<prefix>/**/*`     → matches any path starting with `<prefix>`
+/// - `<prefix>/**/*.<ext>` → matches paths starting with `<prefix>` and ending with `.<ext>`
+/// - `<prefix>*`         → matches any path starting with `<prefix>`
+/// - `*<suffix>`         → matches any path ending with `<suffix>`
+/// - `<prefix>/**/*<suffix>` → matches paths starting with `<prefix>` and ending with `<suffix>`
+fn glob_matches_path(scope: &str, path: &str) -> bool {
+    if scope == "**/*" || scope == path {
+        return true;
+    }
+    if !scope.contains('*') {
+        return scope == path;
+    }
+
+    // Try split on "**/*" (the most common composite glob)
+    if let Some((prefix, suffix)) = scope.split_once("**/*") {
+        let matches_prefix = prefix.is_empty() || path.starts_with(prefix);
+        let matches_suffix = suffix.is_empty()
+            || suffix == "*"
+            || (suffix.starts_with('.') && path.ends_with(suffix));
+        // When suffix contains '*' (other than the split pattern), treat it as
+        // a trailing match rather than a literal suffix.
+        if suffix.contains('*') && suffix != "*" {
+            // Pattern like prefix/**/*suffix — check ends_with for the part after *
+            let trailing = suffix.trim_start_matches('*');
+            return matches_prefix && !trailing.is_empty() && path.ends_with(trailing);
+        }
+        return matches_prefix && matches_suffix;
+    }
+
+    // Simple prefix glob (trailing `*`)
+    if scope.ends_with('*') && !scope.starts_with('*') {
+        let prefix = scope.trim_end_matches('*');
+        return path.starts_with(prefix);
+    }
+
+    // Simple suffix glob (leading `*`)
+    if scope.starts_with('*') {
+        let suffix = &scope[1..];
+        return path.ends_with(suffix);
+    }
+
+    // Fallback: exact match after stripping known glob markers
+    scope == path
 }
 
 fn inherit_child_defaults(
@@ -1221,5 +1267,159 @@ fn check_cancelled(cancellation: &CancellationToken) -> Result<(), EngineError> 
         Err(EngineError::Cancelled)
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_allowed_matches_everything() {
+        assert!(path_allowed("anything", &["**/*".to_string()]));
+        assert!(path_allowed("src/task_run/types.rs", &["**/*".to_string()]));
+        assert!(path_allowed("", &["**/*".to_string()]));
+    }
+
+    #[test]
+    fn path_allowed_exact_match() {
+        assert!(path_allowed("src/main.rs", &["src/main.rs".to_string()]));
+        assert!(!path_allowed("src/lib.rs", &["src/main.rs".to_string()]));
+        assert!(!path_allowed("src/main.rs/extra", &["src/main.rs".to_string()]));
+    }
+
+    #[test]
+    fn path_allowed_prefix_star_glob() {
+        assert!(path_allowed("src/task_run/types.rs", &["src/*".to_string()]));
+        assert!(path_allowed("src/lib.rs", &["src/*".to_string()]));
+        assert!(!path_allowed("tests/foo.rs", &["src/*".to_string()]));
+        assert!(!path_allowed("src", &["src/*".to_string()]));
+    }
+
+    #[test]
+    fn path_allowed_suffix_star_glob() {
+        assert!(path_allowed("src/task_run/types.rs", &["*.rs".to_string()]));
+        assert!(path_allowed("src/lib.rs", &["*.rs".to_string()]));
+        assert!(path_allowed("tests/test.rs", &["*.rs".to_string()]));
+        assert!(!path_allowed("src/main.js", &["*.rs".to_string()]));
+    }
+
+    #[test]
+    fn path_allowed_doublestar_prefix_suffix_glob() {
+        assert!(path_allowed(
+            "src/task_run/types.rs",
+            &["src/**/*.rs".to_string()]
+        ));
+        assert!(path_allowed(
+            "src/main.rs",
+            &["src/**/*.rs".to_string()]
+        ));
+        assert!(!path_allowed(
+            "src/main.js",
+            &["src/**/*.rs".to_string()]
+        ));
+        assert!(!path_allowed(
+            "lib/task.rs",
+            &["src/**/*.rs".to_string()]
+        ));
+    }
+
+    #[test]
+    fn path_allowed_doublestar_no_suffix() {
+        assert!(path_allowed(
+            "src/task_run/types.rs",
+            &["src/**/*".to_string()]
+        ));
+        assert!(path_allowed(
+            "src/main.rs",
+            &["src/**/*".to_string()]
+        ));
+        assert!(path_allowed(
+            "src/foo/bar/baz.ts",
+            &["src/**/*".to_string()]
+        ));
+        assert!(!path_allowed(
+            "tests/foo.rs",
+            &["src/**/*".to_string()]
+        ));
+    }
+
+    #[test]
+    fn path_allowed_mixed_ts_glob() {
+        assert!(path_allowed(
+            "packages/agent-host/src/runtime-host.ts",
+            &["packages/**/*.ts".to_string()]
+        ));
+        assert!(path_allowed(
+            "packages/agent-loop/src/task.test.ts",
+            &["packages/**/*.ts".to_string()]
+        ));
+        assert!(!path_allowed(
+            "packages/agent-host/src/runtime-host.js",
+            &["packages/**/*.ts".to_string()]
+        ));
+    }
+
+    #[test]
+    fn path_allowed_multiple_scopes() {
+        let scopes = vec![
+            "src/**/*.rs".to_string(),
+            "packages/**/*.ts".to_string(),
+        ];
+        assert!(path_allowed("src/lib.rs", &scopes));
+        assert!(path_allowed("packages/foo/bar.ts", &scopes));
+        assert!(!path_allowed("src/lib.js", &scopes));
+        assert!(!path_allowed("docs/readme.md", &scopes));
+    }
+
+    #[test]
+    fn path_allowed_empty_scopes_no_match() {
+        assert!(!path_allowed("src/main.rs", &[] as &[String]));
+    }
+
+    #[test]
+    fn path_allowed_doublestar_with_trailing_content() {
+        // Pattern like dir/**/*suffix should match paths starting with dir/ and ending with suffix
+        let scope = "test-output/**/*.snap.new".to_string();
+        assert!(path_allowed("test-output/foo.snap.new", &[scope.clone()]));
+        assert!(path_allowed("test-output/bar/foo.snap.new", &[scope.clone()]));
+        assert!(!path_allowed("test-output/bar/foo.txt", &[scope]));
+    }
+
+    #[test]
+    fn path_allowed_design_doc_glob() {
+        let scope = "design/**/*.md".to_string();
+        assert!(path_allowed("design/README.md", &[scope.clone()]));
+        assert!(path_allowed("design/dogfood.md", &[scope.clone()]));
+        assert!(path_allowed("design/subdir/some-doc.md", &[scope.clone()]));
+        assert!(!path_allowed("design/README.html", &[scope]));
+    }
+
+    #[test]
+    fn path_allowed_agents_md_exact() {
+        assert!(path_allowed("AGENTS.md", &["AGENTS.md".to_string()]));
+        assert!(!path_allowed("AGENTS.md/extra", &["AGENTS.md".to_string()]));
+        assert!(!path_allowed("src/AGENTS.md", &["AGENTS.md".to_string()]));
+    }
+
+    #[test]
+    fn glob_matches_path_accepts_all_via_doublestar() {
+        assert!(glob_matches_path("**/*", "anything"));
+        assert!(glob_matches_path("**/*", ""));
+        assert!(glob_matches_path("**/*", "a/b/c/d.e"));
+    }
+
+    #[test]
+    fn glob_matches_path_exact_literal() {
+        assert!(glob_matches_path("foo.rs", "foo.rs"));
+        assert!(!glob_matches_path("foo.rs", "bar.rs"));
+    }
+
+    #[test]
+    fn glob_matches_path_prefix_doublestar_suffix() {
+        assert!(glob_matches_path("src/**/*.rs", "src/lib.rs"));
+        assert!(glob_matches_path("src/**/*.rs", "src/task_run/types.rs"));
+        assert!(!glob_matches_path("src/**/*.rs", "src/lib.js"));
+        assert!(!glob_matches_path("src/**/*.rs", "lib/foo.rs"));
     }
 }

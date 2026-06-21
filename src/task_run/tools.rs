@@ -222,6 +222,72 @@ mod tests {
         let verdict = args.into_verdict();
         assert_eq!(verdict, VerificationVerdict::Accept);
     }
+
+    #[test]
+    fn plan_item_key_from_title() {
+        let key = plan_item_key("Lock developer preview scope", 0);
+        assert_eq!(key, "lock-developer-preview-scope");
+    }
+
+    #[test]
+    fn plan_item_key_lowercases_alphanumeric() {
+        let key = plan_item_key("childWork FollowUp", 0);
+        assert_eq!(key, "childwork-followup");
+    }
+
+    #[test]
+    fn plan_item_key_collapses_adjacent_separators() {
+        let key = plan_item_key("child   work", 0);
+        assert_eq!(key, "child-work");
+    }
+
+    #[test]
+    fn plan_item_key_strips_leading_and_trailing_dashes() {
+        let key = plan_item_key("//child-work/", 0);
+        assert_eq!(key, "child-work");
+    }
+
+    #[test]
+    fn plan_item_key_empty_input_falls_back_to_index() {
+        let key = plan_item_key("", 0);
+        assert_eq!(key, "item-1");
+        let key = plan_item_key("", 4);
+        assert_eq!(key, "item-5");
+    }
+
+    #[test]
+    fn plan_item_key_all_special_chars_falls_back_to_index() {
+        let key = plan_item_key("!!!@@@###", 2);
+        assert_eq!(key, "item-3");
+    }
+
+    #[test]
+    fn plan_item_key_non_ascii_stripped() {
+        let key = plan_item_key("réseau config", 0);
+        assert_eq!(key, "r-seau-config");
+    }
+
+    #[test]
+    fn submit_plan_group_rejects_empty_items() {
+        let output = EngineTools.submit_plan_group(SubmitPlanGroupArgs {
+            mode: PlanGroupMode::Parallel,
+            items: Vec::new(),
+        });
+        assert!(
+            matches!(&output, NodeOperationOutput::InvalidPlan { gate, .. } if *gate == Some(GovernanceGate::Protocol))
+        );
+    }
+
+    #[test]
+    fn submit_plan_group_rejects_empty_items_in_stage_mode() {
+        let output = EngineTools.submit_plan_group(SubmitPlanGroupArgs {
+            mode: PlanGroupMode::Stage,
+            items: Vec::new(),
+        });
+        assert!(
+            matches!(&output, NodeOperationOutput::InvalidPlan { gate, .. } if *gate == Some(GovernanceGate::Protocol))
+        );
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

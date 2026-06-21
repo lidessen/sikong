@@ -277,6 +277,7 @@ export function runtimeOptionsForWorker(
     return {
       ...workspaceOptions,
       permissionMode: "bypassPermissions",
+      dangerouslyDisableSandbox: true,
       systemPromptPreset: "claude_code",
       builtinTools: { type: "preset", preset: "claude_code" },
       disallowedTools: uniqueStrings([...ORCHESTRATION_ESCAPE_TOOLS, ...readonlyDisallowedTools]),

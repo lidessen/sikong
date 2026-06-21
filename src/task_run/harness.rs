@@ -82,7 +82,7 @@ pub struct EngineAgentNodePacket {
     pub allow_write: bool,
     pub budget_max_attempts: u32,
     pub execution_attempts: u32,
-    pub verification_attempts: usize,
+    pub verification_attempts: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
