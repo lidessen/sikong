@@ -2404,7 +2404,7 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
     let provider = std::env::var("SIKONG_AGENT_HOST_PROVIDER")
         .ok()
         .filter(|value| value == "deepseek" || value == "kimi")
-        .unwrap_or_else(|| "kimi".to_string());
+        .unwrap_or_else(|| "deepseek".to_string());
     let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
         .ok()
         .filter(|value| value == "ai-sdk" || value == "claude-code")

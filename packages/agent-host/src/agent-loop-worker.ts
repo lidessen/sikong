@@ -65,7 +65,7 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
     });
 
     logAgentLoopEvent(request, "loop.start", runStartedAt, {
-      provider: options.provider ?? "kimi",
+      provider: options.provider ?? "deepseek",
       runtime,
       runtimeProfile: request.runtimeProfile,
       model: options.model,
@@ -227,7 +227,7 @@ function logAgentLoopEvent(
 }
 
 function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
-  const provider = options.provider ?? "kimi";
+  const provider = options.provider ?? "deepseek";
   const runtime = resolveRuntime(options);
   switch (provider) {
     case "deepseek":
@@ -250,12 +250,12 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
 }
 
 function resolveRuntime(options: AgentLoopWorkerOptions): "ai-sdk" | "claude-code" {
-  const provider = options.provider ?? "kimi";
+  const provider = options.provider ?? "deepseek";
   return options.runtime ?? (provider === "kimi" ? "claude-code" : "ai-sdk");
 }
 
 function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
-  switch (options.provider ?? "kimi") {
+  switch (options.provider ?? "deepseek") {
     case "deepseek":
       return deepseek({ model: options.model ?? "deepseek-v4-flash" });
     case "kimi":
