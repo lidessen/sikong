@@ -983,6 +983,90 @@ async fn engine_cleans_git_workspace_resources_after_run() {
     assert!(repo.git(["branch", "--list", "sikong/*"]).trim().is_empty());
 }
 
+#[tokio::test]
+async fn writable_node_outside_write_scope_is_rejected() {
+    let repo = TestGitRepo::new();
+    repo.write("base.txt", "base\n");
+    repo.git(["add", "."]);
+    repo.git(["commit", "-m", "initial"]);
+
+    let mut engine = Engine::new(Workspaces::default(), WriteOutsideScopeScheduler);
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("out-of-scope".to_string()),
+        intent: "write unscoped file".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::git_repo(
+            repo.root(),
+            repo.worktrees(),
+            "HEAD",
+            ["allowed.txt"],
+        ),
+        capabilities: CapabilityProfile::writable(),
+        budget: Budget::default(),
+        plan: NodePlan::Execute,
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Pruned);
+    assert!(
+        engine
+            .attempts_for(&ProblemKey("out-of-scope".to_string()))
+            .iter()
+            .any(|attempt| {
+                matches!(
+                    attempt.verdict,
+                    Some(VerificationVerdict::Reject {
+                        failure_class: FailureClass::UnsafeSideEffect,
+                        ..
+                    })
+                )
+            })
+    );
+}
+
+#[derive(Clone)]
+struct WriteOutsideScopeScheduler;
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for WriteOutsideScopeScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        if input.terminal_tool_set == vec!["submit_work".to_string()] {
+            let worktree_path = input
+                .input
+                .pointer("/workspace_surface/git_worktree_path")
+                .and_then(serde_json::Value::as_str)
+                .expect("git worktree path");
+            // Write to a file outside the allowed write_scope ["allowed.txt"]
+            fs::write(Path::new(worktree_path).join("unscoped.txt"), "written\n").unwrap();
+            return AgentRunResponse {
+                report: "wrote unscoped file".to_string(),
+                tool_calls: vec![AgentToolCall {
+                    name: "submit_work".to_string(),
+                    arguments: serde_json::json!({
+                        "output": "write unscoped file",
+                    }),
+                }],
+                terminal_call: Some(AgentToolCall {
+                    name: "submit_work".to_string(),
+                    arguments: serde_json::json!({
+                        "output": "write unscoped file",
+                    }),
+                }),
+                usage: None,
+                events: Vec::new(),
+            };
+        }
+
+        TestAgentRunScheduler.run(input, cancellation).await
+    }
+}
+
 #[derive(Clone)]
 struct WritingGitAgentRunScheduler;
 

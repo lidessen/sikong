@@ -119,6 +119,27 @@ impl AgentTokenUsage {
     }
 }
 
+impl std::ops::Add for AgentTokenUsage {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens + rhs.input_tokens,
+            output_tokens: self.output_tokens + rhs.output_tokens,
+            active_tokens: self.active_tokens + rhs.active_tokens,
+            total_tokens: self.total_tokens + rhs.total_tokens,
+            cache_read_tokens: self.cache_read_tokens + rhs.cache_read_tokens,
+            cache_creation_tokens: self.cache_creation_tokens + rhs.cache_creation_tokens,
+        }
+    }
+}
+
+impl std::iter::Sum for AgentTokenUsage {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(AgentTokenUsage::default(), |a, b| a + b)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentToolSpec {
     pub name: String,

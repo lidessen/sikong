@@ -1762,29 +1762,18 @@ fn sum_usage(
     actor_usage: Option<&AgentTokenUsage>,
     judge_usage: Option<&AgentTokenUsage>,
 ) -> AgentTokenUsage {
-    let mut total = AgentTokenUsage::default();
-    for usage in [actor_usage, judge_usage].into_iter().flatten() {
-        total.input_tokens += usage.input_tokens;
-        total.output_tokens += usage.output_tokens;
-        total.active_tokens += usage.active_tokens();
-        total.total_tokens += usage.total_tokens;
-        total.cache_read_tokens += usage.cache_read_tokens;
-        total.cache_creation_tokens += usage.cache_creation_tokens;
-    }
-    total
+    [actor_usage, judge_usage]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .sum()
 }
 
 fn sum_agent_run_usage(runs: &[siko::AgentRunRecord]) -> AgentTokenUsage {
-    let mut total = AgentTokenUsage::default();
-    for usage in runs.iter().filter_map(|run| run.usage.as_ref()) {
-        total.input_tokens += usage.input_tokens;
-        total.output_tokens += usage.output_tokens;
-        total.active_tokens += usage.active_tokens();
-        total.total_tokens += usage.total_tokens;
-        total.cache_read_tokens += usage.cache_read_tokens;
-        total.cache_creation_tokens += usage.cache_creation_tokens;
-    }
-    total
+    runs.iter()
+        .filter_map(|run| run.usage.as_ref())
+        .cloned()
+        .sum()
 }
 
 fn format_usage(usage: &AgentTokenUsage) -> String {
