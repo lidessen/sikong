@@ -452,7 +452,7 @@ async fn planned_children_cannot_widen_parent_workspace_scope() {
     let error = engine.run(root).await.unwrap_err();
 
     assert!(matches!(error, EngineError::AgentProtocol(_)));
-    assert!(format!("{error:?}").contains("child read_scope outside parent workspace scope"));
+    assert!(format!("{error:?}").contains("G-SCOPE-WIDEN: child read_scope outside parent workspace scope"));
 }
 
 #[tokio::test]

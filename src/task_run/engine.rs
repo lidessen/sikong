@@ -1183,7 +1183,7 @@ fn ensure_child_scopes_within_parent(
         Ok(())
     } else {
         Err(EngineError::AgentProtocol(format!(
-            "child {label} outside parent workspace scope: {}",
+            "G-SCOPE-WIDEN: child {label} outside parent workspace scope: {}",
             invalid.join(", ")
         )))
     }

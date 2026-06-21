@@ -299,7 +299,9 @@ Hard gates include:
 
 - `G-ARCH-ESCAPE`: `Execute` modifies or proposes to modify Arch-owned
   contracts without explicit authority;
-- `G-SCOPE-WIDEN`: a child workspace scope widens beyond the parent scope;
+- `G-SCOPE-WIDEN`: a child workspace scope widens beyond the parent scope
+  (mechanically enforced — engine rejects child scopes outside parent scope
+  with a `G-SCOPE-WIDEN` error before the child run starts);
 - `G-PARALLEL-DEPENDENCY`: `Plan` creates parallel children with sibling
   dependencies;
 - `G-SYNTHESIS-CHILD`: `Plan` creates a child that is only a final synthesis
