@@ -141,4 +141,101 @@ mod tests {
         assert!(task.title.chars().count() <= 64);
         assert!(task.title.contains("Sikong"));
     }
+    #[test]
+    fn title_from_request_preserves_short_text() {
+        let request = "short task description";
+        let title = title_from_request(request);
+        assert_eq!(title, "short task description");
+    }
+
+    #[test]
+    fn title_from_request_normalizes_whitespace() {
+        let request = "fix   the   spacing	and
+newlines";
+        let title = title_from_request(request);
+        assert_eq!(title, "fix the spacing and newlines");
+    }
+
+    #[test]
+    fn title_from_request_truncates_long_text() {
+        let request = "a very long task description that exceeds the sixty four character limit for task titles and should be truncated properly";
+        let title = title_from_request(request);
+        assert!(title.ends_with("..."));
+        assert!(title.chars().count() <= 64);
+        assert!(title.starts_with("a very long task description that exceeds the sixty four"));
+    }
+
+    #[test]
+    fn title_from_request_exact_sixty_four_chars_is_not_truncated() {
+        let request = "1234567890".repeat(6) + "1234";
+        assert_eq!(request.chars().count(), 64);
+        let title = title_from_request(&request);
+        assert_eq!(title, request);
+        assert!(!title.ends_with("..."));
+    }
+
+    #[test]
+    fn title_from_request_empty_returns_empty() {
+        let title = title_from_request("");
+        assert_eq!(title, "");
+    }
+
+    #[test]
+    fn title_from_request_only_whitespace_returns_empty() {
+        let title = title_from_request("   	
+   ");
+        assert_eq!(title, "");
+    }
+
+    #[test]
+    fn status_from_node_committed() {
+        assert_eq!(
+            status_from_node(NodeStatus::Committed),
+            AssistantTaskStatus::Completed
+        );
+    }
+
+    #[test]
+    fn status_from_node_waiting_for_info() {
+        assert_eq!(
+            status_from_node(NodeStatus::WaitingForInfo),
+            AssistantTaskStatus::WaitingForInput
+        );
+    }
+
+    #[test]
+    fn status_from_node_rejected() {
+        assert_eq!(
+            status_from_node(NodeStatus::Rejected),
+            AssistantTaskStatus::Failed
+        );
+    }
+
+    #[test]
+    fn status_from_node_pruned() {
+        assert_eq!(
+            status_from_node(NodeStatus::Pruned),
+            AssistantTaskStatus::Failed
+        );
+    }
+
+    #[test]
+    fn status_from_node_new_or_running_is_running() {
+        for status in &[
+            NodeStatus::New,
+            NodeStatus::Specified,
+            NodeStatus::Planned,
+            NodeStatus::Running,
+            NodeStatus::Combining,
+            NodeStatus::Verifying,
+            NodeStatus::Accepted,
+        ] {
+            assert_eq!(
+                status_from_node(*status),
+                AssistantTaskStatus::Running,
+                "expected {:?} to map to Running",
+                status,
+            );
+        }
+    }
 }
