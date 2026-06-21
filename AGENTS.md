@@ -91,6 +91,10 @@ driven.
   agent-loop, or dogfood behavior. New mechanisms must compile into the current
   core loops instead of adding independent planner, scheduler, learner, quality,
   memory, or repair subsystems.
+- Before a state-changing design or implementation slice, name the current
+  load-bearing 30% and the layer that owns the uncertainty: `goal`, `design`,
+  `fact`, `reframe`, or `harness`. If that cannot be named, recover the route
+  before editing.
 - Prompt and harness changes should follow `design/prompt-guidance.md`: preserve
   the load-bearing 30%, project only the current layer's context into each run,
   and let lower-layer agent loops own local execution detail.
