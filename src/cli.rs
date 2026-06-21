@@ -786,7 +786,7 @@ async fn run_task_run_split_eval_async(
     for scenario in scenarios {
         let run_started = Instant::now();
         let launch = resolve_agent_loop_launch(&debug, scenario.actor_max_steps());
-        let root_workspace = eval_task_workspace_requirement(&scenario)?;
+        let (root_workspace, allow_write) = eval_task_workspace_requirement(&scenario)?;
         let mut engine = Engine::new(
             Workspaces::default(),
             ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone()),
@@ -794,7 +794,7 @@ async fn run_task_run_split_eval_async(
         if route_only {
             engine = engine.with_stop_after_route_depth(0);
         }
-        let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace));
+        let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace, allow_write));
         let report = engine
             .run(root)
             .await
@@ -902,7 +902,7 @@ async fn run_dogfood_run_async(
     for scenario in scenarios {
         let run_started = Instant::now();
         let launch = resolve_agent_host_launch(&debug);
-        let root_workspace = eval_task_workspace_requirement(&scenario)?;
+        let (root_workspace, allow_write) = eval_task_workspace_requirement(&scenario)?;
         let mut engine = Engine::new(
             Workspaces::default(),
             ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone()),
@@ -910,7 +910,7 @@ async fn run_dogfood_run_async(
         if route_only {
             engine = engine.with_stop_after_route_depth(0);
         }
-        let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace));
+        let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace, allow_write));
         let report = engine
             .run(root)
             .await
@@ -1281,6 +1281,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                     "design/**/*.md".to_string(),
                     "AGENTS.md".to_string(),
                 ],
+                write_scope: Vec::new(),
             },
         },
         TaskRunSplitScenario {
@@ -1296,6 +1297,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                     "packages/agent-loop/src/**/*.ts".to_string(),
                     "design/**/*.md".to_string(),
                 ],
+                write_scope: Vec::new(),
             },
         },
         TaskRunSplitScenario {
@@ -1310,6 +1312,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
                     "development-log/**/*.md".to_string(),
                     "AGENTS.md".to_string(),
                 ],
+                write_scope: Vec::new(),
             },
         },
     ]
@@ -1341,10 +1344,19 @@ struct TaskRunSplitScenarioFileWorkspace {
     provider: String,
     #[serde(default)]
     read_scope: Vec<String>,
+    #[serde(default)]
+    write_scope: Vec<String>,
+    #[serde(default)]
+    allow_write: bool,
 }
 
 impl TaskRunSplitScenarioFileWorkspace {
     fn into_workspace(self) -> Result<TaskRunSplitWorkspace, Box<dyn std::error::Error>> {
+        let write_scope = if self.allow_write {
+            self.write_scope
+        } else {
+            Vec::new()
+        };
         match self.provider.as_str() {
             "memory" => {
                 if !self.read_scope.is_empty() {
@@ -1354,9 +1366,11 @@ impl TaskRunSplitScenarioFileWorkspace {
             }
             "current-file-system" => Ok(TaskRunSplitWorkspace::CurrentFileSystem {
                 read_scope: self.read_scope,
+                write_scope,
             }),
             "current-git" => Ok(TaskRunSplitWorkspace::CurrentGit {
                 read_scope: self.read_scope,
+                write_scope,
             }),
             other => Err(format!(
                 "unsupported task-run split scenario workspace provider: {other}"
@@ -1366,14 +1380,14 @@ impl TaskRunSplitScenarioFileWorkspace {
     }
 }
 
-fn eval_task_root_template(task: &str, workspace: WorkspaceRequirement) -> NodeTemplate {
+fn eval_task_root_template(task: &str, workspace: WorkspaceRequirement, allow_write: bool) -> NodeTemplate {
     NodeTemplate {
         key: ProblemKey("task-run-split-eval".to_string()),
         intent: task.to_string(),
         size: WorkSize::Small,
         scope_assessment: None,
         workspace,
-        capabilities: CapabilityProfile::read_only(),
+        capabilities: if allow_write { CapabilityProfile::writable() } else { CapabilityProfile::read_only() },
         budget: Budget::default(),
         plan: NodePlan::Execute,
     }
@@ -1381,32 +1395,44 @@ fn eval_task_root_template(task: &str, workspace: WorkspaceRequirement) -> NodeT
 
 fn eval_task_workspace_requirement(
     scenario: &TaskRunSplitScenario,
-) -> Result<WorkspaceRequirement, Box<dyn std::error::Error>> {
+) -> Result<(WorkspaceRequirement, bool), Box<dyn std::error::Error>> {
     match &scenario.workspace {
-        TaskRunSplitWorkspace::Memory => Ok(WorkspaceRequirement::memory()),
-        TaskRunSplitWorkspace::CurrentFileSystem { read_scope } => Ok(WorkspaceRequirement {
-            provider: WorkspaceProvider::FileSystem,
-            read_scope: read_scope.clone(),
-            write_scope: Vec::new(),
-            git: None,
-        }),
-        TaskRunSplitWorkspace::CurrentGit { read_scope } => {
+        TaskRunSplitWorkspace::Memory => Ok((WorkspaceRequirement::memory(), false)),
+        TaskRunSplitWorkspace::CurrentFileSystem {
+            read_scope,
+            write_scope,
+        } => Ok((
+            WorkspaceRequirement {
+                provider: WorkspaceProvider::FileSystem,
+                read_scope: read_scope.clone(),
+                write_scope: write_scope.clone(),
+                git: None,
+            },
+            !write_scope.is_empty(),
+        )),
+        TaskRunSplitWorkspace::CurrentGit {
+            read_scope,
+            write_scope,
+        } => {
             let repo_root = std::env::current_dir()?;
             let worktree_root = std::env::temp_dir()
                 .join("siko-live-eval-worktrees")
                 .join(format!("{}-{}", std::process::id(), scenario.id));
             std::fs::create_dir_all(&worktree_root)?;
-            Ok(WorkspaceRequirement {
-                provider: WorkspaceProvider::GitFileSystem,
-                read_scope: read_scope.clone(),
-                write_scope: Vec::new(),
-                git: Some(siko::GitWorkspaceRequirement {
-                    repo_root,
-                    worktree_root,
-                    base_ref: "HEAD".to_string(),
-                    fetch_remote: None,
-                }),
-            })
+            Ok((
+                WorkspaceRequirement {
+                    provider: WorkspaceProvider::GitFileSystem,
+                    read_scope: read_scope.clone(),
+                    write_scope: write_scope.clone(),
+                    git: Some(siko::GitWorkspaceRequirement {
+                        repo_root,
+                        worktree_root,
+                        base_ref: "HEAD".to_string(),
+                        fetch_remote: None,
+                    }),
+                },
+                !write_scope.is_empty(),
+            ))
         }
     }
 }
@@ -1422,8 +1448,14 @@ struct TaskRunSplitScenario {
 #[derive(Debug, Clone)]
 enum TaskRunSplitWorkspace {
     Memory,
-    CurrentFileSystem { read_scope: Vec<String> },
-    CurrentGit { read_scope: Vec<String> },
+    CurrentFileSystem {
+        read_scope: Vec<String>,
+        write_scope: Vec<String>,
+    },
+    CurrentGit {
+        read_scope: Vec<String>,
+        write_scope: Vec<String>,
+    },
 }
 
 impl TaskRunSplitWorkspace {
@@ -2835,11 +2867,14 @@ workspace:
         assert_eq!(scenario.expectation, "Produce file-backed findings.");
         assert!(matches!(
             scenario.workspace,
-            TaskRunSplitWorkspace::CurrentFileSystem { ref read_scope }
+            TaskRunSplitWorkspace::CurrentFileSystem {
+                ref read_scope,
+                ref write_scope,
+            }
                 if read_scope == &vec![
                     "design/**/*.md".to_string(),
                     "src/task_run/**/*.rs".to_string()
-                ]
+                ] && write_scope.is_empty()
         ));
     }
 
