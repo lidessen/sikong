@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use serde_json::Value;
 
 use crate::agent_run::AgentTokenUsage;
@@ -59,12 +60,36 @@ impl NodeOperation {
     }
 }
 
+impl fmt::Display for NodeOperation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Specify => "Specify",
+            Self::Plan => "Plan",
+            Self::Execute => "Execute",
+            Self::Combine => "Combine",
+            Self::Verify => "Verify",
+            Self::Commit => "Commit",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum GovernanceLayer {
     Arch,
     Plan,
     Execute,
     Verify,
+}
+
+impl fmt::Display for GovernanceLayer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Arch => "Arch",
+            Self::Plan => "Plan",
+            Self::Execute => "Execute",
+            Self::Verify => "Verify",
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -133,6 +158,12 @@ impl GovernanceGate {
     }
 }
 
+impl fmt::Display for GovernanceGate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CapabilityProfile {
     pub allow_write: bool,
@@ -177,6 +208,24 @@ pub enum NodeStatus {
     Committed,
 }
 
+impl fmt::Display for NodeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::New => "New",
+            Self::Specified => "Specified",
+            Self::WaitingForInfo => "WaitingForInfo",
+            Self::Planned => "Planned",
+            Self::Running => "Running",
+            Self::Combining => "Combining",
+            Self::Verifying => "Verifying",
+            Self::Accepted => "Accepted",
+            Self::Rejected => "Rejected",
+            Self::Pruned => "Pruned",
+            Self::Committed => "Committed",
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum VerificationVerdict {
     Accept,
@@ -201,6 +250,20 @@ pub enum FailureClass {
     UnsafeSideEffect,
     MergeConflict,
     BudgetExhausted,
+}
+
+impl fmt::Display for FailureClass {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::MissingInfo => "missing_info",
+            Self::SpecAmbiguity => "spec_ambiguity",
+            Self::IncompleteOutput => "incomplete_output",
+            Self::BadOutput => "bad_output",
+            Self::UnsafeSideEffect => "unsafe_side_effect",
+            Self::MergeConflict => "merge_conflict",
+            Self::BudgetExhausted => "budget_exhausted",
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,5 +376,54 @@ mod tests {
     #[test]
     fn commit_has_no_governance_layer() {
         assert_eq!(NodeOperation::Commit.governance_layer(), None);
+    }
+
+    #[test]
+    fn display_implementations_are_readable() {
+        // NodeOperation
+        assert_eq!(format!("{}", NodeOperation::Specify), "Specify");
+        assert_eq!(format!("{}", NodeOperation::Plan), "Plan");
+        assert_eq!(format!("{}", NodeOperation::Execute), "Execute");
+        assert_eq!(format!("{}", NodeOperation::Combine), "Combine");
+        assert_eq!(format!("{}", NodeOperation::Verify), "Verify");
+        assert_eq!(format!("{}", NodeOperation::Commit), "Commit");
+
+        // GovernanceLayer
+        assert_eq!(format!("{}", GovernanceLayer::Arch), "Arch");
+        assert_eq!(format!("{}", GovernanceLayer::Plan), "Plan");
+        assert_eq!(format!("{}", GovernanceLayer::Execute), "Execute");
+        assert_eq!(format!("{}", GovernanceLayer::Verify), "Verify");
+
+        // GovernanceGate
+        assert_eq!(format!("{}", GovernanceGate::ArchEscape), "G-ARCH-ESCAPE");
+        assert_eq!(format!("{}", GovernanceGate::ScopeWiden), "G-SCOPE-WIDEN");
+        assert_eq!(format!("{}", GovernanceGate::ParallelDependency), "G-PARALLEL-DEPENDENCY");
+        assert_eq!(format!("{}", GovernanceGate::SynthesisChild), "G-SYNTHESIS-CHILD");
+        assert_eq!(format!("{}", GovernanceGate::UnsupportedFact), "G-UNSUPPORTED-FACT");
+        assert_eq!(format!("{}", GovernanceGate::PassWithHardViolation), "G-PASS-WITH-HARD-VIOLATION");
+        assert_eq!(format!("{}", GovernanceGate::Protocol), "G-PROTOCOL");
+        assert_eq!(format!("{}", GovernanceGate::CheckFail), "G-CHECK-FAIL");
+
+        // NodeStatus
+        assert_eq!(format!("{}", NodeStatus::New), "New");
+        assert_eq!(format!("{}", NodeStatus::Specified), "Specified");
+        assert_eq!(format!("{}", NodeStatus::WaitingForInfo), "WaitingForInfo");
+        assert_eq!(format!("{}", NodeStatus::Planned), "Planned");
+        assert_eq!(format!("{}", NodeStatus::Running), "Running");
+        assert_eq!(format!("{}", NodeStatus::Combining), "Combining");
+        assert_eq!(format!("{}", NodeStatus::Verifying), "Verifying");
+        assert_eq!(format!("{}", NodeStatus::Accepted), "Accepted");
+        assert_eq!(format!("{}", NodeStatus::Rejected), "Rejected");
+        assert_eq!(format!("{}", NodeStatus::Pruned), "Pruned");
+        assert_eq!(format!("{}", NodeStatus::Committed), "Committed");
+
+        // FailureClass
+        assert_eq!(format!("{}", FailureClass::MissingInfo), "missing_info");
+        assert_eq!(format!("{}", FailureClass::SpecAmbiguity), "spec_ambiguity");
+        assert_eq!(format!("{}", FailureClass::IncompleteOutput), "incomplete_output");
+        assert_eq!(format!("{}", FailureClass::BadOutput), "bad_output");
+        assert_eq!(format!("{}", FailureClass::UnsafeSideEffect), "unsafe_side_effect");
+        assert_eq!(format!("{}", FailureClass::MergeConflict), "merge_conflict");
+        assert_eq!(format!("{}", FailureClass::BudgetExhausted), "budget_exhausted");
     }
 }
