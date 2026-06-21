@@ -1096,7 +1096,8 @@ fn dogfood_write_devlog_entry(
     duration: std::time::Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let now = chrono_now_date();
-    let log_path = Path::new("development-log").join(format!("{now}.md"));
+    let month = chrono_now_month();
+    let log_path = Path::new("development-log").join(format!("{month}.md"));
     let mut log_content = if log_path.exists() {
         std::fs::read_to_string(&log_path)?
     } else {
@@ -1131,6 +1132,16 @@ fn dogfood_write_devlog_entry(
 }
 
 fn chrono_now_date() -> String {
+    let (y, m, d) = chrono_now_ymd();
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+fn chrono_now_month() -> String {
+    let (y, m, _d) = chrono_now_ymd();
+    format!("{:04}-{:02}", y, m)
+}
+
+fn chrono_now_ymd() -> (i64, i32, i32) {
     // Simple YYYY-MM-DD from system time without pulling in chrono
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1173,7 +1184,7 @@ fn chrono_now_date() -> String {
         m += 1;
     }
     let d = remaining + 1;
-    format!("{:04}-{:02}-{:02}", y, m, d)
+    (y, m, d as i32)
 }
 
 fn is_leap(year: i64) -> bool {
@@ -3059,6 +3070,77 @@ workspace:
             "dogfood-doc-review"
         );
         assert_eq!(sanitize_artifact_file_component("..."), "scenario");
+    }
+
+    #[test]
+    fn dogfood_devlog_writes_to_month_level_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        let devlog_dir = temp.path().join("development-log");
+        std::fs::create_dir_all(&devlog_dir).unwrap();
+
+        // Call chrono_now_month to determine the expected file name
+        let month = chrono_now_month();
+        let expected_path = devlog_dir.join(format!("{month}.md"));
+
+        let scenario = TaskRunSplitScenario {
+            id: "test-scenario".to_string(),
+            task: "Test task.".to_string(),
+            expectation: "Test expectation.".to_string(),
+            workspace: TaskRunSplitWorkspace::Memory,
+        };
+        let judgement = TaskRunSplitJudgement {
+            passed: true,
+            findings: vec!["All good.".to_string()],
+            evidence: vec!["Evidence 1.".to_string()],
+        };
+
+        dogfood_write_devlog_entry(
+            &scenario,
+            &judgement,
+            std::time::Duration::from_millis(1234),
+        )
+        .unwrap();
+
+        // The file should exist at the month-level path
+        assert!(
+            expected_path.exists(),
+            "dev-log should be written to month-level file {}",
+            expected_path.display()
+        );
+
+        // Verify content includes the scenario id and verdict
+        let content = std::fs::read_to_string(&expected_path).unwrap();
+        assert!(content.contains("test-scenario"));
+        assert!(content.contains("PASSED"));
+        assert!(content.contains("All good."));
+        assert!(content.contains("1234ms"));
+        assert!(content.contains("Test expectation."));
+
+        // Calling again should append, not overwrite
+        dogfood_write_devlog_entry(
+            &scenario,
+            &judgement,
+            std::time::Duration::from_millis(5678),
+        )
+        .unwrap();
+        let content2 = std::fs::read_to_string(&expected_path).unwrap();
+        assert!(content2.matches("test-scenario").count() == 2);
+
+        std::env::set_current_dir(original_cwd).unwrap();
+    }
+
+    #[test]
+    fn chrono_now_month_format() {
+        let month = chrono_now_month();
+        // Should match YYYY-MM format
+        assert_eq!(month.len(), 7);
+        assert_eq!(month.chars().filter(|&c| c == '-').count(), 1);
+        let parts: Vec<&str> = month.split('-').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].len(), 4); // YYYY
+        assert_eq!(parts[1].len(), 2); // MM
     }
 
     #[test]

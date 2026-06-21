@@ -1,0 +1,47 @@
+id: autonomous-iteration
+task: |
+  Run one complete autonomous self-iteration cycle for the Sikong project.
+  You have full access to read and write all files. You can run any shell command.
+  You can use git. You are in full control.
+
+  Your mission:
+  1. Read design/README.md and the current state of the project to understand
+     what exists and what needs improvement.
+  2. Pick exactly ONE improvement to make. Choose the most impactful thing
+     that can be completed in a single cycle.
+  3. Implement the change — write files, modify code, whatever is needed.
+  4. Verify: run `cargo build` and `cargo test`.
+     If tests fail, fix them. Repeat until tests pass.
+  5. Commit: `git add -A && git commit -m '...'` with a descriptive message.
+  6. Record: append a summary of what was done to development-log/2026-06.md.
+  7. Report what you accomplished.
+
+  IMPORTANT: You must do ALL of these steps. Do not stop after implementation.
+  You must verify, commit, and record. The cycle is not complete until all
+  steps are done.
+
+  Choose your improvement wisely. It should be:
+  - Bounded enough to complete in this cycle
+  - Impactful enough to be worth doing
+  - Something you can verify with cargo test
+
+  Good candidates (pick one):
+  - Simplify or remove the read_scope/write_scope system if it's not enforced
+  - Add a test for something that's untested
+  - Fix a bug or paper-cut in the codebase
+  - Improve error messages or logging
+  - Refactor a small area that's messy
+
+  Do NOT pick something that requires multiple cycles or deep architectural changes.
+  One bounded improvement, fully implemented, verified, committed, and recorded.
+expectation: |
+  The engine must complete a full iteration cycle autonomously:
+  analysis → decision → implementation → verification → commit → record.
+  Passing requires ALL steps to complete, including git commit and dev-log update.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - '**/*'
+  allow_write: true
