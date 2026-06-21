@@ -48,7 +48,7 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
     let run: RunHandle | undefined;
     let resultSettled = false;
     const effort = request.effort ?? options.effort;
-    const tools = createAgentLoopTools(request, terminalToolNames, toolCalls, (call) => {
+    const specTools = createAgentLoopTools(request, terminalToolNames, toolCalls, (call) => {
       terminalCall = call;
       logAgentLoopEvent(request, "terminal_captured", runStartedAt, {
         terminalTool: call.name,
@@ -63,6 +63,30 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
         run?.cancel(`terminal tool ${call.name} fallback cancel`);
       }, fallbackCancelMs);
     });
+    const execTools: ToolSet = {};
+    if (request.runtimeProfile === "code") {
+      execTools.Bash = defineTool({
+        description: "Run a shell command. Returns stdout.",
+        inputSchema: { type: "object", properties: {
+          command: { type: "string", description: "Shell command to run" },
+          timeout: { type: "number", description: "Timeout in ms (default 120000)" },
+        }, required: ["command"] } as Record<string, unknown>,
+        execute: async (args: Record<string, unknown>) => {
+          const cmd = stringOr(args.command, "");
+          const t = Number(args.timeout ?? 120_000);
+          try {
+            const proc = Bun.spawn(["/bin/bash", "-c", cmd], { stdout: "pipe", stderr: "pipe" });
+            const out = await Promise.race([
+              new Response(proc.stdout).text(),
+              new Promise<string>((_, rej) => setTimeout(() => rej(new Error("timeout")), t)),
+            ]);
+            await proc.exited;
+            return { ok: true, exitCode: proc.exitCode, stdout: out.slice(0, 50000) };
+          } catch (e) { return { ok: false, error: errorMessage(e) }; }
+        },
+      });
+    }
+    const tools = { ...specTools, ...execTools };
 
     logAgentLoopEvent(request, "loop.start", runStartedAt, {
       provider: options.provider ?? "deepseek",
