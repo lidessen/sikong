@@ -250,8 +250,7 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
 }
 
 function resolveRuntime(options: AgentLoopWorkerOptions): "ai-sdk" | "claude-code" {
-  const provider = options.provider ?? "deepseek";
-  return options.runtime ?? (provider === "kimi" ? "claude-code" : "ai-sdk");
+  return options.runtime ?? "claude-code";
 }
 
 function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
