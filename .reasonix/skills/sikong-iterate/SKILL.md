@@ -53,27 +53,23 @@ tool contracts, or project conventions: **design first, then code.**
 
 ### 0. Honor the Design
 
-Before running any scenario or making any change:
+Before running any scenario or making any change, consult the
+**Design Registry** in `design/README.md`.
 
-1. **Identify what design documents are relevant** to the target area.
-   The key design docs are in `design/*.md`:
-   - `recursive-agent-engine.md` — engine state machine, operations
-   - `governance-model.md` — Arch/Plan/Execute/Verify layers, gates
-   - `prompt-guidance.md` — attention boundary, operation prompts
-   - `dogfood.md` — self-development loop conventions
-   - `development-philosophy.md` — core philosophy and attention method
-   - `workspace-management.md` — workspace, worktree, resource lifecycle
-   - `coordination-engine.md` — coordination protocol
-   - `assistant-agent-loop.md` — assistant/task-board layer
-   - `cli.md`, `command-surface.md` — CLI and tool surface
-   - `AGENTS.md`, `CLAUDE.md` — project-level guidelines
+1. **Identify the governing design document(s)** for the area you're
+   targeting. The registry organizes docs by layer (L3 Arch → L0 Client)
+   and shows each document's status (✓ Current, ◐ Needs Review, ✗ Superseded).
 
-2. **Check coverage**: Does the existing design already specify the behavior
+2. **Check status**: Only Current (✓) documents are authoritative. If the
+   governing design is Needs Review (◐), review and promote it before
+   implementing. If it's Superseded (✗), find the replacement.
+
+3. **Check coverage**: Does the existing design already specify the behavior
    of the area you're changing? If yes, the implementation must be consistent
    with that design. If no, you must write or update the design document
    before touching implementation code.
 
-3. **When in doubt, design first**: Choose a design-doc task (small/medium)
+4. **When in doubt, design first**: Choose a design-doc task (small/medium)
    over a code task when the boundary is ambiguous. The engine's own
    Specify pass will confirm whether the work needs a design step.
 
@@ -123,11 +119,12 @@ Read the artifact from `--artifact-dir` or check the terminal output. Key things
 
 For doc changes or code improvements that the engine identified:
 
-1. **Design consistency check**: Before writing code, re-read the relevant
-   design document (`design/*.md`). Ask: does this change stay within the
-   design's boundaries, or does it require a design update? If the latter,
-   update the design document FIRST and commit it separately, then implement
-   the code.
+1. **Design consistency check**: Re-read the governing design document
+   from `design/README.md`. Confirm it's Current (✓). Ask: does this change
+   stay within the design's boundaries, or does it require a design update?
+   If the latter, update the design document FIRST and commit it separately,
+   then implement the code. A design commit and its implementation commit
+   must not be squashed together.
 
 2. **Read relevant source files** — understand the current implementation.
 
