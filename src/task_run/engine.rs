@@ -1289,17 +1289,17 @@ mod tests {
     fn path_allowed_doublestar_with_trailing_content() {
         // Pattern like dir/**/*suffix should match paths starting with dir/ and ending with suffix
         let scope = "test-output/**/*.snap.new".to_string();
-        assert!(crate::workspace::path_allowed(&[scope.clone()], std::path::Path::new("test-output/foo.snap.new")));
-        assert!(crate::workspace::path_allowed(&[scope.clone()], std::path::Path::new("test-output/bar/foo.snap.new")));
+        assert!(crate::workspace::path_allowed(std::slice::from_ref(&scope), std::path::Path::new("test-output/foo.snap.new")));
+        assert!(crate::workspace::path_allowed(std::slice::from_ref(&scope), std::path::Path::new("test-output/bar/foo.snap.new")));
         assert!(!crate::workspace::path_allowed(&[scope], std::path::Path::new("test-output/bar/foo.txt")));
     }
 
     #[test]
     fn path_allowed_design_doc_glob() {
         let scope = "design/**/*.md".to_string();
-        assert!(crate::workspace::path_allowed(&[scope.clone()], std::path::Path::new("design/README.md")));
-        assert!(crate::workspace::path_allowed(&[scope.clone()], std::path::Path::new("design/dogfood.md")));
-        assert!(crate::workspace::path_allowed(&[scope.clone()], std::path::Path::new("design/subdir/some-doc.md")));
+        assert!(crate::workspace::path_allowed(std::slice::from_ref(&scope), std::path::Path::new("design/README.md")));
+        assert!(crate::workspace::path_allowed(std::slice::from_ref(&scope), std::path::Path::new("design/dogfood.md")));
+        assert!(crate::workspace::path_allowed(std::slice::from_ref(&scope), std::path::Path::new("design/subdir/some-doc.md")));
         assert!(!crate::workspace::path_allowed(&[scope], std::path::Path::new("design/README.html")));
     }
 
