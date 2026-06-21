@@ -15,7 +15,67 @@ The siko CLI is at `/Users/lidessen/workspaces/sikong`. All commands run from th
 Agent host binary is at `dist/siko-agent-host`.
 Default provider is DeepSeek v4 Flash + Claude Code runtime (set SIKONG_AGENT_HOST_WORKER=agent-loop for real agents; without it, mock mode is used).
 
+## Core Principle: Design Commands Implementation
+
+This skill operates on one non-negotiable rule:
+
+**Design must be written or confirmed BEFORE implementation changes.**
+
+This is the attention-layering principle in practice:
+- **Design layer** (`design/*.md`, `AGENTS.md`, `CLAUDE.md`): stable, changes slowly,
+  owns the architectural contracts. This is the "指挥" (command) layer.
+- **Implementation layer** (`src/*`, `packages/*`, `tests/*`): iterates rapidly,
+  but always within the boundaries set by design. This is the "被指挥" (execution) layer.
+
+When you want to change code, the flow must be:
+
+```
+design exists? ──yes──→ design covers this change? ──yes──→ implement (within design boundary)
+     │                        │
+     no                       no
+     │                        │
+     ▼                        ▼
+ write/update design ←───────┘
+     │
+     ▼
+ design review → implement → verify
+```
+
+Exceptions (where implementation can precede design):
+- Bug fixes that don't change architectural contracts
+- Trivial mechanical changes (rename, test additions, doc typos)
+- The design document itself (since it's self-referential)
+
+For anything that touches architecture, APIs, protocols, state machines,
+tool contracts, or project conventions: **design first, then code.**
+
 ## Workflow
+
+### 0. Honor the Design
+
+Before running any scenario or making any change:
+
+1. **Identify what design documents are relevant** to the target area.
+   The key design docs are in `design/*.md`:
+   - `recursive-agent-engine.md` — engine state machine, operations
+   - `governance-model.md` — Arch/Plan/Execute/Verify layers, gates
+   - `prompt-guidance.md` — attention boundary, operation prompts
+   - `dogfood.md` — self-development loop conventions
+   - `development-philosophy.md` — core philosophy and attention method
+   - `workspace-management.md` — workspace, worktree, resource lifecycle
+   - `coordination-engine.md` — coordination protocol
+   - `assistant-agent-loop.md` — assistant/task-board layer
+   - `cli.md`, `command-surface.md` — CLI and tool surface
+   - `AGENTS.md`, `CLAUDE.md` — project-level guidelines
+
+2. **Check coverage**: Does the existing design already specify the behavior
+   of the area you're changing? If yes, the implementation must be consistent
+   with that design. If no, you must write or update the design document
+   before touching implementation code.
+
+3. **When in doubt, design first**: Choose a design-doc task (small/medium)
+   over a code task when the boundary is ambiguous. The engine's own
+   Specify pass will confirm whether the work needs a design step.
 
 ### 1. Understand the Goal
 
@@ -62,10 +122,21 @@ Read the artifact from `--artifact-dir` or check the terminal output. Key things
 ### 5. Implement Improvements
 
 For doc changes or code improvements that the engine identified:
-- Read relevant source files
-- Make targeted edits
-- Run `cargo test` to verify
-- Commit with descriptive message
+
+1. **Design consistency check**: Before writing code, re-read the relevant
+   design document (`design/*.md`). Ask: does this change stay within the
+   design's boundaries, or does it require a design update? If the latter,
+   update the design document FIRST and commit it separately, then implement
+   the code.
+
+2. **Read relevant source files** — understand the current implementation.
+
+3. **Make targeted edits** — keep changes minimal and focused.
+
+4. **Run `cargo test`** to verify.
+
+5. **Commit with descriptive message** — reference the design document that
+   governs the change.
 
 ### 6. Meta-Review: Audit the Iteration Itself
 
