@@ -1199,14 +1199,6 @@ fn parent_scope_allows_child(parent_scope: &str, child_scope: &str) -> bool {
         || crate::workspace::path_allowed(&[parent_scope.to_string()], std::path::Path::new(child_scope))
 }
 
-fn scope_prefix(scope: &str) -> Option<String> {
-    ["**/*", "**", "*"]
-        .iter()
-        .filter_map(|marker| scope.find(marker).map(|index| &scope[..index]))
-        .find(|prefix| !prefix.is_empty())
-        .map(ToString::to_string)
-}
-
 fn check_cancelled(cancellation: &CancellationToken) -> Result<(), EngineError> {
     if cancellation.is_cancelled() {
         Err(EngineError::Cancelled)
@@ -1339,30 +1331,9 @@ mod tests {
         assert!(!crate::workspace::path_allowed(&["src/**/*.rs".to_string()], std::path::Path::new("lib/foo.rs")));
     }
 
-    #[test]
-    fn scope_prefix_returns_none_for_no_glob_marker() {
-        assert_eq!(scope_prefix("no-glob"), None);
-        assert_eq!(scope_prefix(""), None);
-    }
 
-    #[test]
-    fn scope_prefix_returns_none_for_glob_only() {
-        assert_eq!(scope_prefix("**/*"), None);
-        assert_eq!(scope_prefix("*.rs"), None);
-    }
 
-    #[test]
-    fn scope_prefix_extracts_directory_prefix() {
-        assert_eq!(scope_prefix("src/**/*"), Some("src/".to_string()));
-        assert_eq!(scope_prefix("src/**/*.rs"), Some("src/".to_string()));
-        assert_eq!(scope_prefix("packages/**/*.ts"), Some("packages/".to_string()));
-    }
 
-    #[test]
-    fn scope_prefix_single_star_glob() {
-        assert_eq!(scope_prefix("src/*"), Some("src/".to_string()));
-        assert_eq!(scope_prefix("design/*.md"), Some("design/".to_string()));
-    }
 
     #[test]
     fn parent_scope_allows_doublestar_wildcard() {

@@ -274,7 +274,7 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
 }
 
 function resolveRuntime(options: AgentLoopWorkerOptions): "ai-sdk" | "claude-code" {
-  return options.runtime ?? "claude-code";
+  return options.runtime ?? "ai-sdk";
 }
 
 function createProvider(options: AgentLoopWorkerOptions): ModelProvider {

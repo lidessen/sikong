@@ -2564,7 +2564,7 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
     let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
         .ok()
         .filter(|value| value == "ai-sdk" || value == "claude-code")
-        .unwrap_or_else(|| "claude-code".to_string());
+        .unwrap_or_else(|| "ai-sdk".to_string());
     launch.args.extend(
         [
             "--worker",
