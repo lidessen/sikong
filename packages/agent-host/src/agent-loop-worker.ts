@@ -21,6 +21,7 @@ export interface AgentLoopWorkerOptions {
 }
 
 const ORCHESTRATION_ESCAPE_TOOLS = ["Agent", "Task", "EnterPlanMode", "ExitPlanMode"];
+const READONLY_MUTATION_BUILTIN_TOOLS = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"];
 
 const GENERAL_BUILTIN_DENY_TOOLS = [
   ...ORCHESTRATION_ESCAPE_TOOLS,
@@ -254,7 +255,7 @@ function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
   }
 }
 
-function runtimeOptionsForWorker(
+export function runtimeOptionsForWorker(
   request: AgentRunRequest,
   runtime: "ai-sdk" | "claude-code",
 ): Record<string, unknown> | undefined {
@@ -262,19 +263,50 @@ function runtimeOptionsForWorker(
     return undefined;
   }
 
+  const workspaceOptions = runtimeWorkspaceOptionsForWorker(request);
+  const readonlyDisallowedTools = isReadOnlyRequest(request) ? READONLY_MUTATION_BUILTIN_TOOLS : [];
+
   if (request.runtimeProfile === "code") {
     return {
+      ...workspaceOptions,
       systemPromptPreset: "claude_code",
       builtinTools: { type: "preset", preset: "claude_code" },
-      disallowedTools: ORCHESTRATION_ESCAPE_TOOLS,
+      disallowedTools: uniqueStrings([...ORCHESTRATION_ESCAPE_TOOLS, ...readonlyDisallowedTools]),
     };
   }
 
   return {
+    ...workspaceOptions,
     systemPromptPreset: "custom",
     builtinTools: [],
-    disallowedTools: GENERAL_BUILTIN_DENY_TOOLS,
+    disallowedTools: uniqueStrings([...GENERAL_BUILTIN_DENY_TOOLS, ...readonlyDisallowedTools]),
   };
+}
+
+function runtimeWorkspaceOptionsForWorker(request: AgentRunRequest): Record<string, unknown> {
+  const input = toRecord(request.input);
+  const surface = toRecord(input.workspace_surface);
+  const gitWorktreePath = stringOr(surface.git_worktree_path, "").trim();
+  const fileSystemRootPath = stringOr(surface.file_system_root_path, "").trim();
+  const workspacePath = gitWorktreePath || fileSystemRootPath;
+  if (workspacePath.length === 0) {
+    return {};
+  }
+
+  return {
+    cwd: workspacePath,
+    allowedPaths: [workspacePath],
+  };
+}
+
+function isReadOnlyRequest(request: AgentRunRequest): boolean {
+  const input = toRecord(request.input);
+  const node = toRecord(input.node);
+  return node.allow_write !== true;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function createAgentLoopTools(

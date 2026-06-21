@@ -1,0 +1,18 @@
+id: dogfood-verify-surface-smoke
+task: |
+  Inspect src/cli.rs in the current Sikong repository and identify the helper
+  function that truncates long terminal payload strings in task-run eval
+  transcripts.
+
+  Produce a concise answer naming the function and explaining the truncation
+  behavior. Do not modify files.
+expectation: |
+  This is a narrow repository inspection task over the current filesystem
+  workspace. Passing requires the Execute pass to inspect src/cli.rs and the
+  Verify pass to be able to inspect the same workspace surface before accepting
+  the answer. The final artifact should name the current truncation helper and
+  describe its long-string truncation behavior.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - src/cli.rs

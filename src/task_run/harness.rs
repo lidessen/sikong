@@ -82,8 +82,6 @@ pub struct EngineAgentWorkspaceRequirementPacket {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EngineAgentGitRequirementPacket {
-    pub repo_root: String,
-    pub worktree_root: String,
     pub base_ref: String,
     pub fetch_remote: Option<String>,
 }
@@ -100,6 +98,7 @@ pub struct EngineAgentArtifactPacket {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EngineAgentWorkspaceSurfacePacket {
     pub conflicts: Vec<String>,
+    pub file_system_root_path: Option<String>,
     pub git_worktree_path: Option<String>,
     pub git_branch_name: Option<String>,
 }
@@ -154,13 +153,19 @@ fn operation_prompt_sections(
                     "Turn the raw intent into the next useful unit of work without dropping stated responsibilities or adding new ones. Submit next as an intent-preserving rewrite that can be passed directly to Execute or Plan. Do not make the task more specific than the raw intent and Operation Context support. Submit size as the size of that next unit, using exactly one schema value: tiny, small, medium, large, x_large. Size controls execution shape: tiny, small, and medium normally execute as one node; large and x_large are planned before execution. Multiple named files, modules, operations, tests, or eval scenarios are signals, not a decision rule: keep them together when they form one coherent change package with one shared purpose and one verification loop; choose large or x_large only when the current intent contains separate goals, ordered phases, or independently verifiable work packages."
                 }
                 "Size Reading" {
-                    "Pick the smallest safe size by coordination cost while preserving the user's full current intent. tiny is a direct answer from current context. small is one local problem with one obvious verification path. medium is one coherent responsibility or coherent change package that can be completed from one working context and verified by one focused check, even if it touches several nearby files, prompts, tests, or eval cases. large means planning reduces risk because the work has ordered phases, shared evidence feeding later work, multiple independently accepted deliverables, or separate responsibilities that deserve separate verification. x_large means multiple independent targets or product delivery across several major surfaces."
+                    "Pick the smallest safe size by coordination cost while preserving the user's full current intent. tiny is a direct answer from current context. small is one local problem with one obvious verification path. medium is one coherent responsibility or coherent change package whose evidence cannot usefully be accepted in separate parts, even if it touches several nearby files, prompts, tests, or eval cases. large means planning reduces risk because the work has ordered phases, shared evidence feeding later work, multiple independently accepted deliverables, separate responsibilities that deserve separate verification, or a single final proposal built from several independently inspectable evidence surfaces. x_large means multiple independent targets or product delivery across several major surfaces."
+                }
+                "Evidence Surface Reading" {
+                    "Judge evidence boundaries before judging the final artifact shape. A single final document or recommendation can still be large when it depends on several independent evidence surfaces. If each surface could be inspected, accepted, or rejected without knowing the others first, choose large or x_large: planning improves reliability by giving each surface its own context and evidence boundary before Combine synthesizes the final artifact. Do not treat 'same theme', 'one report', 'cross-surface comparison', or 'one worker can hold the context' as enough reason to keep the work medium. Cross-surface comparison is usually a Combine responsibility after child surfaces have produced evidence; it is not a reason to make evidence collection atomic. A local change means one behavior or one code path with supporting prompt/test/eval/doc updates. Separate packages, subsystems, runtime boundaries, or doc families named as audit targets are independent evidence surfaces, not nearby parts of one local change. Keep the work medium only when the evidence is useful only when inspected together from the start."
                 }
                 "Medium Versus Large" {
                     "Do not count surfaces mechanically. A prompt change plus focused harness tests plus one eval scenario can still be medium when all pieces serve the same behavioral fix. Runtime implementation plus host integration plus documentation plus smoke tests is usually large because those are separate work packages with different acceptance surfaces. When unsure, ask whether splitting would make the result more reliable or only add coordination overhead; if splitting only adds overhead, keep the next unit medium."
                 }
                 "Boundary" {
                     "Information gathering is not a special route. If the raw intent cannot be meaningfully worked without a missing user choice, missing external fact, or missing input location, make next the concrete evidence-gathering work and size that work. Otherwise keep the user's requested work intact and let Execute or Plan handle the local details."
+                }
+                "Tool Use Discipline" {
+                    "Use tools in this pass only when a small targeted look is necessary to avoid mis-sizing or losing the user's intent. Do not perform broad repository inspection, file-by-file analysis, implementation, verification, or evidence collection here; those belong to Execute or Plan children."
                 }
                 "Non Goals" {
                     "Do not solve the task, create the plan, verify a candidate, combine child work, or mutate workspace state. Do not use missing-info or route fields; information gathering is just another possible next work."
@@ -192,7 +197,7 @@ fn operation_prompt_sections(
                     "Create the smallest useful non-empty item set that preserves the parent shape. A good child is a natural next-level subproblem with its own main contradiction, not a checklist row. This Plan pass defines only the current local group; child nodes always re-enter Specify, so do not force them to execute and do not pre-expand their internal plan here."
                 }
                 "Plan Item Shape" {
-                    "Each item should describe one child node. Submit at least one item, and normally one item per ordered phase or independent surface named by the parent intent. Prefer key and intent. Keep child intents concise and outcome-level. Include requires_prior_results for every item: use false when it can run from the parent context alone, and true only when it must wait for earlier item outputs. In parallel mode every item must use requires_prior_results=false. Do not add a synthesis, summary, final-report, or convergence item to a parallel group; the parent Combine pass performs that integration after child artifacts are accepted. Include size and reason when useful to preserve why the child is that size. You may also use title, description, and verification when they clarify acceptance without micromanaging execution. Do not include plan.kind or nested groups in plan items."
+                    "Each item should describe one child node. Submit at least one item, and normally one item per ordered phase or independent surface named by the parent intent. Prefer key and intent. Keep child intents concise and outcome-level. Include requires_prior_results for every item: use false when it can run from the parent context alone, and true only when it must wait for earlier item outputs. In parallel mode every item must use requires_prior_results=false. Do not add a synthesis, summary, final-report, or convergence item to a parallel group; the parent Combine pass performs that integration after child artifacts are accepted. Include size and reason when useful to preserve why the child is that size. If the parent has a file workspace and a child owns a narrower evidence surface, include read_scope as coarse glob strings within the parent scope, such as src/task_run/**/*.rs; include write_scope only when the child may write and needs a narrower write surface. Leave scopes empty when the child should inherit the parent workspace unchanged. You may also use title, description, and verification when they clarify acceptance without micromanaging execution. Do not include plan.kind or nested groups in plan items."
                 }
                 "Recursive Decomposition" {
                     "Recursive planning is allowed and sometimes required. A child may later split again when it still contains multiple independent deliverables, ordered phases, or more work than one coherent artifact can safely hold. That second split should be decided by the child Specify/Plan pass, not precomputed by the parent."
@@ -381,6 +386,13 @@ impl OperationHarness {
 }
 
 fn runtime_profile_for_operation(context: &AgentOperationContext) -> AgentRuntimeProfile {
+    if matches!(context.operation, NodeOperation::Specify)
+        || (matches!(context.operation, NodeOperation::Verify)
+            && context.workspace_surface.is_none())
+    {
+        return AgentRuntimeProfile::General;
+    }
+
     match context.node.workspace.provider {
         WorkspaceProvider::FileSystem | WorkspaceProvider::GitFileSystem => {
             AgentRuntimeProfile::Code
@@ -421,6 +433,14 @@ fn operation_context_packet(context: &AgentOperationContext) -> EngineAgentConte
         workspace_surface: context.workspace_surface.as_ref().map(|surface| {
             EngineAgentWorkspaceSurfacePacket {
                 conflicts: surface.conflicts.clone(),
+                file_system_root_path: surface.resources.iter().find_map(
+                    |resource| match &resource.metadata {
+                        crate::WorkspaceResourceMetadata::FileSystemDirectory(directory) => {
+                            Some(directory.root_path.display().to_string())
+                        }
+                        _ => None,
+                    },
+                ),
                 git_worktree_path: surface
                     .git
                     .as_ref()
@@ -451,8 +471,6 @@ fn node_packet(context: &AgentOperationContext) -> EngineAgentNodePacket {
                 .git
                 .as_ref()
                 .map(|git| EngineAgentGitRequirementPacket {
-                    repo_root: git.repo_root.display().to_string(),
-                    worktree_root: git.worktree_root.display().to_string(),
                     base_ref: git.base_ref.clone(),
                     fetch_remote: git.fetch_remote.clone(),
                 }),

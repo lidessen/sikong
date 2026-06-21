@@ -1,0 +1,30 @@
+id: dogfood-doc-review
+task: |
+  Review design/dogfood.md in the current Sikong repository.
+
+  Compare it against design/recursive-agent-engine.md,
+  design/prompt-guidance.md, design/assistant-agent-loop.md, and the current
+  task-run implementation surface.
+
+  Identify whether the dogfood design is coherent, whether it conflicts with
+  existing architecture, whether it is too abstract or missing concrete
+  acceptance gates, and what the first low-risk document or implementation
+  improvements should be.
+
+  Produce a concise review report with concrete file or section evidence. Do
+  not modify files.
+expectation: |
+  This is a realistic design review task over the current filesystem workspace.
+  Passing
+  requires a concrete review grounded in design/dogfood.md, related design
+  documents, and task-run implementation paths. It may stay atomic if the report
+  is coherent and evidence-backed, but it must not fabricate file evidence or
+  ignore the requested comparison surfaces.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - design/**/*.md
+    - src/task_run/**/*.rs
+    - src/agent_run/**/*.rs
+    - src/assistant/**/*.rs
+    - AGENTS.md

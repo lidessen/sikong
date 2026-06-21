@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::agent_run::AgentTokenUsage;
 use crate::workspace::WorkspaceError;
@@ -100,6 +101,7 @@ pub struct AgentRunRecord {
     pub operation: NodeOperation,
     pub report: String,
     pub terminal_tool: Option<String>,
+    pub terminal_payload: Option<Value>,
     pub duration_ms: u128,
     pub usage: Option<AgentTokenUsage>,
 }

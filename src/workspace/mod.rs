@@ -146,9 +146,15 @@ pub enum WorkspaceResourceRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceResourceMetadata {
     None,
+    FileSystemDirectory(FileSystemDirectoryResource),
     GitWorktree(GitWorktreeResource),
     GitBranch(GitBranchResource),
     GitCommit(GitCommitResource),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSystemDirectoryResource {
+    pub root_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

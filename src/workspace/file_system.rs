@@ -1,8 +1,8 @@
 use super::{
-    Workspace, WorkspaceChange, WorkspaceIds, WorkspaceProvider, WorkspaceRequirement,
-    WorkspaceResource, WorkspaceResourceId, WorkspaceResourceKind, WorkspaceResourceMetadata,
-    WorkspaceResourceRef, WorkspaceResourceState, WorkspaceResult, WorkspaceSnapshot,
-    WorkspaceSnapshotId, WorkspaceSurface,
+    FileSystemDirectoryResource, Workspace, WorkspaceChange, WorkspaceIds, WorkspaceProvider,
+    WorkspaceRequirement, WorkspaceResource, WorkspaceResourceId, WorkspaceResourceKind,
+    WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceResult,
+    WorkspaceSnapshot, WorkspaceSnapshotId, WorkspaceSurface,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -42,7 +42,11 @@ impl FileSystemWorkspace {
                 kind: WorkspaceResourceKind::Directory,
                 state: WorkspaceResourceState::Active,
                 refs,
-                metadata: WorkspaceResourceMetadata::None,
+                metadata: WorkspaceResourceMetadata::FileSystemDirectory(
+                    FileSystemDirectoryResource {
+                        root_path: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+                    },
+                ),
             }],
             changed_paths: Vec::new(),
             conflicts: Vec::new(),
@@ -83,7 +87,11 @@ impl FileSystemWorkspace {
                 kind: WorkspaceResourceKind::Directory,
                 state: WorkspaceResourceState::Active,
                 refs,
-                metadata: WorkspaceResourceMetadata::None,
+                metadata: WorkspaceResourceMetadata::FileSystemDirectory(
+                    FileSystemDirectoryResource {
+                        root_path: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+                    },
+                ),
             }],
             changed_paths: changes
                 .iter()

@@ -4,7 +4,7 @@ use std::{
     path::Path,
     process::Command,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -75,6 +75,32 @@ async fn simple_leaf_executes_verifies_and_commits() {
             .collect::<Vec<_>>(),
         vec!["submit_specification", "submit_work", "submit_verdict",]
     );
+}
+
+#[tokio::test]
+async fn verify_receives_candidate_workspace_surface_for_file_system_nodes() {
+    let saw_verify_surface = Arc::new(Mutex::new(false));
+    let mut engine = Engine::new(
+        FileSystemWorkspace::default(),
+        VerifySurfaceScheduler {
+            saw_verify_surface: Arc::clone(&saw_verify_surface),
+        },
+    );
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("verify-file-surface".to_string()),
+        intent: "review local files".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::read_only_files(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Execute,
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Committed);
+    assert!(*saw_verify_surface.lock().unwrap());
 }
 
 #[tokio::test]
@@ -230,6 +256,73 @@ async fn planned_children_inherit_parent_workspace_and_capabilities() {
     assert_eq!(child.workspace.write_scope, vec!["design/**"]);
     assert!(child.capabilities.allow_write);
     assert_eq!(child.budget.max_attempts, 3);
+}
+
+#[tokio::test]
+async fn planned_children_can_narrow_parent_workspace_scope() {
+    let mut engine = engine();
+    let mut child = NodeTemplate::memory_leaf("child", "child work");
+    child.workspace.read_scope = vec!["src/task_run/**".to_string()];
+    child.workspace.write_scope = vec!["design/task-run/**".to_string()];
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("scoped-plan".to_string()),
+        intent: "complete scoped plan".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement {
+            provider: WorkspaceProvider::FileSystem,
+            read_scope: vec!["src/**".to_string()],
+            write_scope: vec!["design/**".to_string()],
+            git: None,
+        },
+        capabilities: CapabilityProfile::writable(),
+        budget: Budget { max_attempts: 3 },
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![child],
+        }),
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Committed);
+    let child = engine.node(root).unwrap().children[0];
+    let child = engine.node(child).unwrap();
+    assert_eq!(child.workspace.provider, WorkspaceProvider::FileSystem);
+    assert_eq!(child.workspace.read_scope, vec!["src/task_run/**"]);
+    assert_eq!(child.workspace.write_scope, vec!["design/task-run/**"]);
+    assert!(child.capabilities.allow_write);
+    assert_eq!(child.budget.max_attempts, 3);
+}
+
+#[tokio::test]
+async fn planned_children_cannot_widen_parent_workspace_scope() {
+    let mut engine = engine();
+    let mut child = NodeTemplate::memory_leaf("child", "child work");
+    child.workspace.read_scope = vec!["secrets/**".to_string()];
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("scoped-plan".to_string()),
+        intent: "complete scoped plan".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement {
+            provider: WorkspaceProvider::FileSystem,
+            read_scope: vec!["src/**".to_string()],
+            write_scope: Vec::new(),
+            git: None,
+        },
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![child],
+        }),
+    });
+
+    let error = engine.run(root).await.unwrap_err();
+
+    assert!(matches!(error, EngineError::AgentProtocol(_)));
+    assert!(format!("{error:?}").contains("child read_scope outside parent workspace scope"));
 }
 
 #[tokio::test]
@@ -642,6 +735,14 @@ async fn read_only_workspace_change_is_rejected() {
     let report = engine.run(root).await.unwrap();
 
     assert_eq!(report.status, NodeStatus::Pruned);
+    assert_eq!(
+        engine
+            .agent_runs()
+            .iter()
+            .map(|run| run.operation)
+            .collect::<Vec<_>>(),
+        vec![NodeOperation::Specify, NodeOperation::Execute]
+    );
     assert!(
         engine
             .attempts_for(&ProblemKey("read-only".to_string()))
@@ -783,6 +884,52 @@ impl AgentRunScheduler for WritingGitAgentRunScheduler {
         }
 
         TestAgentRunScheduler.run(input, cancellation).await
+    }
+}
+
+#[derive(Clone)]
+struct VerifySurfaceScheduler {
+    saw_verify_surface: Arc<Mutex<bool>>,
+}
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for VerifySurfaceScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        _cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        let name = input.terminal_tool_set[0].clone();
+        let arguments = match name.as_str() {
+            "submit_specification" => serde_json::json!({
+                "next": "review local files",
+                "size": "small",
+                "reason": "single local review"
+            }),
+            "submit_work" => serde_json::json!({
+                "output": "review local files"
+            }),
+            "submit_verdict" => {
+                let has_root = input
+                    .input
+                    .pointer("/workspace_surface/file_system_root_path")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some();
+                *self.saw_verify_surface.lock().unwrap() = has_root;
+                serde_json::json!({
+                    "verdict": "accept",
+                    "reason": "verified with workspace surface"
+                })
+            }
+            _ => serde_json::json!({}),
+        };
+        let call = AgentToolCall { name, arguments };
+        AgentRunResponse {
+            report: "verify surface scheduler completed".to_string(),
+            tool_calls: vec![call.clone()],
+            terminal_call: Some(call),
+            usage: None,
+        }
     }
 }
 

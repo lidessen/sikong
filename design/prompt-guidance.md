@@ -133,6 +133,31 @@ required, make it part of the input context or terminal schema. If it is not
 required, keep the prompt at the right abstraction level and let the artifact
 say less.
 
+## Dogfood Feedback Discipline
+
+Dogfood live evals produce two different artifacts:
+
+- a transcript that shows how the engine, runtime, tools, and prompts actually
+  behaved;
+- an agent-written report that proposes improvements from inside the current
+  run.
+
+The transcript is primary evidence. The report is a candidate interpretation.
+Before changing prompts, classify the finding:
+
+- If the engine accepted a structurally invalid result, fix the state machine,
+  schema, or workspace invariant.
+- If the runtime exposed the wrong cwd, tool surface, model profile, or
+  terminal stop behavior, fix the agent-run request and host boundary.
+- If the agent repeatedly wastes calls because context is hidden behind a tool,
+  inject immutable context directly.
+- If the agent over-specializes, over-splits, or invents stale architecture, the
+  prompt may be projecting the wrong layer of context.
+
+One dogfood loop should usually make one bounded change. Record the loop in the
+development log so repeated findings can be promoted into durable prompt theory
+or engine design, while one-off eval noise stays out of the core prompt.
+
 ## Operation Guidance
 
 ### Specify
@@ -144,6 +169,22 @@ It should answer:
 - What is the next work text that preserves the user's stated responsibility?
 - What is the size of that next work?
 - Why does that size fit?
+
+Size is about coordination and evidence boundaries, not the number of files or
+the shape of the final artifact. `medium` means one coherent responsibility or
+change package whose evidence cannot usefully be accepted in separate parts. A
+single final artifact can still be `large` when it depends on several
+independent evidence surfaces that can be inspected and accepted separately
+before `Combine`. "Same theme", "one report", "cross-surface comparison", or
+"fits in one context" is not enough to make it `medium`. Cross-surface
+comparison is usually the parent `Combine` responsibility after child surfaces
+have produced evidence; it is not a reason to keep evidence collection atomic. A
+local change means one behavior or one code path with supporting
+prompt/test/eval/doc updates. Separate packages, subsystems, runtime boundaries,
+or doc families named as audit targets are independent evidence surfaces, not
+nearby parts of one local change. A coherent change package can remain `medium`
+when its files, tests, and evals all serve one local behavior fix and the
+evidence is useful only when inspected together from the start.
 
 Information gathering is not a separate special mode. If the task is blocked by
 missing facts, `Specify` should make the next work the concrete evidence-gathering
@@ -164,6 +205,12 @@ It should use the main contradiction lens:
 
 Plan items are child responsibilities, not checklist rows. A child should be
 large enough to re-enter `Specify` and solve its own local 70%.
+
+When the parent has a file or git workspace, `Plan` should narrow child
+workspace scope when the child owns one evidence surface. Use coarse `read_scope`
+globs such as `src/task_run/**/*.rs`, not file-by-file micromanagement. Empty
+scope means inherit the parent workspace unchanged. Child scopes are an engine
+invariant: they may narrow the parent, but they must not widen it.
 
 ### Execute
 

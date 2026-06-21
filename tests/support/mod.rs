@@ -56,6 +56,8 @@ fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
                     json!({
                         "key": item.key.0,
                         "intent": item.intent,
+                        "read_scope": item.workspace.read_scope,
+                        "write_scope": item.workspace.write_scope,
                         "size": item.size,
                         "reason": item.scope_assessment.as_ref().map(|assessment| assessment.reason.clone()),
                         "requires_prior_results": false,

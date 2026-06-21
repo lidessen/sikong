@@ -6,7 +6,8 @@ use tracing::{info, warn};
 
 use crate::agent_run::{AgentRunScheduler, CancellationToken};
 use crate::workspace::{
-    Workspace, WorkspaceChange, WorkspaceResource, WorkspaceResourceRef, WorkspaceSurface,
+    GitWorkspaceSurface, Workspace, WorkspaceChange, WorkspaceProvider, WorkspaceResource,
+    WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceSurface,
 };
 
 use super::node::{
@@ -284,9 +285,10 @@ where
             .items
             .into_iter()
             .map(|template| {
-                self.insert_node(Some(node_id), inherit_child_defaults(&parent, template))
+                let template = inherit_child_defaults(&parent, template)?;
+                Ok(self.insert_node(Some(node_id), template))
             })
-            .collect();
+            .collect::<Result<Vec<_>, EngineError>>()?;
         self.node_mut(node_id)?.children = child_ids;
         self.node_mut(node_id)?.status = NodeStatus::Planned;
         Ok(())
@@ -376,6 +378,7 @@ where
                 operation: run.operation,
                 report: run.report,
                 terminal_tool: run.terminal_tool,
+                terminal_payload: run.terminal_payload,
                 duration_ms: run.duration_ms,
                 usage: run.usage,
             });
@@ -566,9 +569,17 @@ where
         artifact_id: ArtifactId,
         cancellation: &CancellationToken,
     ) -> Result<VerificationVerdict, EngineError> {
-        let result = self
-            .run_agent(node_id, NodeOperation::Verify, cancellation)
-            .await?;
+        if let Some(verdict) = self.deterministic_verification_verdict(node_id, artifact_id)? {
+            return Ok(verdict);
+        }
+
+        let result = if let Some(surface) = self.verification_surface(artifact_id)? {
+            self.run_agent_with_surface(node_id, NodeOperation::Verify, surface, cancellation)
+                .await?
+        } else {
+            self.run_agent(node_id, NodeOperation::Verify, cancellation)
+                .await?
+        };
         let NodeOperationOutput::Verified {
             verdict: worker_verdict,
         } = result.output
@@ -576,44 +587,53 @@ where
             return Ok(VerificationVerdict::Accept);
         };
 
-        if let Some(change) = &self.artifact(artifact_id)?.workspace_change {
-            let node = self.node(node_id)?;
-            if !node.capabilities.allow_write
-                && (!change.changed_paths.is_empty() || !change.side_effects.is_empty())
-            {
-                return Ok(VerificationVerdict::Reject {
-                    failure_class: FailureClass::UnsafeSideEffect,
-                    reason: "read-only node produced workspace change".to_string(),
-                });
-            }
+        self.node_mut(node_id)?.verification_attempts += 1;
+        Ok(worker_verdict)
+    }
 
-            if change
-                .side_effects
+    fn deterministic_verification_verdict(
+        &self,
+        node_id: NodeId,
+        artifact_id: ArtifactId,
+    ) -> Result<Option<VerificationVerdict>, EngineError> {
+        let Some(change) = &self.artifact(artifact_id)?.workspace_change else {
+            return Ok(None);
+        };
+        let node = self.node(node_id)?;
+        if !node.capabilities.allow_write
+            && (!change.changed_paths.is_empty() || !change.side_effects.is_empty())
+        {
+            return Ok(Some(VerificationVerdict::Reject {
+                failure_class: FailureClass::UnsafeSideEffect,
+                reason: "read-only node produced workspace change".to_string(),
+            }));
+        }
+
+        if change
+            .side_effects
+            .iter()
+            .any(|effect| effect.starts_with("conflict:"))
+        {
+            return Ok(Some(VerificationVerdict::Reject {
+                failure_class: FailureClass::MergeConflict,
+                reason: "workspace merge surface conflict".to_string(),
+            }));
+        }
+
+        if node.capabilities.allow_write {
+            let out_of_scope = change
+                .changed_paths
                 .iter()
-                .any(|effect| effect.starts_with("conflict:"))
-            {
-                return Ok(VerificationVerdict::Reject {
-                    failure_class: FailureClass::MergeConflict,
-                    reason: "workspace merge surface conflict".to_string(),
-                });
-            }
-
-            if node.capabilities.allow_write {
-                let out_of_scope = change
-                    .changed_paths
-                    .iter()
-                    .any(|path| !path_allowed(path, &node.workspace.write_scope));
-                if out_of_scope {
-                    return Ok(VerificationVerdict::Reject {
-                        failure_class: FailureClass::UnsafeSideEffect,
-                        reason: "changed path outside write scope".to_string(),
-                    });
-                }
+                .any(|path| !path_allowed(path, &node.workspace.write_scope));
+            if out_of_scope {
+                return Ok(Some(VerificationVerdict::Reject {
+                    failure_class: FailureClass::UnsafeSideEffect,
+                    reason: "changed path outside write scope".to_string(),
+                }));
             }
         }
 
-        self.node_mut(node_id)?.verification_attempts += 1;
-        Ok(worker_verdict)
+        Ok(None)
     }
 
     #[async_recursion]
@@ -767,6 +787,10 @@ where
         let duration_ms = started_at.elapsed().as_millis();
         check_cancelled(cancellation)?;
         let usage = worker_result.usage.clone();
+        let terminal_payload = worker_result
+            .terminal_call
+            .as_ref()
+            .map(|call| call.arguments.clone());
         let result = match harness.decode_result(worker_result) {
             Ok(result) => result,
             Err(error) => {
@@ -783,6 +807,7 @@ where
                     operation,
                     report: error.message.clone(),
                     terminal_tool: error.terminal_tool.clone(),
+                    terminal_payload,
                     duration_ms,
                     usage,
                 });
@@ -802,6 +827,7 @@ where
             operation,
             report: result.report.clone(),
             terminal_tool: result.terminal_tool.clone(),
+            terminal_payload,
             duration_ms,
             usage,
         });
@@ -880,6 +906,58 @@ where
         for resource in &surface.resources {
             self.workspace_resources.release(resource.id, &resource_ref);
         }
+    }
+
+    fn verification_surface(
+        &self,
+        artifact_id: ArtifactId,
+    ) -> Result<Option<WorkspaceSurface>, EngineError> {
+        let Some(change) = &self.artifact(artifact_id)?.workspace_change else {
+            return Ok(None);
+        };
+        let resources = change
+            .resource_ids
+            .iter()
+            .filter_map(|id| self.workspace_resources.resource(*id).cloned())
+            .collect::<Vec<_>>();
+        if resources.is_empty() && change.provider == WorkspaceProvider::Memory {
+            return Ok(None);
+        }
+
+        let git_worktree = resources
+            .iter()
+            .find_map(|resource| match &resource.metadata {
+                WorkspaceResourceMetadata::GitWorktree(worktree) => Some((resource.id, worktree)),
+                _ => None,
+            });
+        let git_branch = resources
+            .iter()
+            .find_map(|resource| match &resource.metadata {
+                WorkspaceResourceMetadata::GitBranch(branch) => Some((resource.id, branch)),
+                _ => None,
+            });
+        let git = git_worktree.zip(git_branch).map(
+            |((worktree_resource_id, worktree), (branch_resource_id, branch))| {
+                GitWorkspaceSurface {
+                    repo_root: worktree.repo_root.clone(),
+                    worktree_root: branch.worktree_root.clone(),
+                    base_sha: branch.base_sha.clone(),
+                    worktree_path: worktree.worktree_path.clone(),
+                    branch_name: worktree.branch_name.clone(),
+                    worktree_resource_id,
+                    branch_resource_id,
+                }
+            },
+        );
+
+        Ok(Some(WorkspaceSurface {
+            snapshot_id: 0,
+            provider: change.provider,
+            resources,
+            changed_paths: change.changed_paths.clone(),
+            conflicts: change.conflicts.clone(),
+            git,
+        }))
     }
 
     fn cleanup_releasable_resources(&mut self) -> Result<(), EngineError> {
@@ -1021,11 +1099,73 @@ fn path_allowed(path: &str, scopes: &[String]) -> bool {
     })
 }
 
-fn inherit_child_defaults(parent: &ProblemNode, mut template: NodeTemplate) -> NodeTemplate {
+fn inherit_child_defaults(
+    parent: &ProblemNode,
+    mut template: NodeTemplate,
+) -> Result<NodeTemplate, EngineError> {
+    let child_read_scope = template.workspace.read_scope;
+    let child_write_scope = template.workspace.write_scope;
     template.workspace = parent.workspace.clone();
+    if !child_read_scope.is_empty() {
+        ensure_child_scopes_within_parent(
+            "read_scope",
+            &child_read_scope,
+            &parent.workspace.read_scope,
+        )?;
+        template.workspace.read_scope = child_read_scope;
+    }
+    if !child_write_scope.is_empty() {
+        ensure_child_scopes_within_parent(
+            "write_scope",
+            &child_write_scope,
+            &parent.workspace.write_scope,
+        )?;
+        template.workspace.write_scope = child_write_scope;
+    }
     template.capabilities = parent.capabilities.clone();
     template.budget = parent.budget.clone();
-    template
+    Ok(template)
+}
+
+fn ensure_child_scopes_within_parent(
+    label: &str,
+    child_scopes: &[String],
+    parent_scopes: &[String],
+) -> Result<(), EngineError> {
+    let invalid = child_scopes
+        .iter()
+        .filter(|scope| !scope_allowed_by_parent(scope, parent_scopes))
+        .cloned()
+        .collect::<Vec<_>>();
+    if invalid.is_empty() {
+        Ok(())
+    } else {
+        Err(EngineError::AgentProtocol(format!(
+            "child {label} outside parent workspace scope: {}",
+            invalid.join(", ")
+        )))
+    }
+}
+
+fn scope_allowed_by_parent(child_scope: &str, parent_scopes: &[String]) -> bool {
+    parent_scopes
+        .iter()
+        .any(|parent_scope| parent_scope_allows_child(parent_scope, child_scope))
+}
+
+fn parent_scope_allows_child(parent_scope: &str, child_scope: &str) -> bool {
+    parent_scope == "**/*"
+        || parent_scope == child_scope
+        || scope_prefix(parent_scope)
+            .is_some_and(|prefix| child_scope == prefix || child_scope.starts_with(&prefix))
+}
+
+fn scope_prefix(scope: &str) -> Option<String> {
+    ["**/*", "**", "*"]
+        .iter()
+        .filter_map(|marker| scope.find(marker).map(|index| &scope[..index]))
+        .find(|prefix| !prefix.is_empty())
+        .map(ToString::to_string)
 }
 
 fn check_cancelled(cancellation: &CancellationToken) -> Result<(), EngineError> {

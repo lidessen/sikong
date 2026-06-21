@@ -310,6 +310,13 @@ cargo run -- eval task-run-operation --operation plan --scenario all --json
 # model calls: each scenario runs the operation actor and then a judge actor.
 RUST_LOG=siko=info SIKONG_RUN_LIVE_AGENT_TESTS=1 \
 cargo run -- eval task-run-operation --operation all --scenario all --json
+
+# External YAML task-run scenario. Use this for dogfood tasks that should not be
+# hard-coded into the CLI's built-in eval matrix.
+RUST_LOG=siko=info SIKONG_RUN_LIVE_AGENT_TESTS=1 \
+cargo run -- eval task-run-split \
+  --scenario-file evals/task-run/dogfood-doc-review.yaml \
+  --artifact-dir /tmp/siko-dogfood-artifacts --json
 ```
 
 The operation matrix covers the important branch behavior before the full run:
@@ -324,6 +331,56 @@ The operation matrix covers the important branch behavior before the full run:
 The operation judge is also tool-driven. The evaluation context is included in
 the judge prompt, and the judge must end with `finish_eval`, so judge failures
 are visible as the same terminal-tool protocol failures as actor runs.
+
+### Dogfood Loop
+
+Live eval is also the main dogfood mechanism for improving Sikong itself. A
+dogfood loop is intentionally small:
+
+1. Run one realistic scenario against the current repository or a task shaped
+   like real Sikong work.
+2. Classify the evidence before changing code:
+   - protocol or runtime failures are engine/host bugs;
+   - repeated tool-use, token, latency, or cwd problems are prompt/runtime
+     surface issues;
+   - agent-written product recommendations are only candidate findings and
+     must be checked against the current architecture and file evidence.
+3. Pick one bounded improvement that reduces the observed failure mode.
+4. Prefer deterministic Rust checks, typed schemas, or workspace invariants
+   before adding prompt prose.
+5. Re-run the focused deterministic tests and, when the changed behavior is
+   live-agent-facing, re-run the same live scenario.
+6. Record the loop in `development-log/YYYY-MM.md`, including command, result,
+   drift, and reusable method feedback.
+
+This loop must not blindly implement the eval report. The eval agent is useful
+because it explores the system like a user, but the engine owner still decides
+which observations are current, architectural, and worth turning into code.
+
+The current git-backed dogfood scenarios are:
+
+```bash
+# Broad project analysis against the current Sikong worktree.
+SIKONG_RUN_LIVE_AGENT_TESTS=1 SIKONG_AGENT_HOST_PROVIDER=deepseek \
+SIKONG_AGENT_HOST_RUNTIME=claude-code RUST_LOG=siko=info \
+cargo run --quiet -- eval task-run-split --scenario sikong-project-analysis --json \
+  --artifact-dir /tmp/siko-dogfood-artifacts \
+  2>&1 | tee /tmp/siko-dogfood-project-analysis.log
+
+# Find redundant design or implementation surfaces.
+SIKONG_RUN_LIVE_AGENT_TESTS=1 SIKONG_AGENT_HOST_PROVIDER=deepseek \
+SIKONG_AGENT_HOST_RUNTIME=claude-code RUST_LOG=siko=info \
+cargo run --quiet -- eval task-run-split --scenario sikong-redundancy-audit --json \
+  --artifact-dir /tmp/siko-dogfood-artifacts \
+  2>&1 | tee /tmp/siko-dogfood-redundancy-audit.log
+
+# Draft or repair project design documentation.
+SIKONG_RUN_LIVE_AGENT_TESTS=1 SIKONG_AGENT_HOST_PROVIDER=deepseek \
+SIKONG_AGENT_HOST_RUNTIME=claude-code RUST_LOG=siko=info \
+cargo run --quiet -- eval task-run-split --scenario sikong-design-doc-draft --json \
+  --artifact-dir /tmp/siko-dogfood-artifacts \
+  2>&1 | tee /tmp/siko-dogfood-design-doc-draft.log
+```
 
 When investigating a slow or stuck live run, capture both Rust orchestration
 logs and Bun agent-loop activity:

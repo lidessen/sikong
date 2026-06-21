@@ -89,6 +89,8 @@ export interface ClaudeAdapterOptions {
  */
 export interface ClaudeRuntimeOptions {
   model?: string;
+  /** Per-run working directory override. */
+  cwd?: string;
   /** Override the soft turn cap (otherwise derived from `req.maxSteps`). */
   maxTurns?: number;
   /** Resume a prior session id. */
@@ -106,6 +108,8 @@ export interface ClaudeRuntimeOptions {
   systemPromptPreset?: ClaudeSystemPromptPreset;
   /** Extra environment variables merged with the adapter's. */
   env?: Record<string, string>;
+  /** Per-run directories the agent may access beyond cwd. */
+  allowedPaths?: string[];
 }
 
 const STREAM_SESSION_ID = "agent-loop-claude";
@@ -434,10 +438,10 @@ function buildOptions(args: {
 
   return {
     abortController,
-    cwd: opts.cwd,
+    cwd: o.cwd ?? opts.cwd,
     model: resolveClaudeModel(o.model ?? opts.model ?? opts.providerModel),
     env,
-    additionalDirectories: opts.allowedPaths,
+    additionalDirectories: o.allowedPaths ?? opts.allowedPaths,
     allowedTools,
     disallowedTools,
     permissionMode,

@@ -301,6 +301,14 @@ async fn host_unsafe_read_only_change_prunes_node() {
     let report = engine.run(root).await.unwrap();
 
     assert_eq!(report.status, NodeStatus::Pruned);
+    assert_eq!(
+        engine
+            .agent_runs()
+            .iter()
+            .map(|run| run.operation)
+            .collect::<Vec<_>>(),
+        vec![NodeOperation::Specify, NodeOperation::Execute]
+    );
     assert!(matches!(
         engine
             .attempts_for(&ProblemKey("host-read-only".to_string()))

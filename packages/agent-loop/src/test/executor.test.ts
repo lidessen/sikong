@@ -60,6 +60,43 @@ describe("loop factories + executor", () => {
     expect(ended).toBe(true);
   });
 
+  test("usage usedRatio is capped when runtime reports cumulative cost", async () => {
+    const adapter: BackendAdapter = {
+      id: "cumulative-usage",
+      capabilities: ["usage"],
+      start(): BackendRun {
+        return {
+          contextWindow: 100,
+          async *[Symbol.asyncIterator]() {
+            yield {
+              type: "usage",
+              inputTokens: 10,
+              outputTokens: 5,
+              totalTokens: 250,
+              cacheReadTokens: 235,
+              source: "runtime",
+            } satisfies LoopEvent;
+          },
+          result: Promise.resolve({
+            usage: { inputTokens: 10, outputTokens: 5, totalTokens: 250, cacheReadTokens: 235 },
+            durationMs: 1,
+          }),
+          cancel() {},
+        };
+      },
+    };
+    const loop = makeLoop("cumulative-usage", ["usage"], async () => adapter);
+    const events: LoopEvent[] = [];
+
+    for await (const ev of loop.run("go")) events.push(ev);
+
+    const usage = events.find(
+      (ev): ev is Extract<LoopEvent, { type: "usage" }> => ev.type === "usage",
+    );
+    expect(usage?.contextWindow).toBe(100);
+    expect(usage?.usedRatio).toBe(1);
+  });
+
   test("onToolUse can deny a tool", async () => {
     const loop = mockLoop({ simulateTool: "rm", toolArgs: { path: "/" } });
     const seen: LoopEvent[] = [];

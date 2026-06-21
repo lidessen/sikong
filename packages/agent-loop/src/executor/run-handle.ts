@@ -265,7 +265,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
             // when the adapter didn't already (central, DRY).
             const ctx = backendRun.contextWindow;
             if (ctx && ev.usedRatio === undefined) {
-              ev = { ...ev, contextWindow: ctx, usedRatio: ev.totalTokens / ctx };
+              ev = { ...ev, contextWindow: ctx, usedRatio: contextUsedRatio(ev.totalTokens, ctx) };
             }
             usage = addUsage(usage, ev);
             await hooks.onUsage?.(ev);
@@ -319,4 +319,11 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     cancel: (reason) => doCancel(reason),
     cleanup: (options) => doCleanup(options),
   };
+}
+
+function contextUsedRatio(totalTokens: number, contextWindow: number): number {
+  // Some runtimes report cumulative cache-read cost in usage snapshots. That is
+  // useful for billing, but it can exceed the model context window by many
+  // multiples and should not be rendered as context pressure.
+  return Math.min(totalTokens / contextWindow, 1);
 }

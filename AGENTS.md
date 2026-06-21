@@ -127,6 +127,18 @@ driven.
 - For live evals, make the judge finish through a terminal judgement tool, but
   put the transcript/eval context in the prompt section. Prefer
   `passed/findings/evidence` over score-like outputs.
+- Use live eval as Sikong's dogfood loop: run realistic current-repo scenarios,
+  classify transcript evidence before trusting the agent-written report, make
+  one bounded improvement, re-run focused checks, and record reusable feedback
+  in `development-log/YYYY-MM.md`.
+- For dogfood tasks, prefer `eval task-run-split --scenario-file ... --artifact-dir ...`
+  when a human needs to review the accepted artifact. The JSON transcript is
+  intentionally compact; artifact sidecars are the review surface for reports,
+  proposed docs, and patch proposals.
+- If dogfood work changes `packages/agent-host`, `packages/agent-loop`, or Rust
+  launch/config behavior for the external host, rebuild the runtime host with
+  `bun run build:agent-host` and rerun a focused live eval using the updated
+  runtime before calling the loop closed.
 
 Format Go files with `gofmt`. Use standard Go package names: short, lowercase, and descriptive, such as `daemon` or `buildinfo`. Command directories should match the binary name, for example `cmd/sikongd`.
 

@@ -50,6 +50,77 @@ async fn engine_harness_sends_structured_context_packet_to_agent_loop() {
 }
 
 #[tokio::test]
+async fn specify_uses_general_profile_even_for_git_workspace() {
+    let worker = RecordingAgentRunScheduler::default();
+    let recorder = worker.clone();
+    let mut engine = Engine::new(Workspaces::default(), worker);
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("git-specify".to_string()),
+        intent: "Audit the repository for stale design surfaces.".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::git(["design/**/*.md"]),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Execute,
+    });
+
+    let _ = engine.run(root).await;
+
+    let requests = recorder.requests();
+    let specify = requests
+        .iter()
+        .find(|request| request.terminal_tool_set == vec!["submit_specification"])
+        .expect("specify request");
+    assert_eq!(specify.runtime_profile, AgentRuntimeProfile::General);
+
+    let packet = parse_context_packet(specify);
+    assert_eq!(packet["node"]["workspace"]["provider"], "GitFileSystem");
+    assert!(
+        packet["node"]["workspace"]["git"]
+            .get("repo_root")
+            .is_none()
+    );
+    assert!(
+        packet["node"]["workspace"]["git"]
+            .get("worktree_root")
+            .is_none()
+    );
+}
+
+#[test]
+fn verify_with_file_workspace_surface_uses_code_profile() {
+    let context = AgentOperationContext {
+        node: ProblemNode {
+            workspace: WorkspaceRequirement::read_only_files(),
+            ..problem_node(NodePlan::Execute)
+        },
+        operation: NodeOperation::Verify,
+        candidate: Some(Artifact {
+            id: 1,
+            node_id: 1,
+            content_kind: ArtifactContentKind::Text,
+            text: "candidate".to_string(),
+            workspace_change: None,
+            children: Vec::new(),
+        }),
+        child_artifacts: Vec::new(),
+        workspace_surface: Some(WorkspaceSurface {
+            snapshot_id: 1,
+            provider: WorkspaceProvider::FileSystem,
+            resources: Vec::new(),
+            changed_paths: Vec::new(),
+            conflicts: Vec::new(),
+            git: None,
+        }),
+    };
+
+    let request = OperationHarness::new(context).build_agent_run();
+
+    assert_eq!(request.runtime_profile, AgentRuntimeProfile::Code);
+}
+
+#[tokio::test]
 async fn engine_harness_includes_candidate_child_and_workspace_surface_context() {
     let worker = RecordingAgentRunScheduler::default();
     let recorder = worker.clone();
@@ -237,6 +308,11 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
                 &request.prompt,
                 "Do not count surfaces mechanically"
             ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "independent evidence surfaces"
+            ));
+            assert!(prompt_contains(&request.prompt, "cross-surface comparison"));
             assert!(prompt_contains(&request.prompt, "one verification loop"));
             assert!(prompt_contains(&request.prompt, "missing user choice"));
             assert!(prompt_contains(
@@ -380,6 +456,18 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
                     .to_string()
                     .contains("requires_prior_results")
             );
+            assert!(
+                terminal_spec
+                    .input_schema
+                    .to_string()
+                    .contains("read_scope")
+            );
+            assert!(
+                terminal_spec
+                    .input_schema
+                    .to_string()
+                    .contains("write_scope")
+            );
         }
     }
 }
@@ -496,6 +584,7 @@ async fn engine_harness_decodes_agent_friendly_plan_items() {
                             "title": "Lock developer preview scope",
                             "description": "Write the smallest useful acceptance checklist.",
                             "verification": "Checklist has concrete pass/fail commands.",
+                            "read_scope": ["design/**/*.md"],
                             "size": "medium",
                             "reason": "One coherent child slice with focused tests.",
                             "requires_prior_results": false
@@ -527,6 +616,8 @@ async fn engine_harness_decodes_agent_friendly_plan_items() {
             .contains("Checklist has concrete pass/fail commands.")
     );
     assert_eq!(group.items[0].plan, NodePlan::Execute);
+    assert_eq!(group.items[0].workspace.read_scope, vec!["design/**/*.md"]);
+    assert!(group.items[0].workspace.write_scope.is_empty());
     assert_eq!(group.items[0].size, WorkSize::Medium);
     assert_eq!(
         group.items[0].scope_assessment.as_ref().unwrap().next,

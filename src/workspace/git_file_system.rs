@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::Path};
 
 use super::{
     GitBranchResource, GitCommitResource, GitWorkspaceChange, GitWorkspaceSnapshot,
@@ -58,7 +58,11 @@ impl GitFileSystemWorkspace {
             .git
             .as_ref()
             .map(|git| {
-                let branch_name = format!("sikong/node-{}-{branch_resource_id}", snapshot.id);
+                let branch_name = format!(
+                    "sikong/{}/node-{}-{branch_resource_id}",
+                    branch_scope(&git.worktree_root),
+                    snapshot.id
+                );
                 let worktree_path = git
                     .worktree_root
                     .join(format!("node-{}-{worktree_resource_id}", snapshot.id));
@@ -209,7 +213,10 @@ impl GitFileSystemWorkspace {
         }
 
         let first = git_changes[0];
-        let branch_name = format!("sikong/merge/{branch_resource_id}");
+        let branch_name = format!(
+            "sikong/{}/merge/{branch_resource_id}",
+            branch_scope(&first.worktree_root)
+        );
         let worktree_path = first
             .worktree_root
             .join(format!("merge-{worktree_resource_id}"));
@@ -370,7 +377,9 @@ impl Workspace for GitFileSystemWorkspace {
             WorkspaceResourceMetadata::GitBranch(git) => {
                 GitCli::delete_branch(&git.repo_root, &git.branch_name)
             }
-            WorkspaceResourceMetadata::GitCommit(_) | WorkspaceResourceMetadata::None => Ok(()),
+            WorkspaceResourceMetadata::GitCommit(_)
+            | WorkspaceResourceMetadata::FileSystemDirectory(_)
+            | WorkspaceResourceMetadata::None => Ok(()),
         }
     }
 }
@@ -384,4 +393,26 @@ fn dedupe_preserving_order(paths: impl IntoIterator<Item = String>) -> Vec<Strin
         }
     }
     deduped
+}
+
+fn branch_scope(worktree_root: &Path) -> String {
+    let scope = worktree_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workspace");
+    let sanitized: String = scope
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "workspace".to_string()
+    } else {
+        sanitized
+    }
 }
