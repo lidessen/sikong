@@ -86,6 +86,11 @@ old Go/Bun assumptions.
 Keep agent-facing protocols qualitative, evidence-backed, and terminal-tool
 driven.
 
+- For design-sensitive changes, read `design/development-philosophy.md` before
+  changing engine, assistant, task-run, workspace, agent-run, agent-host,
+  agent-loop, or dogfood behavior. New mechanisms must compile into the current
+  core loops instead of adding independent planner, scheduler, learner, quality,
+  memory, or repair subsystems.
 - Prompt and harness changes should follow `design/prompt-guidance.md`: preserve
   the load-bearing 30%, project only the current layer's context into each run,
   and let lower-layer agent loops own local execution detail.
@@ -113,6 +118,10 @@ driven.
   `finish_eval`, `query_messages`, or task-board commands. Terminal semantics
   belong to the run's `terminalToolSet`, not to separate business-specific
   tool-handling branches in `agent-host`.
+- Do not implement semantic quality, routing, task-understanding, or acceptance
+  checks through regexes, keyword lists, `includes(...)`, or fixed phrase
+  matching. Use schemas, typed decoding, explicit fields, verifier judgement,
+  workspace/resource facts, and settlement/verification evidence.
 - Claude Code runs must not load Claude settings sources. Do not support
   user/project/local `settingSources` for Sikong agent-loop runs; all context,
   tools, memory, plugins, and instructions must be mounted explicitly through
