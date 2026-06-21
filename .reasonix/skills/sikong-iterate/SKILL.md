@@ -67,7 +67,37 @@ For doc changes or code improvements that the engine identified:
 - Run `cargo test` to verify
 - Commit with descriptive message
 
-### 6. Record in Dev Log
+### 6. Meta-Review: Audit the Iteration Itself
+
+Before recording, step back and audit the cycle you just completed. This is not
+about the code change — it's about **how the iteration process itself went**.
+
+Ask:
+- **Was the right scenario chosen?** Could a cheaper/faster scenario have
+  produced the same recommendation?
+- **Was the engine recommendation correct?** Did the artifact miss anything
+  important? Were there hallucinated file paths or facts?
+- **Was the implementation faithful?** Did you follow the artifact's
+  recommendation, or did you deviate? Why?
+- **Were there any process problems?** E.g., real agent too slow, mock agent
+  too trivial, judge verdict unreliable, scenario scope wrong, dev-log entry
+  format inadequate.
+- **What should the NEXT cycle do differently?** This is method feedback for
+  the development loop itself — it feeds into future iteration improvements.
+
+Record these as a `Method feedback:` section in the dev-log entry. The format:
+
+```markdown
+Method feedback:
+
+- [concrete observation about what worked or didn't in this cycle]
+- [what to adjust next time]
+```
+
+This is the meta-learning layer. Without it, each cycle only improves the code,
+not the loop that improves the code.
+
+### 7. Record in Dev Log
 
 After a meaningful cycle, append to `development-log/2026-06.md`:
 - What was the goal?
@@ -75,11 +105,14 @@ After a meaningful cycle, append to `development-log/2026-06.md`:
 - What did the engine produce?
 - What changes were made?
 - What residual issues remain?
+- **Method feedback** — what to improve in the iteration process itself (from
+  step 6)
 
-### 7. Report to User
+### 8. Report to User
 
 Summarize what happened:
 - What scenario was run
 - Key results (passed/failed, findings)
 - What was implemented
+- Method feedback — what was learned about the iteration process
 - What the next good step would be
