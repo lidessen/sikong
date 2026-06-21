@@ -5,59 +5,31 @@ use serde::{Deserialize, Serialize};
 
 use super::{ArtifactId, Budget, CapabilityProfile, NodeId, NodeStatus, ProblemKey};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum WorkSize {
     Tiny,
+    #[default]
     Small,
     Medium,
     Large,
     XLarge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[schemars(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
-pub enum WorkShape {
-    Atomic,
-    Phased,
-    IndependentAreas,
-    Unknown,
-}
-
-impl Default for WorkShape {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
-impl Default for WorkSize {
-    fn default() -> Self {
-        Self::Small
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ScopeAssessment {
+    pub next: String,
     pub size: WorkSize,
-    pub shape: WorkShape,
-    pub reference_match: String,
-    pub scope_signals: Vec<String>,
+    pub reason: String,
 }
 
 impl ScopeAssessment {
-    pub fn new(
-        size: WorkSize,
-        shape: WorkShape,
-        reference_match: impl Into<String>,
-        scope_signals: Vec<String>,
-    ) -> Self {
+    pub fn new(next: impl Into<String>, size: WorkSize, reason: impl Into<String>) -> Self {
         Self {
+            next: next.into(),
             size,
-            shape,
-            reference_match: reference_match.into(),
-            scope_signals,
+            reason: reason.into(),
         }
     }
 }
@@ -65,7 +37,6 @@ impl ScopeAssessment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodePlan {
     Execute,
-    NeedsInfo { need: String, then: Box<NodePlan> },
     Split,
     Group(PlanGroup),
 }
@@ -125,7 +96,6 @@ pub struct ProblemNode {
     pub children: Vec<NodeId>,
     pub status: NodeStatus,
     pub plan: NodePlan,
-    pub acquired: Vec<String>,
     pub candidate: Option<ArtifactId>,
     pub accepted_artifact: Option<ArtifactId>,
     pub execution_attempts: u32,

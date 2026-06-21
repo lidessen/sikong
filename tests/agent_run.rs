@@ -19,8 +19,8 @@ async fn test_agent_selects_terminal_tool_from_run_config() {
                 input: json!({ "kind": "test" }),
                 tools: vec![
                     AgentToolSpec {
-                        name: "read_context".to_string(),
-                        description: "Read context.".to_string(),
+                        name: "inspect_fixture".to_string(),
+                        description: "Inspect fixture.".to_string(),
                         input_schema: json!({}),
                     },
                     AgentToolSpec {
@@ -30,6 +30,7 @@ async fn test_agent_selects_terminal_tool_from_run_config() {
                     },
                 ],
                 terminal_tool_set: vec!["submit_work".to_string()],
+                runtime_profile: AgentRuntimeProfile::General,
                 effort: None,
             },
             CancellationToken::new(),

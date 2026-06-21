@@ -52,48 +52,93 @@ async fn host_simple_leaf_commits_with_terminal_tools() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn host_acquire_can_rewrite_into_group_then_commit() {
-    if skip_without_bun("host_acquire_can_rewrite_into_group_then_commit") {
+async fn host_information_gathering_work_executes_as_a_normal_node() {
+    if skip_without_bun("host_information_gathering_work_executes_as_a_normal_node") {
         return;
     }
 
     let mut engine = memory_engine();
     let root = engine.insert_root(NodeTemplate {
-        key: ProblemKey("research-plan".to_string()),
-        intent: "combined findings".to_string(),
+        key: ProblemKey("provider-evidence".to_string()),
+        intent: "identify the selected provider and model in the current runtime config"
+            .to_string(),
         size: WorkSize::Small,
         scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
-        plan: NodePlan::NeedsInfo {
-            need: "source".to_string(),
-            then: Box::new(NodePlan::Group(PlanGroup {
-                mode: PlanGroupMode::Parallel,
-                items: vec![
-                    NodeTemplate::memory_leaf("research-a", "finding a"),
-                    NodeTemplate::memory_leaf("research-b", "finding b"),
-                ],
-            })),
-        },
+        plan: NodePlan::Execute,
     });
 
     let report = engine.run(root).await.unwrap();
 
     assert_eq!(report.status, NodeStatus::Committed);
-    let root_node = engine.node(root).unwrap();
-    assert_eq!(root_node.acquired, vec!["source=1"]);
-    assert_eq!(root_node.children.len(), 2);
     assert_eq!(
         engine.artifact(report.artifact.unwrap()).unwrap().text,
-        "combined findings"
+        "identify the selected provider and model in the current runtime config"
     );
-    assert!(
+    assert_eq!(
         engine
             .agent_runs()
             .iter()
-            .any(|run| run.operation == NodeOperation::Acquire
-                && run.terminal_tool.as_deref() == Some("submit_evidence"))
+            .map(|run| run.operation)
+            .collect::<Vec<_>>(),
+        vec![
+            NodeOperation::Specify,
+            NodeOperation::Execute,
+            NodeOperation::Verify,
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_specify_can_rewrite_missing_context_into_evidence_work() {
+    if skip_without_bun("host_specify_can_rewrite_missing_context_into_evidence_work") {
+        return;
+    }
+
+    let mut engine = memory_engine();
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("provider-config".to_string()),
+        intent: "Configure the production model provider selected by the user, but the provider choice is not present."
+            .to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Execute,
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    let node = engine.node(root).unwrap();
+    assert_eq!(
+        node.intent,
+        "Identify which provider and model are selected in the current runtime config."
+    );
+    assert_eq!(node.size, WorkSize::Tiny);
+    assert_eq!(node.plan, NodePlan::Execute);
+    assert_eq!(
+        node.scope_assessment.as_ref().unwrap().reason,
+        "The evidence-gathering work is tiny even though the broader setup depends on it."
+    );
+    assert_eq!(report.status, NodeStatus::Committed);
+    assert_eq!(
+        engine.artifact(report.artifact.unwrap()).unwrap().text,
+        "Identify which provider and model are selected in the current runtime config."
+    );
+    assert_eq!(
+        engine
+            .agent_runs()
+            .iter()
+            .map(|run| run.operation)
+            .collect::<Vec<_>>(),
+        vec![
+            NodeOperation::Specify,
+            NodeOperation::Execute,
+            NodeOperation::Verify,
+        ]
     );
 }
 
@@ -220,8 +265,8 @@ async fn host_uncertain_verdict_moves_node_to_waiting_for_info() {
         engine
             .agent_runs()
             .iter()
-            .any(|run| run.operation == NodeOperation::Acquire
-                && run.terminal_tool.as_deref() == Some("submit_evidence"))
+            .any(|run| run.operation == NodeOperation::Verify
+                && run.terminal_tool.as_deref() == Some("submit_verdict"))
     );
 }
 
@@ -362,10 +407,7 @@ async fn host_git_workspace_surface_is_written_captured_and_cleaned() {
     assert!(repo.worktrees().read_dir().unwrap().next().is_none());
     assert!(repo.git(["branch", "--list", "sikong/*"]).trim().is_empty());
     assert!(engine.agent_runs().iter().any(|run| {
-        run.operation == NodeOperation::Execute
-            && run
-                .report
-                .contains("tool calls read_operation_context -> submit_work")
+        run.operation == NodeOperation::Execute && run.report.contains("tool calls submit_work")
     }));
 }
 

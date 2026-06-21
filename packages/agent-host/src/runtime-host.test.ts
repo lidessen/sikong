@@ -58,6 +58,7 @@ function validRunRequest(): AgentRunRequest {
       },
     ],
     terminalToolSet: ["finish"],
+    runtimeProfile: "general",
   };
 }
 

@@ -81,6 +81,53 @@ Format Rust files with `cargo fmt`. Keep Rust modules small and aligned with
 Rust API shapes should follow the current `src/` patterns instead of preserving
 old Go/Bun assumptions.
 
+## Agent Protocol & Evaluation Patterns
+
+Keep agent-facing protocols qualitative, evidence-backed, and terminal-tool
+driven.
+
+- Prompt and harness changes should follow `design/prompt-guidance.md`: preserve
+  the load-bearing 30%, project only the current layer's context into each run,
+  and let lower-layer agent loops own local execution detail.
+- When live eval exposes bad model behavior, do not first add long
+  forbidden-example lists to the prompt. First ask whether the prompt is
+  over-projecting context, making the task more specific than the raw intent,
+  or missing a schema/state-machine/tool constraint. Prefer a smaller prompt
+  plus a tighter terminal tool contract over prose bans such as "do not invent
+  env vars, paths, protocols, error codes, ...".
+- Do not ask agents to produce subjective numeric estimates such as scores,
+  confidence percentages, probability ratings, difficulty numbers, or
+  0-to-1/1-to-10 judgements. Use structured qualitative fields instead:
+  `passed` plus findings/evidence for evals, or enum-like choices plus `reason`
+  for routing decisions.
+- Numeric fields are fine for deterministic system telemetry and configuration,
+  such as token counts, durations, attempt counters, limits, offsets, prices,
+  line numbers, and protocol versions. They should not represent the model's
+  subjective self-assessment.
+- Immutable per-run context should be provided as prompt/input context sections,
+  not as a generic `read_*_context` tool. Avoid context-reader tools whose only
+  purpose is to return the current request packet; they invite repeated calls
+  and duplicate token cost.
+- Tools should represent actions, terminal submissions, or bounded queries over
+  larger state. Examples: `submit_specification`, `submit_work`,
+  `finish_eval`, `query_messages`, or task-board commands. Terminal semantics
+  belong to the run's `terminalToolSet`, not to separate business-specific
+  tool-handling branches in `agent-host`.
+- Claude Code runs must not load Claude settings sources. Do not support
+  user/project/local `settingSources` for Sikong agent-loop runs; all context,
+  tools, memory, plugins, and instructions must be mounted explicitly through
+  `AgentRunRequest`.
+- Runtime profiles are deliberately coarse: `general` for Sikong control,
+  assistant, and general work; `code` for work that should use Claude Code's
+  coding prompt/tool behavior. Do not add fine-grained runtime profiles without
+  repeated live-eval evidence. Disable orchestration escape tools such as
+  sub-agent launchers and Claude plan mode, but do not blanket-disable current
+  Claude task-tracking tools such as `TaskCreate`, `TaskUpdate`, `TaskGet`, and
+  `TaskList`.
+- For live evals, make the judge finish through a terminal judgement tool, but
+  put the transcript/eval context in the prompt section. Prefer
+  `passed/findings/evidence` over score-like outputs.
+
 Format Go files with `gofmt`. Use standard Go package names: short, lowercase, and descriptive, such as `daemon` or `buildinfo`. Command directories should match the binary name, for example `cmd/sikongd`.
 
 TypeScript uses Bun with strict `tsconfig.json` settings and TypeScript Native Preview (`tsgo`) for type checking. Use two-space indentation for JSON and TypeScript. Workspace package names should use the `@sikong/*` scope.

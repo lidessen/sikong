@@ -48,17 +48,7 @@ fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
         .unwrap_or("mock output");
 
     match tool_name {
-        "submit_specification" => mock_specification_args(plan.as_ref()),
-        "submit_evidence" => match plan {
-            Some(NodePlan::NeedsInfo { need, .. }) => json!({
-                "need": need,
-                "evidence": format!("evidence for {intent}"),
-            }),
-            _ => json!({
-                "need": "missing_information",
-                "evidence": "mock evidence",
-            }),
-        },
+        "submit_specification" => mock_specification_args(intent, plan.as_ref()),
         "submit_plan_group" => match plan {
             Some(NodePlan::Group(group)) => json!({
                 "mode": group.mode,
@@ -67,7 +57,8 @@ fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
                         "key": item.key.0,
                         "intent": item.intent,
                         "size": item.size,
-                        "shape": item.scope_assessment.as_ref().map(|assessment| assessment.shape).unwrap_or_default(),
+                        "reason": item.scope_assessment.as_ref().map(|assessment| assessment.reason.clone()),
+                        "requires_prior_results": false,
                     })
                 }).collect::<Vec<_>>(),
             }),
@@ -94,28 +85,17 @@ fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
     }
 }
 
-fn mock_specification_args(plan: Option<&NodePlan>) -> Value {
+fn mock_specification_args(intent: &str, plan: Option<&NodePlan>) -> Value {
     match plan {
-        Some(NodePlan::NeedsInfo { need, .. }) => json!({
-            "size": "small",
-            "shape": "unknown",
-            "reference_match": "This is closest to Small, but one explicit missing information need blocks execution.",
-            "scope_signals": ["missing information blocks the next action"],
-            "missing_info": need,
-        }),
         Some(NodePlan::Group(_)) | Some(NodePlan::Split) => json!({
+            "next": intent,
             "size": "large",
-            "shape": "phased",
-            "reference_match": "This is closest to Large because the fixture already contains multiple child work items.",
-            "scope_signals": ["multiple child work items", "requires planning before execution"],
-            "missing_info": null,
+            "reason": "This is closest to Large because the fixture already contains multiple child work items."
         }),
         _ => json!({
+            "next": intent,
             "size": "small",
-            "shape": "atomic",
-            "reference_match": "This is closest to Small because the test scheduler mirrors one local node with one terminal path.",
-            "scope_signals": ["one local problem", "one verification path"],
-            "missing_info": null,
+            "reason": "This is closest to Small because the test scheduler mirrors one local node with one terminal path."
         }),
     }
 }
@@ -125,6 +105,12 @@ fn verdict_for(intent: &str, attempt: usize) -> VerificationVerdict {
         return VerificationVerdict::Reject {
             failure_class: FailureClass::BadOutput,
             reason: "bad output".to_string(),
+        };
+    }
+    if intent.contains("missing-info reject") {
+        return VerificationVerdict::Reject {
+            failure_class: FailureClass::MissingInfo,
+            reason: "missing source evidence".to_string(),
         };
     }
     if intent.contains("retry once") && attempt == 0 {

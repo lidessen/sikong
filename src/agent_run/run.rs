@@ -54,6 +54,14 @@ pub enum AgentEffort {
     Max,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentRuntimeProfile {
+    #[default]
+    General,
+    Code,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AgentTokenUsage {
     #[serde(rename = "inputTokens", default)]
@@ -98,6 +106,8 @@ pub struct AgentRunRequest {
     pub tools: Vec<AgentToolSpec>,
     #[serde(rename = "terminalToolSet")]
     pub terminal_tool_set: Vec<String>,
+    #[serde(rename = "runtimeProfile")]
+    pub runtime_profile: AgentRuntimeProfile,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<AgentEffort>,
 }
@@ -117,8 +127,14 @@ impl AgentRunRequest {
             input,
             tools,
             terminal_tool_set,
+            runtime_profile: AgentRuntimeProfile::General,
             effort: None,
         }
+    }
+
+    pub(crate) fn with_runtime_profile(mut self, runtime_profile: AgentRuntimeProfile) -> Self {
+        self.runtime_profile = runtime_profile;
+        self
     }
 
     pub(crate) fn with_effort(mut self, effort: AgentEffort) -> Self {

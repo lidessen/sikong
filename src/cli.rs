@@ -4,16 +4,16 @@ use std::time::Instant;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use siko::{
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
-    AgentRunResult, AgentRunScheduler, AgentTokenUsage, AgentToolCall, AgentToolSpec, Artifact,
-    ArtifactContentKind, AssistantSession, AssistantSessionConfig, AssistantTaskEvent, Budget,
-    CancellationToken, CapabilityProfile, DebugConfig, Engine, FileTaskStore, MemoryWorkspace,
-    NodeId, NodeOperation, NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate,
-    OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler,
-    SikoConfig, TaskStore, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface,
-    run_acp_stdio_server,
+    AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
+    AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
+    AssistantTaskEvent, Budget, CancellationToken, CapabilityProfile, DebugConfig, Engine,
+    FileTaskStore, MemoryWorkspace, NodeId, NodeOperation, NodeOperationOutput, NodePlan,
+    NodeStatus, NodeTemplate, OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode,
+    ProcessAgentRunScheduler, SikoConfig, TaskStore, WorkSize, WorkspaceProvider,
+    WorkspaceRequirement, WorkspaceSurface, run_acp_stdio_server,
 };
 use tracing::error;
 use tracing_subscriber::EnvFilter;
@@ -347,10 +347,9 @@ async fn run_task_run_split_eval_async(
         );
         for result in &output.results {
             println!(
-                "- {} passed={} score={:.2} duration={}ms agent_tokens={} judge_tokens={} total_tokens={}",
+                "- {} passed={} duration={}ms agent_tokens={} judge_tokens={} total_tokens={}",
                 result.scenario,
                 result.judgement.passed,
-                result.judgement.score,
                 result.duration_ms,
                 result.actor_usage.total_tokens,
                 result
@@ -446,7 +445,6 @@ async fn run_task_run_operation_eval_async(
             (
                 OperationEvalJudgement {
                     passed: false,
-                    score: 0.0,
                     findings: vec!["operation output failed Rust protocol decoding".to_string()],
                     evidence: decoded_summary.clone().into_iter().collect(),
                 },
@@ -497,11 +495,10 @@ async fn run_task_run_operation_eval_async(
         );
         for result in &output.results {
             println!(
-                "- {}:{} passed={} score={:.2} decoded={} duration={}ms terminal={} tokens={} in={} out={} cache_read={}",
+                "- {}:{} passed={} decoded={} duration={}ms terminal={} tokens={} in={} out={} cache_read={}",
                 result.operation,
                 result.scenario,
                 result.judgement.passed,
-                result.judgement.score,
                 result.decoded,
                 result.duration_ms,
                 result.terminal_tool.as_deref().unwrap_or("<none>"),
@@ -553,7 +550,7 @@ fn task_run_split_eval_scenarios() -> Vec<TaskRunSplitScenario> {
         },
         TaskRunSplitScenario {
             id: "design-analysis",
-            task: "Analyze this self-contained Rust-controlled agent task-run engine design and propose reliability improvements for planning, execution, verification, and logging. Design summary: Rust owns the engine state machine and workspace resources; each node first runs Specify to assess work size and shape, then the engine chooses Execute, Acquire, or Plan; Plan can create either Stage or Parallel child nodes; every child re-enters Specify before execution; Bun agent-host runs one agent loop per operation through terminal tools; Memory workspace is used for this eval, so produce analysis artifacts rather than editing files."
+            task: "Analyze this self-contained Rust-controlled agent task-run engine design and propose reliability improvements for planning, execution, verification, and logging. Design summary: Rust owns the engine state machine and workspace resources; each node first runs Specify to submit next, size, and reason; the engine maps small next work to Execute and large next work to Plan; Plan can create either Stage or Parallel child nodes; every child re-enters Specify before execution; Bun agent-host runs one agent loop per operation through terminal tools; Memory workspace is used for this eval, so produce analysis artifacts rather than editing files."
                 .to_string(),
             expectation: "This is a self-contained analysis task with one primary recommendation artifact. The engine may keep it atomic if the final analysis covers planning, execution, verification, and logging with coherent reliability improvements; do not require decomposition solely because the output is structured.",
         },
@@ -651,7 +648,6 @@ struct TaskRunSplitEvalResult {
 #[derive(Debug, Deserialize, Serialize)]
 struct TaskRunSplitJudgement {
     passed: bool,
-    score: f64,
     findings: Vec<String>,
     evidence: Vec<String>,
 }
@@ -681,7 +677,6 @@ struct TaskRunOperationEvalResult {
 #[derive(Debug, Deserialize, Serialize)]
 struct OperationEvalJudgement {
     passed: bool,
-    score: f64,
     findings: Vec<String>,
     evidence: Vec<String>,
 }
@@ -748,7 +743,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
         OperationEvalScenario {
             id: "execute",
             operation: NodeOperation::Specify,
-            expectation: "Specify should classify this as a tiny or small atomic scope with no missing_info; the engine, not the agent, decides execute.",
+            expectation: "Specify should produce next as the release-note polish work, size tiny or small, and a concise reason. It must not submit route, shape, or missing_info fields.",
             context: operation_context(
                 NodeOperation::Specify,
                 problem_node(
@@ -765,7 +760,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
         OperationEvalScenario {
             id: "split",
             operation: NodeOperation::Specify,
-            expectation: "Specify should classify this node intent as large or xlarge with phased or independent_areas shape and no missing_info; it must not submit a split/execute plan.",
+            expectation: "Specify should keep next focused on the developer-preview preparation work, classify its size as large or xlarge, and explain why the engine should plan it by size. It must not submit a split/execute route.",
             context: operation_context(
                 NodeOperation::Specify,
                 problem_node(
@@ -782,7 +777,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
         OperationEvalScenario {
             id: "coherent-medium",
             operation: NodeOperation::Specify,
-            expectation: "Specify should classify this as medium coherent work with atomic or phased shape, no missing_info, and no premature decomposition. It should use the scope examples as analogies instead of treating every multi-file task as large.",
+            expectation: "Specify should produce next as one coherent prompt/test/eval improvement, classify size as medium, and explain why it should stay together instead of being prematurely decomposed.",
             context: operation_context(
                 NodeOperation::Specify,
                 problem_node(
@@ -797,37 +792,16 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
             ),
         },
         OperationEvalScenario {
-            id: "needs-info",
+            id: "evidence-work",
             operation: NodeOperation::Specify,
-            expectation: "Specify should return missing_info when the next action depends on a missing external choice; it must not submit a needs_info plan.",
+            expectation: "Specify should make next the concrete evidence-gathering work, size that evidence work rather than the broader configuration goal, and explain why provider-specific configuration depends on that evidence. It must not use missing_info.",
             context: operation_context(
                 NodeOperation::Specify,
                 problem_node(
                     1,
-                    "specify-needs-info",
+                    "specify-evidence-work",
                     "Configure the production model provider selected by the user, but the provider choice is not present.",
                     NodePlan::Execute,
-                ),
-                None,
-                Vec::new(),
-                None,
-            ),
-        },
-        OperationEvalScenario {
-            id: "resolve-missing-scope",
-            operation: NodeOperation::Acquire,
-            expectation: "Acquire should answer the stated information gap with concise evidence; it must not choose the next plan.",
-            context: operation_context(
-                NodeOperation::Acquire,
-                problem_node(
-                    1,
-                    "acquire-scope",
-                    "Audit task_run source against the recursive engine design.",
-                    NodePlan::NeedsInfo {
-                        need: "Identify the minimal repository read scope required for the audit."
-                            .to_string(),
-                        then: Box::new(NodePlan::Execute),
-                    },
                 ),
                 None,
                 Vec::new(),
@@ -1040,7 +1014,6 @@ fn problem_node(id: NodeId, key: &str, intent: &str, plan: NodePlan) -> ProblemN
         children: Vec::new(),
         status: NodeStatus::New,
         plan,
-        acquired: Vec::new(),
         candidate: None,
         accepted_artifact: None,
         execution_attempts: 0,
@@ -1073,7 +1046,6 @@ fn memory_surface(conflicts: Vec<&str>) -> WorkspaceSurface {
 fn operation_name(operation: NodeOperation) -> &'static str {
     match operation {
         NodeOperation::Specify => "specify",
-        NodeOperation::Acquire => "acquire",
         NodeOperation::Plan => "plan",
         NodeOperation::Execute => "execute",
         NodeOperation::Combine => "combine",
@@ -1084,19 +1056,17 @@ fn operation_name(operation: NodeOperation) -> &'static str {
 
 fn operation_result_summary(result: &AgentRunResult) -> String {
     match &result.output {
-        NodeOperationOutput::Specified {
-            scope_assessment,
-            missing_info,
-        } => format!(
-            "specified size={:?} shape={:?} missing_info={missing_info:?}",
-            scope_assessment.size, scope_assessment.shape
-        ),
-        NodeOperationOutput::Acquired { need, evidence } => format!(
-            "acquired need={need:?} evidence={}",
-            truncate_for_eval(evidence, 400)
+        NodeOperationOutput::Specified { scope_assessment } => format!(
+            "specified next={} size={:?} reason={}",
+            truncate_for_eval(&scope_assessment.next, 240),
+            scope_assessment.size,
+            truncate_for_eval(&scope_assessment.reason, 240)
         ),
         NodeOperationOutput::Planned { group } => {
             format!("planned mode={:?} items={}", group.mode, group.items.len())
+        }
+        NodeOperationOutput::InvalidPlan { reason } => {
+            format!("invalid plan reason={}", truncate_for_eval(reason, 240))
         }
         NodeOperationOutput::Executed { output } => {
             format!("executed output={}", truncate_for_eval(output, 500))
@@ -1122,6 +1092,14 @@ fn operation_judge_request(
     response: &AgentRunResponse,
     decoded_output: Option<&str>,
 ) -> AgentRunRequest {
+    let input = json!({
+        "operation": format!("{:?}", scenario.operation),
+        "scenario": scenario.id,
+        "expectation": scenario.expectation,
+        "request": request,
+        "response": response,
+        "decoded_output": decoded_output,
+    });
     AgentRunRequest {
         protocol_version: 1,
         objective: format!(
@@ -1135,40 +1113,25 @@ fn operation_judge_request(
                     .to_string(),
             },
             AgentPromptSection {
+                title: "Evaluation Context".to_string(),
+                content: render_json_prompt_context(&input),
+            },
+            AgentPromptSection {
                 title: "Rubric".to_string(),
-                content: "Use read_eval_context before judging. Judge whether this isolated operation behaved like the requested operation and scenario. Pass only if it stayed inside that operation's role, used the expected terminal tool, produced a useful result for the scenario, and did not perform another operation's responsibility. Treat explicit scenario constraints such as no missing_info as hard requirements. Do not require full task completion; this is an operation-level eval."
+                content: "Judge whether this isolated operation behaved like the requested operation and scenario. Pass only if it stayed inside that operation's role, used the expected terminal tool, produced a useful result for the scenario, and did not perform another operation's responsibility. Treat explicit scenario constraints such as not using legacy route, shape, or missing_info fields as hard requirements. Do not require full task completion; this is an operation-level eval."
                     .to_string(),
             },
             AgentPromptSection {
                 title: "Output".to_string(),
-                content: "You must finish by calling the finish_eval tool with passed, score from 0 to 1, findings, and evidence. A plain text answer is invalid."
+                content: "You must finish by calling the finish_eval tool with passed, findings, and evidence. A plain text answer is invalid."
                     .to_string(),
             },
         ],
-        input: json!({
-            "operation": format!("{:?}", scenario.operation),
-            "scenario": scenario.id,
-            "expectation": scenario.expectation,
-            "request": request,
-            "response": response,
-            "decoded_output": decoded_output,
-        }),
-        tools: vec![read_eval_context_tool_spec(), eval_judgement_tool_spec()],
+        input,
+        tools: vec![eval_judgement_tool_spec()],
         terminal_tool_set: vec!["finish_eval".to_string()],
+        runtime_profile: AgentRuntimeProfile::General,
         effort: None,
-    }
-}
-
-fn read_eval_context_tool_spec() -> AgentToolSpec {
-    AgentToolSpec {
-        name: "read_eval_context".to_string(),
-        description: "Read the current evaluation transcript and decoded operation result."
-            .to_string(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        }),
     }
 }
 
@@ -1180,7 +1143,6 @@ fn eval_judgement_tool_spec() -> AgentToolSpec {
             "type": "object",
             "properties": {
                 "passed": { "type": "boolean" },
-                "score": { "type": "number" },
                 "findings": {
                     "type": "array",
                     "items": { "type": "string" }
@@ -1190,7 +1152,7 @@ fn eval_judgement_tool_spec() -> AgentToolSpec {
                     "items": { "type": "string" }
                 }
             },
-            "required": ["passed", "score", "findings", "evidence"],
+            "required": ["passed", "findings", "evidence"],
             "additionalProperties": false
         }),
     }
@@ -1249,6 +1211,7 @@ impl TaskRunSplitTranscript {
 }
 
 fn judge_request(transcript: &TaskRunSplitTranscript) -> AgentRunRequest {
+    let input = json!({ "transcript": transcript });
     AgentRunRequest {
         protocol_version: 1,
         objective: "Judge task-run split quality".to_string(),
@@ -1259,20 +1222,32 @@ fn judge_request(transcript: &TaskRunSplitTranscript) -> AgentRunRequest {
                     .to_string(),
             },
             AgentPromptSection {
+                title: "Evaluation Context".to_string(),
+                content: render_json_prompt_context(&input),
+            },
+            AgentPromptSection {
                 title: "Rubric".to_string(),
-                content: "Use read_eval_context before judging. Judge whether the engine completed a real single task run and selected an appropriate execution shape for the scenario expectation. Do not require decomposition for simple tasks; penalize unnecessary splitting when the expectation says the task should remain atomic. For broad design, engineering, or application delivery tasks, expect a real Specify decision, Plan operation, meaningful child nodes or stages, child Execute operations when split, Combine when needed, verification, and a final commit or clearly justified terminal state. Child nodes must be relevant to the original task and must not be trivial copies or an over-fragmented checklist. Penalize skipped major phases, weak final artifacts, long stalls, protocol failures, or expensive runs that do not buy useful coverage."
+                content: "Judge whether the engine completed a real single task run and selected an appropriate execution shape for the scenario expectation. Pass only when the final status and artifact satisfy the scenario. For simple answer, analysis, and small delivery tasks, WaitingForInfo, Pruned, Failed, missing artifact, or a blocker-only artifact is not a pass unless the scenario explicitly asks for missing-information handling. Do not require decomposition for simple tasks; penalize unnecessary splitting when the expectation says the task should remain atomic. For broad design, engineering, or application delivery tasks, expect a real Specify decision, Plan operation, meaningful child nodes or stages, child Execute operations when split, Combine when needed, verification, and a final commit or clearly justified terminal state. Child nodes must be relevant to the original task and must not be trivial copies or an over-fragmented checklist. Penalize skipped major phases, weak final artifacts, long stalls, protocol failures, or expensive runs that do not buy useful coverage."
                     .to_string(),
             },
             AgentPromptSection {
                 title: "Output".to_string(),
-                content: "You must finish by calling the finish_eval tool with passed, score from 0 to 1, findings, and evidence. A plain text answer is invalid."
+                content: "You must finish by calling the finish_eval tool with passed, findings, and evidence. A plain text answer is invalid."
                     .to_string(),
             },
         ],
-        input: json!({ "transcript": transcript }),
-        tools: vec![read_eval_context_tool_spec(), eval_judgement_tool_spec()],
+        input,
+        tools: vec![eval_judgement_tool_spec()],
         terminal_tool_set: vec!["finish_eval".to_string()],
+        runtime_profile: AgentRuntimeProfile::General,
         effort: None,
+    }
+}
+
+fn render_json_prompt_context(value: &Value) -> String {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => format!("```json\n{json}\n```"),
+        Err(_) => value.to_string(),
     }
 }
 

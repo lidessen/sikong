@@ -32,7 +32,6 @@ const DEEPSEEK_ANTHROPIC = "https://api.deepseek.com/anthropic";
 /** DeepSeek's cheap/fast tier — used for Claude Code haiku-level + subagent calls. */
 const DEEPSEEK_FLASH = "deepseek-v4-flash";
 const KIMI_CODE_ANTHROPIC = "https://api.kimi.com/coding/";
-const KIMI_CODE_MODEL = "kimi-for-coding";
 const ANTHROPIC_BASE = "https://api.anthropic.com";
 const OPENAI_BASE = "https://api.openai.com/v1";
 

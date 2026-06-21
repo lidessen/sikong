@@ -19,6 +19,7 @@ async fn engine_harness_sends_structured_context_packet_to_agent_loop() {
         .find(|request| request.terminal_tool_set == vec!["submit_work"])
         .expect("execute request");
     assert_eq!(execute.protocol_version, 1);
+    assert_eq!(execute.runtime_profile, AgentRuntimeProfile::General);
     assert!(prompt_contains(&execute.prompt, "atomic execution pass"));
     assert!(prompt_contains(&execute.prompt, "submit_work"));
     assert_eq!(execute.terminal_tool_set, vec!["submit_work"]);
@@ -28,7 +29,7 @@ async fn engine_harness_sends_structured_context_packet_to_agent_loop() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["read_operation_context", "submit_work"]
+        vec!["submit_work"]
     );
 
     let packet = parse_context_packet(execute);
@@ -76,6 +77,7 @@ async fn engine_harness_includes_candidate_child_and_workspace_surface_context()
         .iter()
         .find(|request| request.terminal_tool_set == vec!["submit_combination"])
         .expect("combine request");
+    assert_eq!(combine.runtime_profile, AgentRuntimeProfile::Code);
     let packet = parse_context_packet(combine);
     assert_eq!(packet["operation"], "Combine");
     let child_artifacts = packet["child_artifacts"].as_array().unwrap();
@@ -150,15 +152,8 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             NodeOperation::Specify,
             "submit_specification",
             "Node To Specify",
-            "Normalize node",
-            "size",
-        ),
-        (
-            NodeOperation::Acquire,
-            "submit_evidence",
-            "Evidence Standard",
-            "missing information",
-            "evidence",
+            "Turn the raw intent into the next useful unit of work",
+            "next",
         ),
         (
             NodeOperation::Plan,
@@ -198,7 +193,7 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             child_artifacts: Vec::new(),
             workspace_surface: None,
         };
-        let expected_tools = vec!["read_operation_context", terminal_tool];
+        let expected_tools = vec![terminal_tool];
         let harness = OperationHarness::new(context);
         let request = harness.build_agent_run();
 
@@ -206,41 +201,127 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
         assert_eq!(request.objective, format!("{operation:?} node 1"));
         assert!(request.prompt.len() >= 5);
         assert!(prompt_section_exists(&request.prompt, "Role"));
-        assert!(prompt_section_exists(&request.prompt, "Context Access"));
+        assert!(prompt_section_exists(&request.prompt, "Operation Context"));
         assert!(prompt_section_exists(&request.prompt, expected_section));
         assert!(prompt_section_exists(&request.prompt, "Completion"));
         assert!(prompt_contains(&request.prompt, prompt_fragment));
-        assert!(prompt_contains(&request.prompt, "read_operation_context"));
+        assert!(prompt_contains(
+            &request.prompt,
+            "\"kind\": \"engine_operation\""
+        ));
+        assert!(!prompt_contains(&request.prompt, "read_operation_context"));
         assert!(prompt_contains(&request.prompt, terminal_tool));
-        if operation == NodeOperation::Acquire {
-            assert!(prompt_contains(
-                &request.prompt,
-                "engine can re-run Specify"
-            ));
-            assert!(!prompt_contains(&request.prompt, "next_plan.kind"));
-        }
         if operation == NodeOperation::Specify {
             assert!(prompt_contains(
                 &request.prompt,
-                "smallest safe size by cognitive load"
-            ));
-            assert!(prompt_contains(&request.prompt, "tiny feels like"));
-            assert!(prompt_contains(&request.prompt, "xlarge"));
-            assert!(prompt_contains(&request.prompt, "Scope Examples"));
-            assert!(prompt_contains(&request.prompt, "Use these as analogies"));
-            assert!(prompt_contains(
-                &request.prompt,
-                "Ask for missing information only"
+                "smallest safe size by coordination cost"
             ));
             assert!(prompt_contains(
                 &request.prompt,
-                "submit missing_info as null"
+                "without dropping stated responsibilities"
             ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "intent-preserving rewrite"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Do not make the task more specific than the raw intent"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Size controls execution shape"
+            ));
+            assert!(prompt_contains(&request.prompt, "coherent change package"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Do not count surfaces mechanically"
+            ));
+            assert!(prompt_contains(&request.prompt, "one verification loop"));
+            assert!(prompt_contains(&request.prompt, "missing user choice"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "tiny, small, medium, large, x_large"
+            ));
+            assert!(prompt_contains(&request.prompt, "tiny is a direct answer"));
+            assert!(prompt_contains(&request.prompt, "x_large"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "information gathering is just another possible next work"
+            ));
+            assert!(!prompt_contains(&request.prompt, "missing_info"));
         }
         if operation == NodeOperation::Plan {
             assert!(prompt_contains(
                 &request.prompt,
-                "size, shape, reference_match, and scope_signals"
+                "size and reason when useful"
+            ));
+            assert!(prompt_contains(&request.prompt, "ordered phases are stage"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "mutually independent peer surfaces are parallel"
+            ));
+            assert!(prompt_contains(&request.prompt, "Submit at least one item"));
+            assert!(prompt_contains(&request.prompt, "requires_prior_results"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "parent Combine pass performs that integration"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "natural next-level subproblem"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Keep child intents concise and outcome-level"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Recursive planning is allowed"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "That second split should be decided by the child Specify/Plan pass"
+            ));
+        }
+        if operation == NodeOperation::Execute {
+            assert!(prompt_contains(&request.prompt, "no readable surface"));
+            assert!(prompt_contains(&request.prompt, "read_scope controls"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "allow_write controls mutation only"
+            ));
+            assert!(prompt_contains(&request.prompt, "Self Contained Work"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Empty read_scope is not a blocker"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Keep unknown details at the appropriate abstraction level"
+            ));
+        }
+        if operation == NodeOperation::Combine {
+            assert!(prompt_contains(&request.prompt, "complete available input"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "do not defer by saying you will inspect files"
+            ));
+            assert!(prompt_contains(&request.prompt, "names the conflict path"));
+        }
+        if operation == NodeOperation::Verify {
+            assert!(prompt_contains(
+                &request.prompt,
+                "exactly one of: accept, reject, need_information"
+            ));
+            assert!(prompt_contains(&request.prompt, "return verdict=accept"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Empty read_scope is not missing information"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "Verify against the node intent and available context"
             ));
         }
         assert_eq!(request.terminal_tool_set, vec![terminal_tool]);
@@ -278,15 +359,27 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             );
         }
         if operation == NodeOperation::Specify {
+            assert!(schema_has_property(&terminal_spec.input_schema, "next"));
             assert!(schema_has_property(&terminal_spec.input_schema, "size"));
-            assert!(schema_has_property(
+            assert!(schema_has_property(&terminal_spec.input_schema, "reason"));
+            assert!(!schema_has_property(
                 &terminal_spec.input_schema,
-                "reference_match"
+                "missing_info"
             ));
-            assert!(schema_has_property(
-                &terminal_spec.input_schema,
-                "scope_signals"
-            ));
+            assert!(!schema_has_property(&terminal_spec.input_schema, "route"));
+        }
+        if operation == NodeOperation::Plan {
+            assert_eq!(
+                schema_property(&terminal_spec.input_schema, "items")
+                    .and_then(|items| items.get("minItems")),
+                Some(&Value::from(1))
+            );
+            assert!(
+                terminal_spec
+                    .input_schema
+                    .to_string()
+                    .contains("requires_prior_results")
+            );
         }
     }
 }
@@ -321,39 +414,31 @@ fn engine_harness_decodes_specification_scope_assessment() {
             terminal_call: Some(AgentToolCall {
                 name: "submit_specification".to_string(),
                 arguments: serde_json::json!({
+                    "next": "Implement the repo-local task board status formatter.",
                     "size": "medium",
-                    "shape": "phased",
-                    "reference_match": "One coherent feature spanning several related files.",
-                    "scope_signals": ["one main acceptance target", "focused tests"],
-                    "missing_info": null
+                    "reason": "One coherent feature spanning several related files."
                 }),
             }),
             usage: None,
         })
         .expect("specification size scope_assessment should decode");
 
-    let NodeOperationOutput::Specified {
-        scope_assessment,
-        missing_info,
-    } = result.output
-    else {
+    let NodeOperationOutput::Specified { scope_assessment } = result.output else {
         panic!("expected specified output");
     };
-    assert_eq!(missing_info, None);
-    assert_eq!(scope_assessment.size, WorkSize::Medium);
-    assert_eq!(scope_assessment.shape, WorkShape::Phased);
     assert_eq!(
-        scope_assessment.reference_match,
-        "One coherent feature spanning several related files."
+        scope_assessment.next,
+        "Implement the repo-local task board status formatter."
     );
+    assert_eq!(scope_assessment.size, WorkSize::Medium);
     assert_eq!(
-        scope_assessment.scope_signals,
-        vec!["one main acceptance target", "focused tests"]
+        scope_assessment.reason,
+        "One coherent feature spanning several related files."
     );
 }
 
 #[test]
-fn engine_harness_treats_string_null_missing_info_as_absent() {
+fn engine_harness_decodes_information_gathering_as_next_work() {
     let context = AgentOperationContext {
         node: problem_node(NodePlan::Execute),
         operation: NodeOperation::Specify,
@@ -368,21 +453,23 @@ fn engine_harness_treats_string_null_missing_info_as_absent() {
             terminal_call: Some(AgentToolCall {
                 name: "submit_specification".to_string(),
                 arguments: serde_json::json!({
+                    "next": "Identify which provider and model are selected in the current runtime config.",
                     "size": "tiny",
-                    "shape": "atomic",
-                    "reference_match": "Single self-contained artifact.",
-                    "scope_signals": ["no external fact required"],
-                    "missing_info": "null"
+                    "reason": "The evidence-gathering work is tiny even though the broader setup depends on it."
                 }),
             }),
             usage: None,
         })
-        .expect("string null should not become a missing-info plan");
+        .expect("information gathering should decode as normal next work");
 
-    let NodeOperationOutput::Specified { missing_info, .. } = result.output else {
+    let NodeOperationOutput::Specified { scope_assessment } = result.output else {
         panic!("expected specified output");
     };
-    assert_eq!(missing_info, None);
+    assert_eq!(
+        scope_assessment.next,
+        "Identify which provider and model are selected in the current runtime config."
+    );
+    assert_eq!(scope_assessment.size, WorkSize::Tiny);
 }
 
 #[tokio::test]
@@ -410,9 +497,8 @@ async fn engine_harness_decodes_agent_friendly_plan_items() {
                             "description": "Write the smallest useful acceptance checklist.",
                             "verification": "Checklist has concrete pass/fail commands.",
                             "size": "medium",
-                            "shape": "research/specify",
-                            "reference_match": "One coherent child slice with focused tests.",
-                            "scope_signals": "one child item"
+                            "reason": "One coherent child slice with focused tests.",
+                            "requires_prior_results": false
                         }
                     ]
                 }),
@@ -443,25 +529,51 @@ async fn engine_harness_decodes_agent_friendly_plan_items() {
     assert_eq!(group.items[0].plan, NodePlan::Execute);
     assert_eq!(group.items[0].size, WorkSize::Medium);
     assert_eq!(
-        group.items[0]
-            .scope_assessment
-            .as_ref()
-            .unwrap()
-            .reference_match,
+        group.items[0].scope_assessment.as_ref().unwrap().next,
+        group.items[0].intent
+    );
+    assert_eq!(
+        group.items[0].scope_assessment.as_ref().unwrap().reason,
         "One coherent child slice with focused tests."
     );
-    assert_eq!(
-        group.items[0].scope_assessment.as_ref().unwrap().shape,
-        WorkShape::Unknown
-    );
-    assert_eq!(
-        group.items[0]
-            .scope_assessment
-            .as_ref()
-            .unwrap()
-            .scope_signals,
-        vec!["one child item"]
-    );
+}
+
+#[tokio::test]
+async fn engine_harness_rejects_dependent_parallel_plan_items() {
+    let context = AgentOperationContext {
+        node: problem_node(NodePlan::Split),
+        operation: NodeOperation::Plan,
+        candidate: None,
+        child_artifacts: Vec::new(),
+        workspace_surface: None,
+    };
+    let harness = OperationHarness::new(context);
+
+    let result = harness
+        .decode_result(AgentRunResponse {
+            report: "planned".to_string(),
+            tool_calls: Vec::new(),
+            terminal_call: Some(AgentToolCall {
+                name: "submit_plan_group".to_string(),
+                arguments: serde_json::json!({
+                    "mode": "parallel",
+                    "items": [
+                        {
+                            "key": "synthesis",
+                            "intent": "Synthesize sibling findings into the final report.",
+                            "requires_prior_results": true
+                        }
+                    ]
+                }),
+            }),
+            usage: None,
+        })
+        .expect("dependent parallel plan should decode as invalid plan");
+
+    let NodeOperationOutput::InvalidPlan { reason } = result.output else {
+        panic!("expected invalid plan output");
+    };
+    assert!(reason.contains("parallel plan items must be mutually independent"));
 }
 
 #[test]
@@ -727,10 +839,14 @@ fn prompt_section_exists(prompt: &[AgentPromptSection], title: &str) -> bool {
 }
 
 fn schema_has_property(schema: &Value, property: &str) -> bool {
+    schema_property(schema, property).is_some()
+}
+
+fn schema_property<'a>(schema: &'a Value, property: &str) -> Option<&'a Value> {
     schema
         .get("properties")
         .and_then(Value::as_object)
-        .is_some_and(|properties| properties.contains_key(property))
+        .and_then(|properties| properties.get(property))
 }
 
 fn schema_properties_are_empty(schema: &Value) -> bool {
@@ -746,10 +862,6 @@ fn plan_for_operation(operation: NodeOperation) -> NodePlan {
             NodePlan::Execute
         }
         NodeOperation::Commit => NodePlan::Execute,
-        NodeOperation::Acquire => NodePlan::NeedsInfo {
-            need: "missing input".to_string(),
-            then: Box::new(NodePlan::Execute),
-        },
         NodeOperation::Plan | NodeOperation::Combine => NodePlan::Group(PlanGroup {
             mode: PlanGroupMode::Parallel,
             items: vec![NodeTemplate::memory_leaf("child", "child output")],
@@ -784,7 +896,6 @@ fn problem_node(plan: NodePlan) -> ProblemNode {
         children: Vec::new(),
         status: NodeStatus::New,
         plan,
-        acquired: Vec::new(),
         candidate: None,
         accepted_artifact: None,
         execution_attempts: 0,

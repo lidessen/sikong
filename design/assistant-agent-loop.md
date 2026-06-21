@@ -155,7 +155,6 @@ Judge output:
 ```json
 {
   "passed": true,
-  "score": 0.92,
   "findings": [],
   "evidence": ["finish_turn called", "no task tools injected"]
 }

@@ -112,7 +112,7 @@ impl AssistantPack {
                 ),
                 prompt_section(
                     "Context",
-                    "The latest message and turn context are injected directly. The Recent Conversation section is only a small window, not the full conversation state. Use query_messages when earlier intent, decisions, or task references matter before acting.",
+                    "Use the Latest Message and Context sections as the current turn. The Recent Conversation section is only a small window, not the full conversation state. Use query_messages when earlier intent, decisions, or task references matter before acting.",
                 ),
             ],
             Self::TaskBoard => vec![prompt_section(

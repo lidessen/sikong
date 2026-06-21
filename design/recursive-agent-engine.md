@@ -66,6 +66,16 @@ Bun runners are untrusted producers. They never commit directly to the main
 world. They return artifacts and side-effect ledgers; Rust decides whether those
 artifacts can be verified and committed.
 
+Prompt construction follows `prompt-guidance.md`. Each operation harness should
+project only the context layer needed for that run, preserve the load-bearing
+30% of the operation, and let the agent loop own local execution detail inside
+the terminal tool contract. Raw traces and full histories should return upward
+only as compressed artifacts, events, verdicts, or workspace-provider facts.
+When live eval exposes a bad operation result, repair the prompt/tool boundary
+in that order: simplify the prompt projection first, tighten terminal tool
+schema or engine validation when a shape must be enforced, and avoid adding
+long lists of forbidden invented details as prose patches.
+
 Every `NodeOperation` is executed through the Bun agent-host boundary. Rust does
 not special-case `Execute` as the only agent-backed operation. The operation
 distinction stays in the engine layer: the engine selects the operation, gathers
@@ -91,6 +101,22 @@ agent, and stops when the loop observes a call to one of the tools listed in
 terminal-tool check, not to special tool executor logic and not to an arbitrary
 caller-provided stop predicate. Tools execute normally, the loop observes tool
 calls, and the first terminal tool call becomes the returned terminal result.
+Claude Code settings sources are always disabled for these runs. User,
+project, and local Claude settings, CLAUDE.md files, plugins, memory, and
+permission policy must not leak into engine operation context; anything the
+agent can see must be supplied explicitly by the Rust harness as prompt,
+structured input, MCP/tool specs, or runtime profile.
+
+Runtime profiles stay coarse:
+
+- `general`: Sikong control, assistant, verification, combination, and general
+  work. Use a Sikong custom system prompt and no Claude Code built-in
+  tools.
+- `code`: work that should use Claude Code's coding prompt/tool behavior. Keep
+  `settingSources: []`, use the Claude Code preset, and block orchestration
+  escape tools such as sub-agent launchers and Claude plan mode. Do not block
+  current Claude task-tracking tools (`TaskCreate`, `TaskUpdate`, `TaskGet`,
+  `TaskList`) just because their names start with `Task`.
 
 ### Agent Run Protocol
 
@@ -106,6 +132,7 @@ type AgentRunRequest = {
   input: JsonValue;
   tools: AgentToolSpec[];
   terminalToolSet: string[];
+  runtimeProfile: "general" | "code";
 };
 
 type AgentPromptSection = {
@@ -156,8 +183,9 @@ local to the concrete harness instead of hidden behind a generic wrapper.
 
 Tool definitions live outside harnesses:
 
-- `EngineTool`: tools available to engine operation runs, such as
-  `read_operation_context` and operation submit tools.
+- `EngineTool`: submit tools available to engine operation runs, such as
+  `submit_specification`, `submit_plan_group`, `submit_work`,
+  `submit_combination`, and `submit_verdict`.
 - `AssistantTool`: tools available to assistant turns, such as
   `query_messages`, task-board tools, and `finish_turn`.
 
@@ -217,8 +245,8 @@ without a required terminal tool, or calls a terminal tool from the wrong
 operation, Rust records a protocol violation and deterministic state transition
 code decides what happens next.
 
-The worker does not need to know whether the run is `Specify`, `Acquire`,
-`Plan`, `Execute`, `Combine`, `Verify`, or `Commit`; that protocol
+The worker does not need to know whether the run is `Specify`, `Plan`,
+`Execute`, `Combine`, `Verify`, or `Commit`; that protocol
 distinction is made by the engine harness before and after the generic worker
 run. The harness injects operation-specific terminal tools, sets the terminal
 stop set, and rejects runs that end without an expected terminal tool. Rust
@@ -254,10 +282,11 @@ natural task request
 ```
 
 The scenario input must not contain a concrete decomposition. The root task
-starts as a normal task request. During `Specify`, the actor agent may choose
-`Execute`, `NeedsInfo`, or `Split`; only `Split` activates the later `Plan`
-operation that creates child nodes. This keeps split decisions inside the real
-agent loop rather than the test harness.
+starts as a normal task request. During `Specify`, the actor agent submits the
+next useful unit of work plus a semantic size assessment. The engine maps
+`tiny`, `small`, and `medium` to direct execution and maps `large` and `xlarge`
+to decomposition. This keeps the divide decision inside the real agent loop
+without requiring the agent to submit an engine route.
 
 The first live eval is exposed as:
 
@@ -285,17 +314,16 @@ cargo run -- eval task-run-operation --operation all --scenario all --json
 
 The operation matrix covers the important branch behavior before the full run:
 
-- `Specify`: `execute`, `split`, `needs-info`
-- `Acquire`: `resolve-missing-scope`
+- `Specify`: `execute`, `split`, `evidence-work`
 - `Plan`: `stage`, `parallel`
 - `Execute`: `simple-result`, `blocked-files`
 - `Combine`: `normal`, `conflict`
 - `Verify`: `accept`, `reject`, `uncertain`
 - `Commit`: `report`
 
-The operation judge is also tool-driven. It first calls `read_eval_context`,
-then must end with `finish_eval`, so judge failures are visible as the same
-terminal-tool protocol failures as actor runs.
+The operation judge is also tool-driven. The evaluation context is included in
+the judge prompt, and the judge must end with `finish_eval`, so judge failures
+are visible as the same terminal-tool protocol failures as actor runs.
 
 When investigating a slow or stuck live run, capture both Rust orchestration
 logs and Bun agent-loop activity:
@@ -342,7 +370,6 @@ and planning are policy packs or compositions, not node operations.
 ```rust
 enum NodeOperation {
     Specify,
-    Acquire,
     Plan,
     Execute,
     Combine,
@@ -354,10 +381,10 @@ enum NodeOperation {
 Use the following naming layers:
 
 ```text
-NodeOperation = Specify / Acquire / Plan / Execute / Combine / Verify / Commit
+NodeOperation = Specify / Plan / Execute / Combine / Verify / Commit
 NodePolicy    = fast_path / design / research / code_change / debug / release
 WorkspaceProvider = memory / file_system / git_file_system / temp_directory / browser / database
-RuntimeRole   = specifier / acquirer / planner / executor / combiner / verifier
+RuntimeRole   = specifier / planner / executor / combiner / verifier
 ```
 
 This prevents the kernel from confusing "what operation is being applied to
@@ -380,10 +407,10 @@ Output:
 - `ProblemNode` with intent, constraints, acceptance rules, capabilities,
   budget, stable memo key, and a scope assessment.
 
-`Specify` does not ask the agent to estimate token counts. The agent chooses the
-smallest safe semantic size class, classifies the work shape, and explains the
-closest reference match. It does not submit `execute`, `split`, `stage`, or
-`parallel`; those are engine decisions.
+`Specify` does not ask the agent to estimate token counts. The agent submits the
+next useful unit of work, chooses the smallest safe semantic size class for that
+next work, and explains the assessment. It does not submit `execute`, `split`,
+`stage`, `parallel`, `route`, or `needs_plan`; those are engine decisions.
 
 ```rust
 enum WorkSize {
@@ -394,73 +421,45 @@ enum WorkSize {
     XLarge,
 }
 
-enum WorkShape {
-    Atomic,
-    Phased,
-    IndependentAreas,
-    Unknown,
-}
-
 struct ScopeAssessment {
+    next: String,
     size: WorkSize,
-    shape: WorkShape,
-    reference_match: String,
-    scope_signals: Vec<String>,
+    reason: String,
 }
 ```
 
-The size classes are deliberately concrete enough for model-side analogy:
+The size classes are deliberately concrete enough for model-side analogy, but
+they are based on coordination cost rather than a mechanical count of files,
+modules, tests, or deliverables:
 
 - `tiny`: answerable from the user request and injected context; no project
   exploration.
 - `small`: one local problem, one primary area, usually 1-3 files, and one
   obvious verification path.
-- `medium`: one coherent feature or change, several related files, implementation
-  plus focused tests, and one main acceptance target.
-- `large`: multiple related parts that benefit from ordered phases, shared
-  context, or evidence from earlier work feeding later work.
+- `medium`: one coherent feature or coherent change package, several related
+  files, implementation plus focused tests, and one main acceptance target.
+- `large`: planning reduces risk because the work has ordered phases, shared
+  context, evidence from earlier work feeding later work, multiple independently
+  accepted deliverables, or separate responsibilities that deserve separate
+  verification.
 - `xlarge`: too broad for one reliable run, multiple independent areas, repo-wide
   exploration, or several targets that can interfere.
 
-The work shape captures qualitative structure without letting the agent choose
-the plan:
-
-- `atomic`: one coherent unit of work.
-- `phased`: qualitatively different steps must happen in order, such as
-  understand -> change -> verify.
-- `independent_areas`: several weakly coupled areas can be handled separately.
-- `unknown`: available evidence is insufficient to classify the shape.
+A prompt change plus focused harness tests plus one eval scenario can still be
+`medium` when all pieces serve the same behavioral fix. Runtime implementation
+plus host integration plus documentation plus smoke tests is usually `large`
+because those are separate work packages with different acceptance surfaces.
 
 The engine owns any token-window mapping and next-plan policy. A practical
-default is: `tiny/small/medium` execute directly unless blocked by missing
-information; `large/xlarge` enter `Plan`, where the planner chooses `stage` or
-`parallel` from the current scope and evidence.
+default is: `tiny/small/medium` execute directly; `large/xlarge` enter `Plan`,
+where the planner chooses `stage` or `parallel` from the current scope and
+evidence. If the original goal is blocked by missing information, `next` should
+be the concrete evidence-gathering work and `size` should describe that evidence
+work, not the broader original goal.
 
 `Specify` is used at the beginning and after failures. It is not a retry
 operation;
 it re-normalizes the problem with new evidence.
-
-### Acquire
-
-`Acquire` fills an explicit information need.
-
-Input:
-
-- `InformationNeed`;
-- allowed sources;
-- trust policy;
-- budget.
-
-Output:
-
-- `EvidenceArtifact`.
-
-Allowed sources include user input, file system reads, workspace memory, search,
-RAG, databases, APIs, and low-trust model inference. Asking the user is only
-`Acquire(User)`, where the node becomes pending until the user replies.
-
-`Acquire` cannot complete the task, change the plan structure, or commit to the
-world. It only produces evidence.
 
 ### Plan
 
@@ -843,7 +842,7 @@ enum GitCommitPolicy {
 The local-first policy should prefer `ApplyPatchToWorkingTree` so the engine can
 apply verified changes without taking over the user's branch structure. Dirty
 working trees are allowed only when the dirty paths do not overlap the commit
-scope; otherwise the node becomes pending on `Acquire(User)` or is rejected by
+scope; otherwise the node becomes pending on user input or is rejected by
 policy.
 
 ## Core Data Structures
@@ -867,10 +866,6 @@ struct ProblemNode {
 
 enum NodePlan {
     Execute,
-    NeedsInfo {
-        need: String,
-        then: Box<NodePlan>,
-    },
     Split,
     Group(PlanGroup),
 }
@@ -981,12 +976,6 @@ while task is not terminal:
     frontier.push(node)
     continue
 
-  if node has missing information:
-    evidence = run_operation(Acquire, node.information_need)
-    attach evidence to node
-    frontier.push(node)
-    continue
-
   if policy says node should plan a child group:
     group = run_operation(Plan, node)
     register child nodes under the local group
@@ -1024,13 +1013,13 @@ while task is not terminal:
 `handle_reject` is not a repair operation. It is a bounded decision table:
 
 ```text
-missing information     -> Acquire
+missing information     -> Specify next evidence work or WaitingForInfo
 same failure repeated   -> Plan differently or prune
 spec ambiguity          -> Specify again with failure evidence
 executor mismatch       -> Execute with a different capability profile
 unsafe side effect      -> prune workspace instance and record violation
 budget exhausted        -> prune or fail task
-human decision required -> Acquire(User)
+human decision required -> WaitingForInfo
 ```
 
 Every path consumes retry, time, and token budget. When budget is exhausted the
@@ -1169,8 +1158,8 @@ Request: "Plan a trip."
 
 ```text
 Specify -> extract dates, budget, preferences
-Acquire(User) -> ask for missing origin city
-Acquire(Search/Tool) -> transport and lodging evidence
+WaitingForInfo -> ask for missing origin city if the user must decide it
+Execute evidence work -> transport and lodging evidence
 Plan -> parallel group: route, lodging, transport, constraints
 Resolve children
 Combine -> itinerary candidate
@@ -1178,7 +1167,8 @@ Verify -> date coverage, budget, travel feasibility
 Commit -> final itinerary artifact
 ```
 
-The user question is only one acquire source, not a special workflow.
+The user question is only one possible information source, not a special
+workflow.
 
 ### Coding Task
 
@@ -1186,7 +1176,7 @@ Request: "Fix the work detail page."
 
 ```text
 Specify -> UI/code-change node with scoped acceptance
-Acquire(FileSystem) -> existing components and projection shape
+Execute evidence work -> existing components and projection shape
 Plan -> stage group: understand current projection, update UI model, verify interaction
 Resolve each stage; stages may plan parallel items internally
 Execute child workspace instances -> patch artifacts
@@ -1259,7 +1249,7 @@ does not need those terms as primitive concepts.
 ## Non-Goals
 
 - Do not add a `Repair` operation. Repair is `Verify` failure evidence flowing
-  back into `Specify`, `Acquire`, `Plan`, or `Execute`.
+  back into `Specify`, `Plan`, or `Execute`.
 - Do not add task-type operations such as `Research`, `CodeChange`, or `Debug`.
   These are policy packs.
 - Do not let Bun runners mutate durable state directly.

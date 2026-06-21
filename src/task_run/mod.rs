@@ -15,7 +15,7 @@ pub use harness::{
 };
 pub use node::{
     Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroup, PlanGroupMode, ProblemNode,
-    ScopeAssessment, WorkShape, WorkSize,
+    ScopeAssessment, WorkSize,
 };
 pub use types::{
     AgentRunRecord, ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError,
@@ -48,24 +48,10 @@ pub struct AgentRunDecodeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeOperationOutput {
-    Specified {
-        scope_assessment: ScopeAssessment,
-        missing_info: Option<String>,
-    },
-    Acquired {
-        need: String,
-        evidence: String,
-    },
-    Planned {
-        group: PlanGroup,
-    },
-    Executed {
-        output: String,
-    },
-    Combined {
-        output: String,
-    },
-    Verified {
-        verdict: VerificationVerdict,
-    },
+    Specified { scope_assessment: ScopeAssessment },
+    Planned { group: PlanGroup },
+    InvalidPlan { reason: String },
+    Executed { output: String },
+    Combined { output: String },
+    Verified { verdict: VerificationVerdict },
 }

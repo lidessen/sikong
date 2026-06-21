@@ -13,7 +13,6 @@ import {
   type SDKAgent,
   type SDKMessage,
   type SendOptions,
-  type SettingSource,
 } from "@cursor/sdk";
 import type { BackendAdapter, BackendResult, BackendRun, ResolvedRequest } from "../core/adapter";
 import type { CapabilityList } from "../core/capabilities";
@@ -39,8 +38,6 @@ export interface CursorAdapterOptions {
   contextWindow?: number;
   /** Resume / target a specific Cursor agent id. */
   agentId?: string;
-  /** Cursor local setting sources. Omitted by default for packaged runtimes. */
-  settingSources?: SettingSource[];
   /** Cursor local agent store. Defaults to a JSONL store under SIKONG_DATA_DIR. */
   store?: LocalAgentStore;
   /** Directory for the default JSONL Cursor local agent store. */
@@ -304,9 +301,7 @@ export class CursorAdapter implements BackendAdapter {
       local: {
         ...(cwd ? { cwd } : {}),
         store: this.resolveLocalStore(),
-        ...(this.opts.settingSources !== undefined
-          ? { settingSources: this.opts.settingSources }
-          : {}),
+        settingSources: [],
         ...(this.opts.sandboxEnabled !== undefined
           ? { sandboxOptions: { enabled: this.opts.sandboxEnabled } }
           : {}),

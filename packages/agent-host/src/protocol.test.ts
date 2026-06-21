@@ -21,6 +21,7 @@ const validRequest: AgentRunRequest = {
     },
   ],
   terminalToolSet: ["submit_work"],
+  runtimeProfile: "general",
 };
 
 describe("agent-host protocol schemas", () => {
@@ -30,6 +31,12 @@ describe("agent-host protocol schemas", () => {
 
   test("accept optional per-run effort", () => {
     expect(parseAgentRunRequest({ ...validRequest, effort: "max" }).effort).toBe("max");
+  });
+
+  test("accept code runtime profile", () => {
+    expect(parseAgentRunRequest({ ...validRequest, runtimeProfile: "code" }).runtimeProfile).toBe(
+      "code",
+    );
   });
 
   test("reject legacy tool choice field", () => {

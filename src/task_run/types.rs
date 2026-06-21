@@ -10,7 +10,6 @@ pub type ArtifactId = u64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodeOperation {
     Specify,
-    Acquire,
     Plan,
     Execute,
     Combine,

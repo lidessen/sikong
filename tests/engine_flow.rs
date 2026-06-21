@@ -28,18 +28,17 @@ async fn simple_leaf_executes_verifies_and_commits() {
 
     assert_eq!(report.status, NodeStatus::Committed);
     assert_eq!(engine.node(root).unwrap().size, WorkSize::Small);
+    let scope = engine
+        .node(root)
+        .unwrap()
+        .scope_assessment
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_eq!(scope.next, "polished text");
     assert_eq!(
-        engine
-            .node(root)
-            .unwrap()
-            .scope_assessment
-            .as_ref()
-            .unwrap()
-            .scope_signals,
-        vec![
-            "one local problem".to_string(),
-            "one verification path".to_string()
-        ]
+        scope.reason,
+        "This is closest to Small because the test scheduler mirrors one local node with one terminal path."
     );
     let artifact = engine.artifact(report.artifact.unwrap()).unwrap();
     assert_eq!(artifact.text, "polished text");
@@ -79,31 +78,82 @@ async fn simple_leaf_executes_verifies_and_commits() {
 }
 
 #[tokio::test]
-async fn acquire_rewrites_node_then_executes() {
+async fn information_gathering_work_executes_as_a_normal_node() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
-        key: ProblemKey("trip".to_string()),
-        intent: "plan trip".to_string(),
+        key: ProblemKey("provider-evidence".to_string()),
+        intent: "identify the selected provider and model in the current runtime config"
+            .to_string(),
         size: WorkSize::Small,
         scope_assessment: None,
         workspace: WorkspaceRequirement::memory(),
         capabilities: CapabilityProfile::read_only(),
         budget: Budget::default(),
-        plan: NodePlan::NeedsInfo {
-            need: "origin".to_string(),
-            then: Box::new(NodePlan::Execute),
-        },
+        plan: NodePlan::Execute,
     });
 
     let report = engine.run(root).await.unwrap();
 
     assert_eq!(report.status, NodeStatus::Committed);
-    assert_eq!(engine.node(root).unwrap().acquired, vec!["origin=1"]);
-    assert!(
+    assert_eq!(
         engine
             .events()
             .iter()
-            .any(|event| event.operation == NodeOperation::Acquire)
+            .map(|event| event.operation)
+            .collect::<Vec<_>>(),
+        vec![
+            NodeOperation::Specify,
+            NodeOperation::Execute,
+            NodeOperation::Verify,
+            NodeOperation::Commit,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn specify_can_rewrite_missing_context_into_evidence_work() {
+    let mut engine = Engine::new(MemoryWorkspace::default(), EvidenceNextAgentRunScheduler);
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("provider-config".to_string()),
+        intent: "Configure the production model provider selected by the user, but the provider choice is not present."
+            .to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Execute,
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    let node = engine.node(root).unwrap();
+    assert_eq!(
+        node.intent,
+        "Identify which provider and model are selected in the current runtime config."
+    );
+    assert_eq!(node.size, WorkSize::Tiny);
+    assert_eq!(node.plan, NodePlan::Execute);
+    assert_eq!(
+        node.scope_assessment.as_ref().unwrap().reason,
+        "The evidence-gathering work is tiny even though the broader setup depends on it."
+    );
+    assert_eq!(report.status, NodeStatus::Committed);
+    assert_eq!(
+        engine.artifact(report.artifact.unwrap()).unwrap().text,
+        "Identify which provider and model are selected in the current runtime config."
+    );
+    assert_eq!(
+        engine
+            .agent_runs()
+            .iter()
+            .map(|run| run.operation)
+            .collect::<Vec<_>>(),
+        vec![
+            NodeOperation::Specify,
+            NodeOperation::Execute,
+            NodeOperation::Verify,
+        ]
     );
 }
 
@@ -146,6 +196,40 @@ async fn parallel_group_resolves_children_and_combines_parent() {
             .iter()
             .any(|run| run.node_id == root && run.operation == NodeOperation::Combine)
     );
+}
+
+#[tokio::test]
+async fn planned_children_inherit_parent_workspace_and_capabilities() {
+    let mut engine = engine();
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("scoped-plan".to_string()),
+        intent: "complete scoped plan".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement {
+            provider: WorkspaceProvider::FileSystem,
+            read_scope: vec!["src/task_run/**".to_string()],
+            write_scope: vec!["design/**".to_string()],
+            git: None,
+        },
+        capabilities: CapabilityProfile::writable(),
+        budget: Budget { max_attempts: 3 },
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![NodeTemplate::memory_leaf("child", "child work")],
+        }),
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Committed);
+    let child = engine.node(root).unwrap().children[0];
+    let child = engine.node(child).unwrap();
+    assert_eq!(child.workspace.provider, WorkspaceProvider::FileSystem);
+    assert_eq!(child.workspace.read_scope, vec!["src/task_run/**"]);
+    assert_eq!(child.workspace.write_scope, vec!["design/**"]);
+    assert!(child.capabilities.allow_write);
+    assert_eq!(child.budget.max_attempts, 3);
 }
 
 #[tokio::test]
@@ -276,6 +360,51 @@ struct ConcurrentAgentState {
 }
 
 #[derive(Clone)]
+struct EvidenceNextAgentRunScheduler;
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for EvidenceNextAgentRunScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        _cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        let terminal_tool = input.terminal_tool_set.first().cloned();
+        let node_intent = input
+            .input
+            .pointer("/node/intent")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("mock output")
+            .to_string();
+        let terminal_call = terminal_tool.map(|name| {
+            let arguments = match name.as_str() {
+                "submit_specification" => serde_json::json!({
+                    "next": "Identify which provider and model are selected in the current runtime config.",
+                    "size": "tiny",
+                    "reason": "The evidence-gathering work is tiny even though the broader setup depends on it."
+                }),
+                "submit_work" => serde_json::json!({
+                    "output": node_intent,
+                }),
+                "submit_verdict" => serde_json::json!({
+                    "verdict": "accept",
+                    "reason": "evidence work completed",
+                }),
+                _ => serde_json::json!({}),
+            };
+            AgentToolCall { name, arguments }
+        });
+
+        AgentRunResponse {
+            report: format!("evidence-next scheduler completed {}", input.objective),
+            tool_calls: terminal_call.clone().into_iter().collect(),
+            terminal_call,
+            usage: None,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct ConcurrentAgentRunScheduler {
     state: Arc<ConcurrentAgentState>,
 }
@@ -368,6 +497,102 @@ async fn repeated_failure_prunes_after_budget() {
     assert_eq!(report.status, NodeStatus::Pruned);
     assert!(report.artifact.is_none());
     assert_eq!(engine.node(root).unwrap().execution_attempts, 2);
+}
+
+#[tokio::test]
+async fn missing_info_reject_waits_without_retrying_execute() {
+    let mut engine = engine();
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("missing-info".to_string()),
+        intent: "missing-info reject".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget { max_attempts: 2 },
+        plan: NodePlan::Execute,
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::WaitingForInfo);
+    assert!(report.artifact.is_none());
+    assert_eq!(engine.node(root).unwrap().execution_attempts, 1);
+    assert_eq!(
+        engine
+            .agent_runs()
+            .iter()
+            .filter(|run| run.operation == NodeOperation::Execute)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn unresolved_parallel_child_blocks_parent_combine() {
+    let mut engine = engine();
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("parent".to_string()),
+        intent: "combine accepted child evidence".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![
+                NodeTemplate::memory_leaf("ready-child", "ready child result"),
+                NodeTemplate::memory_leaf("missing-child", "needs post-verify info"),
+            ],
+        }),
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::WaitingForInfo);
+    assert!(report.artifact.is_none());
+    assert!(engine.events().iter().any(|event| {
+        event.operation == NodeOperation::Combine
+            && event
+                .note
+                .contains("waiting for child information before combine")
+    }));
+    assert!(engine.agent_runs().iter().all(|run| !(run.node_id == root
+        && matches!(
+            run.operation,
+            NodeOperation::Combine | NodeOperation::Verify
+        ))));
+}
+
+#[tokio::test]
+async fn unresolved_stage_child_stops_later_siblings() {
+    let mut engine = engine();
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("stage-parent".to_string()),
+        intent: "combine ordered child evidence".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Stage,
+            items: vec![
+                NodeTemplate::memory_leaf("stage-ready", "ready child result"),
+                NodeTemplate::memory_leaf("stage-missing", "needs post-verify info"),
+                NodeTemplate::memory_leaf("stage-later", "later child must not run"),
+            ],
+        }),
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::WaitingForInfo);
+    assert!(report.artifact.is_none());
+    assert!(engine.node(4).is_ok());
+    assert_eq!(engine.node(4).unwrap().status, NodeStatus::New);
+    assert!(engine.agent_runs().iter().all(|run| run.node_id != 4));
 }
 
 #[tokio::test]

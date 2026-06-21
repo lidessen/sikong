@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
 import * as zod from "zod";
-import { jsonSchemaToZodRawShape, mapClaudeMessage } from "../adapters/claude";
+import { CLAUDE_SETTING_SOURCES, claudeToolInputShape, mapClaudeMessage } from "../adapters/claude";
 
 const z = ((zod as unknown as { z?: typeof zod }).z ?? zod) as typeof zod;
 
 describe("Claude adapter tool schemas", () => {
-  test("converts JSON Schema object properties to a Zod raw shape", () => {
-    const shape = jsonSchemaToZodRawShape({
+  test("adapts JSON Schema object properties to the Claude tool raw shape", () => {
+    const shape = claudeToolInputShape({
       type: "object",
       properties: {
         field: { type: "string", enum: ["summary", "ready"] },
@@ -24,6 +24,43 @@ describe("Claude adapter tool schemas", () => {
     expect(
       z.object(shape).safeParse({ field: "ready", value: false, reason: "done" }).success,
     ).toBe(true);
+  });
+
+  test("uses Zod JSON Schema conversion for refs and array bounds", () => {
+    const shape = claudeToolInputShape({
+      type: "object",
+      properties: {
+        mode: { $ref: "#/$defs/PlanGroupMode" },
+        items: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              requires_prior_results: { type: "boolean" },
+            },
+            required: ["requires_prior_results"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["mode", "items"],
+      additionalProperties: false,
+      $defs: {
+        PlanGroupMode: { type: "string", enum: ["stage", "parallel"] },
+      },
+    });
+
+    const schema = z.object(shape);
+
+    expect(
+      schema.safeParse({ mode: "parallel", items: [{ requires_prior_results: false }] }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({ mode: "wait", items: [{ requires_prior_results: false }] }).success,
+    ).toBe(false);
+    expect(schema.safeParse({ mode: "parallel", items: [] }).success).toBe(false);
+    expect(schema.safeParse({ mode: "parallel", items: [{}] }).success).toBe(false);
   });
 });
 
@@ -43,5 +80,11 @@ describe("Claude adapter message mapping", () => {
     );
 
     expect(mapped.events).toEqual([]);
+  });
+});
+
+describe("Claude adapter settings isolation", () => {
+  test("does not load user, project, or local Claude settings", () => {
+    expect(CLAUDE_SETTING_SOURCES).toEqual([]);
   });
 });

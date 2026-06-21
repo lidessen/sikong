@@ -93,12 +93,14 @@ describe("runtime assembly registry", () => {
     const previous = process.env.KIMI_CODE_API_KEY;
     process.env.KIMI_CODE_API_KEY = "test-kimi-key";
     try {
-      await expect(createRuntimeAssembly({
-        backend: {
-          name: "ai-sdk",
-          options: { provider: "kimi", model: "kimi-for-coding" },
-        },
-      })).rejects.toThrow(/Kimi Code does not support the ai-sdk runtime/);
+      await expect(
+        createRuntimeAssembly({
+          backend: {
+            name: "ai-sdk",
+            options: { provider: "kimi", model: "kimi-for-coding" },
+          },
+        }),
+      ).rejects.toThrow(/Kimi Code does not support the ai-sdk runtime/);
     } finally {
       if (previous === undefined) {
         delete process.env.KIMI_CODE_API_KEY;

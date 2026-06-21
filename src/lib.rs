@@ -7,8 +7,8 @@ mod workspace;
 
 pub use agent_run::{
     AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRunScheduler,
-    AgentTokenUsage, AgentToolCall, AgentToolSpec, CancellationToken, ProcessAgentRunScheduler,
-    ProcessAgentRunSchedulerError,
+    AgentRuntimeProfile, AgentTokenUsage, AgentToolCall, AgentToolSpec, CancellationToken,
+    ProcessAgentRunScheduler, ProcessAgentRunSchedulerError,
 };
 pub use assistant::{
     AcpRequest, AcpResponse, AcpServer, AcpServerConfig, AgentAssistantLoop, AssistantContext,
@@ -31,7 +31,7 @@ pub use task_run::{
     EngineAgentWorkspaceSurfacePacket, EngineError, EngineReport, FailureClass, NodeId,
     NodeOperation, NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationEvent,
     OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment,
-    VerificationVerdict, WorkShape, WorkSize,
+    VerificationVerdict, WorkSize,
 };
 pub use workspace::{
     FileSystemWorkspace, GitBranchResource, GitCommitResource, GitFileSystemWorkspace,

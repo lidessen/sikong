@@ -97,9 +97,7 @@ describe("credential resolution", () => {
     process.env.KIMI_CODE_API_KEY = "sk-kimi";
     try {
       expect(kimi().supportedRuntimes).toEqual(["claude-code"]);
-      expect(() => kimi().configureFor("ai-sdk")).toThrow(
-        /does not support the "ai-sdk" runtime/,
-      );
+      expect(() => kimi().configureFor("ai-sdk")).toThrow(/does not support the "ai-sdk" runtime/);
     } finally {
       if (previous === undefined) delete process.env.KIMI_CODE_API_KEY;
       else process.env.KIMI_CODE_API_KEY = previous;

@@ -25,10 +25,7 @@ const DEFAULT_CASES: ProviderEvalCase[] = [
 ];
 
 const runLiveProviderEvals = process.env.AGENT_LOOP_RUN_PROVIDER_EVALS === "1";
-const selectedCases = parseSelectedCases(
-  process.env.AGENT_LOOP_PROVIDER_EVAL_CASES,
-  DEFAULT_CASES,
-);
+const selectedCases = parseSelectedCases(process.env.AGENT_LOOP_PROVIDER_EVAL_CASES, DEFAULT_CASES);
 
 describe("provider live eval", () => {
   for (const evalCase of selectedCases) {
@@ -36,104 +33,107 @@ describe("provider live eval", () => {
     const hasKey = Boolean(process.env[evalCase.apiKeyEnv]);
     const run = runLiveProviderEvals && hasKey ? test : test.skip;
 
-    run(`${name} can complete a terminal tool loop`, async () => {
-      const loop = createLoop(evalCase);
-      const events: LoopEvent[] = [];
-      try {
-        const run = loop.run({
-          system:
-            "You are a provider smoke-test agent. Use only the provided tools.",
-          prompt:
-            "Call read_provider_eval_context first. Then finish by calling finish_provider_eval with ok=true and a short summary.",
-          tools: {
-            read_provider_eval_context: defineTool({
-              description: "Read the provider eval context.",
-              inputSchema: {
-                type: "object",
-                properties: {},
-                additionalProperties: false,
-              },
-              execute: () => ({
-                provider: evalCase.provider,
-                runtime: evalCase.runtime,
-                requiredTerminalTool: "finish_provider_eval",
-              }),
-            }),
-            finish_provider_eval: defineTool({
-              description: "Submit the provider eval result.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  ok: { type: "boolean" },
-                  summary: { type: "string" },
+    run(
+      `${name} can complete a terminal tool loop`,
+      async () => {
+        const loop = createLoop(evalCase);
+        const events: LoopEvent[] = [];
+        try {
+          const run = loop.run({
+            system: "You are a provider smoke-test agent. Use only the provided tools.",
+            prompt:
+              "Call inspect_provider_eval_fixture first. Then finish by calling finish_provider_eval with ok=true and a short summary.",
+            tools: {
+              inspect_provider_eval_fixture: defineTool({
+                description: "Inspect the provider eval fixture.",
+                inputSchema: {
+                  type: "object",
+                  properties: {},
+                  additionalProperties: false,
                 },
-                required: ["ok", "summary"],
-                additionalProperties: false,
-              },
-              execute: (args, ctx) => {
-                ctx.requestStop?.("provider eval finished");
-                return { terminal: true, received: args };
-              },
-            }),
-          },
-          terminalToolSet: ["finish_provider_eval"],
-          maxSteps: 4,
-          runtimeOptions:
-            evalCase.runtime === "claude-code"
-              ? {
-                  builtinTools: [],
-                  disallowedTools: [
-                    "Task",
-                    "Agent",
-                    "Bash",
-                    "bash",
-                    "Read",
-                    "read",
-                    "Write",
-                    "write",
-                    "Edit",
-                    "edit",
-                    "MultiEdit",
-                    "multiedit",
-                    "Glob",
-                    "glob",
-                    "Grep",
-                    "grep",
-                    "LS",
-                    "ls",
-                    "WebFetch",
-                    "webfetch",
-                    "WebSearch",
-                    "websearch",
-                    "TodoRead",
-                    "todoread",
-                    "TodoWrite",
-                    "todowrite",
-                    "EnterPlanMode",
-                    "ExitPlanMode",
-                  ],
-                }
-              : undefined,
-        });
+                execute: () => ({
+                  provider: evalCase.provider,
+                  runtime: evalCase.runtime,
+                  requiredTerminalTool: "finish_provider_eval",
+                }),
+              }),
+              finish_provider_eval: defineTool({
+                description: "Submit the provider eval result.",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    ok: { type: "boolean" },
+                    summary: { type: "string" },
+                  },
+                  required: ["ok", "summary"],
+                  additionalProperties: false,
+                },
+                execute: (args, ctx) => {
+                  ctx.requestStop?.("provider eval finished");
+                  return { terminal: true, received: args };
+                },
+              }),
+            },
+            terminalToolSet: ["finish_provider_eval"],
+            maxSteps: 4,
+            runtimeOptions:
+              evalCase.runtime === "claude-code"
+                ? {
+                    builtinTools: [],
+                    disallowedTools: [
+                      "Task",
+                      "Agent",
+                      "Bash",
+                      "bash",
+                      "Read",
+                      "read",
+                      "Write",
+                      "write",
+                      "Edit",
+                      "edit",
+                      "MultiEdit",
+                      "multiedit",
+                      "Glob",
+                      "glob",
+                      "Grep",
+                      "grep",
+                      "LS",
+                      "ls",
+                      "WebFetch",
+                      "webfetch",
+                      "WebSearch",
+                      "websearch",
+                      "TodoRead",
+                      "todoread",
+                      "TodoWrite",
+                      "todowrite",
+                      "EnterPlanMode",
+                      "ExitPlanMode",
+                    ],
+                  }
+                : undefined,
+          });
 
-        for await (const event of run) events.push(event);
-        const result = await run.result;
+          for await (const event of run) events.push(event);
+          const result = await run.result;
 
-        const toolStartNames = events
-          .filter(
-            (event): event is Extract<LoopEvent, { type: "tool_call_start" }> =>
-              event.type === "tool_call_start",
-          )
-          .map((event) => normalizeToolName(event.name));
+          const toolStartNames = events
+            .filter(
+              (event): event is Extract<LoopEvent, { type: "tool_call_start" }> =>
+                event.type === "tool_call_start",
+            )
+            .map((event) => normalizeToolName(event.name));
 
-        expect(result.status).toBe("completed");
-        expect(toolStartNames).toContain("read_provider_eval_context");
-        expect(toolStartNames).toContain("finish_provider_eval");
-        expect(result.usage.totalTokens).toBeGreaterThan(0);
-      } finally {
-        await loop.dispose();
-      }
-    }, 120_000);
+          expect(result.status).toBe("completed");
+          expect(toolStartNames).toContain("inspect_provider_eval_fixture");
+          expect(toolStartNames).toContain("finish_provider_eval");
+          expect(result.usage.totalTokens).toBeGreaterThan(0);
+        } finally {
+          await loop.dispose();
+        }
+      },
+      120_000,
+    );
   }
 
   test("documents the live eval gate", () => {
@@ -166,9 +166,7 @@ function parseSelectedCases(
 ): ProviderEvalCase[] {
   if (!raw?.trim()) return fallback;
   const selected = new Set(raw.split(",").map((entry) => entry.trim()));
-  return fallback.filter((evalCase) =>
-    selected.has(`${evalCase.provider}:${evalCase.runtime}`),
-  );
+  return fallback.filter((evalCase) => selected.has(`${evalCase.provider}:${evalCase.runtime}`));
 }
 
 function normalizeToolName(name: string): string {

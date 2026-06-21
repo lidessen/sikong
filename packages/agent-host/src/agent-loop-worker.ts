@@ -20,8 +20,25 @@ export interface AgentLoopWorkerOptions {
   effort?: EffortLevel;
 }
 
+const ORCHESTRATION_ESCAPE_TOOLS = ["Agent", "Task", "EnterPlanMode", "ExitPlanMode"];
+
+const GENERAL_BUILTIN_DENY_TOOLS = [
+  ...ORCHESTRATION_ESCAPE_TOOLS,
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "Glob",
+  "Grep",
+  "LS",
+  "WebFetch",
+  "WebSearch",
+];
+
 export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
   const loop = createLoop(options);
+  const runtime = resolveRuntime(options);
 
   return async function runAgentLoopWorker(request: AgentRunRequest): Promise<AgentRunResponse> {
     const runStartedAt = performance.now();
@@ -49,7 +66,8 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
 
     logAgentLoopEvent(request, "loop.start", runStartedAt, {
       provider: options.provider ?? "kimi",
-      runtime: options.runtime ?? "ai-sdk",
+      runtime,
+      runtimeProfile: request.runtimeProfile,
       model: options.model,
       maxSteps: options.maxSteps ?? 12,
       effort,
@@ -61,7 +79,7 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
       terminalToolSet: request.terminalToolSet,
       maxSteps: options.maxSteps ?? 12,
       effort,
-      runtimeOptions: runtimeOptionsForWorker(options),
+      runtimeOptions: runtimeOptionsForWorker(request, runtime),
     });
     logAgentLoopEvent(request, "loop.created", runStartedAt, {});
     const eventsDone = logLoopEvents(request, run, runStartedAt);
@@ -201,7 +219,7 @@ function logAgentLoopEvent(
 
 function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
   const provider = options.provider ?? "kimi";
-  const runtime = options.runtime ?? (provider === "kimi" ? "claude-code" : "ai-sdk");
+  const runtime = resolveRuntime(options);
   switch (provider) {
     case "deepseek":
       if (runtime === "claude-code") {
@@ -216,8 +234,15 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
           provider: createProvider(options),
         });
       }
-      throw new Error("Kimi Code does not support the ai-sdk runtime without client allowlist onboarding.");
+      throw new Error(
+        "Kimi Code does not support the ai-sdk runtime without client allowlist onboarding.",
+      );
   }
+}
+
+function resolveRuntime(options: AgentLoopWorkerOptions): "ai-sdk" | "claude-code" {
+  const provider = options.provider ?? "kimi";
+  return options.runtime ?? (provider === "kimi" ? "claude-code" : "ai-sdk");
 }
 
 function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
@@ -230,46 +255,25 @@ function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
 }
 
 function runtimeOptionsForWorker(
-  options: AgentLoopWorkerOptions,
+  request: AgentRunRequest,
+  runtime: "ai-sdk" | "claude-code",
 ): Record<string, unknown> | undefined {
-  if (options.runtime !== "claude-code") {
+  if (runtime !== "claude-code") {
     return undefined;
   }
-  if (Bun.env.SIKONG_AGENT_HOST_CLAUDE_BUILTINS === "1") {
-    return undefined;
+
+  if (request.runtimeProfile === "code") {
+    return {
+      systemPromptPreset: "claude_code",
+      builtinTools: { type: "preset", preset: "claude_code" },
+      disallowedTools: ORCHESTRATION_ESCAPE_TOOLS,
+    };
   }
+
   return {
+    systemPromptPreset: "custom",
     builtinTools: [],
-    disallowedTools: [
-      "Task",
-      "Agent",
-      "Bash",
-      "bash",
-      "Read",
-      "read",
-      "Write",
-      "write",
-      "Edit",
-      "edit",
-      "MultiEdit",
-      "multiedit",
-      "Glob",
-      "glob",
-      "Grep",
-      "grep",
-      "LS",
-      "ls",
-      "WebFetch",
-      "webfetch",
-      "WebSearch",
-      "websearch",
-      "TodoRead",
-      "todoread",
-      "TodoWrite",
-      "todowrite",
-      "EnterPlanMode",
-      "ExitPlanMode",
-    ],
+    disallowedTools: GENERAL_BUILTIN_DENY_TOOLS,
   };
 }
 
@@ -334,7 +338,11 @@ function renderSystemPrompt(request: AgentRunRequest): string {
 }
 
 function renderUserPrompt(request: AgentRunRequest): string {
-  return `Objective: ${request.objective}`;
+  return [
+    `Objective: ${request.objective}`,
+    `You must finish this run by calling one of these terminal tools: ${request.terminalToolSet.join(", ")}.`,
+    "Do not answer in plain text instead of calling the terminal tool.",
+  ].join("\n");
 }
 
 function toJsonObject(input: Record<string, unknown>): JsonValue {

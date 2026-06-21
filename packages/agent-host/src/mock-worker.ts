@@ -131,18 +131,6 @@ function mockToolSteps(
     return mockAssistantToolSteps(request, terminalArguments);
   }
 
-  const contextToolName = contextReaderToolName(request);
-  if (
-    contextToolName &&
-    contextToolName !== toolName &&
-    !request.terminalToolSet.includes(contextToolName)
-  ) {
-    return [
-      { name: contextToolName, arguments: {} },
-      { name: toolName, arguments: terminalArguments },
-    ];
-  }
-
   return [{ name: toolName, arguments: terminalArguments }];
 }
 
@@ -172,16 +160,6 @@ function mockAssistantToolSteps(
   return steps;
 }
 
-function contextReaderToolName(request: AgentRunRequest): string | undefined {
-  const preferred = "read_operation_context";
-  if (request.tools.some((tool) => tool.name === preferred)) {
-    return preferred;
-  }
-  return request.tools.find(
-    (tool) => tool.name.startsWith("read_") && tool.name.endsWith("_context"),
-  )?.name;
-}
-
 async function mockTerminalArguments(
   request: AgentRunRequest,
   toolName: string,
@@ -193,8 +171,6 @@ async function mockTerminalArguments(
   switch (toolName) {
     case "submit_specification":
       return mockSpecificationArgs(plan, input);
-    case "submit_evidence":
-      return mockEvidenceArgs(plan, input);
     case "submit_plan_group":
       return mockPlanGroupArgs(plan);
     case "submit_work":
@@ -210,50 +186,47 @@ async function mockTerminalArguments(
   }
 }
 
-function mockSpecificationArgs(plan: unknown, input: Record<string, unknown>): Record<string, unknown> {
+function mockSpecificationArgs(
+  plan: unknown,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
   const record = toRecord(plan);
-  if ("NeedsInfo" in record) {
-    const needsInfo = toRecord(record.NeedsInfo);
+  const node = toRecord(input.node);
+  const intent = stringOr(node.intent, "mock work");
+  if (
+    intent ===
+    "Configure the production model provider selected by the user, but the provider choice is not present."
+  ) {
     return {
-      size: "small",
-      shape: "unknown",
-      reference_match:
-        "This is closest to Small, but one explicit missing information need blocks execution.",
-      scope_signals: ["missing information blocks the next action"],
-      missing_info: stringOr(needsInfo.need, "missing_information"),
+      next: "Identify which provider and model are selected in the current runtime config.",
+      size: "tiny",
+      reason: "The evidence-gathering work is tiny even though the broader setup depends on it.",
     };
   }
 
-  const node = toRecord(input.node);
   const nodeSize = stringOr(node.size, "").toLowerCase();
   if (nodeSize === "large" || nodeSize === "xlarge") {
     return {
+      next: intent,
       size: nodeSize,
-      shape: "phased",
-      reference_match:
+      reason:
         "This is closest to Large because the node was created as a broad child that needs recursive planning.",
-      scope_signals: ["broad child node", "requires recursive planning before execution"],
-      missing_info: null,
     };
   }
 
   if ("Group" in record || "Split" in record) {
     return {
+      next: intent,
       size: "large",
-      shape: "phased",
-      reference_match:
+      reason:
         "This is closest to Large because the fixture already contains multiple child work items.",
-      scope_signals: ["multiple child work items", "requires planning before execution"],
-      missing_info: null,
     };
   }
   return {
+    next: intent,
     size: "small",
-    shape: "atomic",
-    reference_match:
+    reason:
       "This is closest to Small because the mock agent mirrors one local node and one terminal path.",
-    scope_signals: ["one local problem", "one verification path"],
-    missing_info: null,
   };
 }
 
@@ -321,15 +294,6 @@ function taskBoardTasks(input: Record<string, unknown>): Record<string, unknown>
   return arrayOfRecords(toRecord(input.task_board).tasks);
 }
 
-function mockEvidenceArgs(plan: unknown, input: Record<string, unknown>): Record<string, unknown> {
-  const needsInfo = toRecord(toRecord(plan).NeedsInfo);
-  const node = toRecord(input.node);
-  return {
-    need: stringOr(needsInfo.need, "missing_information"),
-    evidence: `evidence for ${stringOr(node.intent, "mock work")}`,
-  };
-}
-
 function mockPlanGroupArgs(plan: unknown): Record<string, unknown> {
   const record = toRecord(plan);
   if (plan === "Split" || "Split" in record) {
@@ -340,17 +304,15 @@ function mockPlanGroupArgs(plan: unknown): Record<string, unknown> {
           key: "split-a",
           intent: "split a",
           size: "small",
-          shape: "atomic",
-          reference_match: "One generated atomic split child.",
-          scope_signals: ["one child item"],
+          reason: "One generated atomic split child.",
+          requires_prior_results: false,
         },
         {
           key: "split-b",
           intent: "split b",
           size: "small",
-          shape: "atomic",
-          reference_match: "One generated atomic split child.",
-          scope_signals: ["one child item"],
+          reason: "One generated atomic split child.",
+          requires_prior_results: false,
         },
       ],
     };
@@ -369,14 +331,11 @@ function planGroupItem(item: unknown): Record<string, unknown> {
     key: stringOr(record.key, "mock-item"),
     intent: stringOr(record.intent, "mock item"),
     size: stringOr(record.size, "small"),
-    shape: stringOr(record.shape, "atomic"),
-    reference_match: stringOr(
-      record.reference_match,
+    reason: stringOr(
+      record.reason,
       "This child is closest to Small because it is one scoped mock plan item.",
     ),
-    scope_signals: Array.isArray(record.scope_signals)
-      ? record.scope_signals
-      : ["one child item"],
+    requires_prior_results: Boolean(record.requires_prior_results),
   };
 }
 

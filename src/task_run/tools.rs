@@ -1,13 +1,9 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer};
-use serde_json::Value;
-
-use crate::AgentToolSpec;
+use serde::Deserialize;
 
 use super::{
     Budget, CapabilityProfile, FailureClass, NodeOperationOutput, NodePlan, NodeTemplate,
-    PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, VerificationVerdict, WorkShape,
-    WorkSize,
+    PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, VerificationVerdict, WorkSize,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -25,34 +21,28 @@ impl EngineTools {
         &self,
         args: SubmitSpecificationArgs,
     ) -> NodeOperationOutput {
-        let SubmitSpecificationArgs {
-            size,
-            shape,
-            reference_match,
-            scope_signals,
-            missing_info,
-        } = args;
+        let SubmitSpecificationArgs { next, size, reason } = args;
         NodeOperationOutput::Specified {
-            scope_assessment: ScopeAssessment {
-                size,
-                shape,
-                reference_match,
-                scope_signals,
-            },
-            missing_info: normalize_optional_text(missing_info),
-        }
-    }
-
-    #[tool(description = "Submit acquired information and supporting evidence.")]
-    pub(crate) fn submit_evidence(&self, args: SubmitEvidenceArgs) -> NodeOperationOutput {
-        NodeOperationOutput::Acquired {
-            need: args.need,
-            evidence: args.evidence,
+            scope_assessment: ScopeAssessment { next, size, reason },
         }
     }
 
     #[tool(description = "Submit a stage or parallel plan group for recursive execution.")]
     pub(crate) fn submit_plan_group(&self, args: SubmitPlanGroupArgs) -> NodeOperationOutput {
+        if args.items.is_empty() {
+            return NodeOperationOutput::InvalidPlan {
+                reason: "plan group must contain at least one item".to_string(),
+            };
+        }
+        if args.mode == PlanGroupMode::Parallel
+            && args.items.iter().any(|item| item.requires_prior_results)
+        {
+            return NodeOperationOutput::InvalidPlan {
+                reason:
+                    "parallel plan items must be mutually independent; dependent synthesis belongs in the parent Combine pass"
+                        .to_string(),
+            };
+        }
         NodeOperationOutput::Planned {
             group: PlanGroup {
                 mode: args.mode,
@@ -88,49 +78,24 @@ impl EngineTools {
     }
 }
 
-pub(crate) fn read_operation_context_spec() -> AgentToolSpec {
-    AgentToolSpec {
-        name: "read_operation_context".to_string(),
-        description: "Read the current operation context packet.".to_string(),
-        input_schema: crate::agent_run::schema_for::<EmptyToolArgs>(),
-    }
-}
-
-fn normalize_optional_text(input: Option<String>) -> Option<String> {
-    input
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("null"))
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct EmptyToolArgs {}
-
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubmitSpecificationArgs {
+    pub next: String,
     pub size: WorkSize,
-    pub shape: WorkShape,
-    pub reference_match: String,
-    pub scope_signals: Vec<String>,
-    pub missing_info: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SubmitEvidenceArgs {
-    pub need: String,
-    pub evidence: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubmitPlanGroupArgs {
     pub mode: PlanGroupMode,
+    #[schemars(length(min = 1))]
     pub items: Vec<PlanItemInput>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PlanItemInput {
     pub key: Option<String>,
     pub title: Option<String>,
@@ -138,11 +103,8 @@ pub(crate) struct PlanItemInput {
     pub description: Option<String>,
     pub verification: Option<String>,
     pub size: Option<WorkSize>,
-    #[serde(default, deserialize_with = "deserialize_optional_work_shape")]
-    pub shape: Option<WorkShape>,
-    pub reference_match: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_string_vec")]
-    pub scope_signals: Option<Vec<String>>,
+    pub reason: Option<String>,
+    pub requires_prior_results: bool,
 }
 
 impl PlanItemInput {
@@ -167,11 +129,10 @@ impl PlanItemInput {
         }
 
         let size = self.size.unwrap_or_default();
-        let scope_assessment = self.reference_match.map(|reference_match| ScopeAssessment {
+        let scope_assessment = self.reason.map(|reason| ScopeAssessment {
+            next: intent.clone(),
             size,
-            shape: self.shape.unwrap_or_default(),
-            reference_match,
-            scope_signals: self.scope_signals.unwrap_or_default(),
+            reason,
         });
 
         NodeTemplate {
@@ -207,63 +168,6 @@ fn plan_item_key(input: &str, index: usize) -> String {
     } else {
         key
     }
-}
-
-fn deserialize_optional_work_shape<'de, D>(deserializer: D) -> Result<Option<WorkShape>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<Value>::deserialize(deserializer)?;
-    Ok(match value {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) => Some(parse_work_shape(&value)),
-        Some(other) => serde_json::from_value(other).ok(),
-    })
-}
-
-fn parse_work_shape(value: &str) -> WorkShape {
-    match value
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' '], "_")
-        .as_str()
-    {
-        "atomic" => WorkShape::Atomic,
-        "phased" => WorkShape::Phased,
-        "independent_areas" | "independent_area" => WorkShape::IndependentAreas,
-        "unknown" => WorkShape::Unknown,
-        _ => WorkShape::Unknown,
-    }
-}
-
-fn deserialize_optional_string_vec<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<Value>::deserialize(deserializer)?;
-    Ok(match value {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) => Some(non_empty_strings([value])),
-        Some(Value::Array(values)) => Some(non_empty_strings(
-            values
-                .into_iter()
-                .filter_map(|value| match value {
-                    Value::String(value) => Some(value),
-                    other => Some(other.to_string()),
-                })
-                .collect::<Vec<_>>(),
-        )),
-        Some(other) => Some(non_empty_strings([other.to_string()])),
-    }
-    .filter(|values| !values.is_empty()))
-}
-
-fn non_empty_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
-    values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

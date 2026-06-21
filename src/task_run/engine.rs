@@ -20,19 +20,7 @@ use super::{
     OperationEvent, OperationHarness, ProblemKey, VerificationVerdict,
 };
 
-fn plan_from_scope_assessment(
-    assessment: &ScopeAssessment,
-    missing_info: Option<String>,
-    current_plan: &NodePlan,
-) -> NodePlan {
-    if let Some(need) = missing_info.filter(|need| !need.trim().is_empty()) {
-        let then = match current_plan {
-            NodePlan::NeedsInfo { then, .. } => then.clone(),
-            _ => Box::new(NodePlan::Execute),
-        };
-        return NodePlan::NeedsInfo { need, then };
-    }
-
+fn plan_from_scope_assessment(assessment: &ScopeAssessment, current_plan: &NodePlan) -> NodePlan {
     match assessment.size {
         WorkSize::Tiny | WorkSize::Small | WorkSize::Medium => NodePlan::Execute,
         WorkSize::Large | WorkSize::XLarge => match current_plan {
@@ -148,10 +136,6 @@ where
 
         self.specify(node_id, cancellation).await?;
 
-        if self.acquire_if_needed(node_id, cancellation).await? {
-            return self.resolve(node_id, cancellation).await;
-        }
-
         if self.should_plan(node_id)? {
             self.plan_group(node_id, cancellation).await?;
             let child_ids = self.node(node_id)?.children.clone();
@@ -162,9 +146,16 @@ where
                 }
                 Some(PlanGroupMode::Stage) | None => {
                     for child_id in child_ids {
-                        self.resolve(child_id, cancellation).await?;
+                        if self.resolve(child_id, cancellation).await?.is_none() {
+                            self.mark_parent_blocked_by_children(node_id)?;
+                            return Ok(None);
+                        }
                     }
                 }
+            }
+            if !self.all_children_accepted(node_id)? {
+                self.mark_parent_blocked_by_children(node_id)?;
+                return Ok(None);
             }
             self.combine(node_id, cancellation).await?;
         } else if self.node(node_id)?.candidate.is_none() {
@@ -183,57 +174,18 @@ where
             let result = self
                 .run_agent(node_id, NodeOperation::Specify, cancellation)
                 .await?;
-            if let NodeOperationOutput::Specified {
-                scope_assessment,
-                missing_info,
-            } = result.output
-            {
+            if let NodeOperationOutput::Specified { scope_assessment } = result.output {
                 let current_plan = self.node(node_id)?.plan.clone();
-                let plan =
-                    plan_from_scope_assessment(&scope_assessment, missing_info, &current_plan);
+                let plan = plan_from_scope_assessment(&scope_assessment, &current_plan);
                 let node = self.node_mut(node_id)?;
                 node.size = scope_assessment.size;
+                node.intent = scope_assessment.next.clone();
                 node.scope_assessment = Some(scope_assessment);
                 node.plan = plan;
             }
             self.node_mut(node_id)?.status = NodeStatus::Specified;
         }
         Ok(())
-    }
-
-    async fn acquire_if_needed(
-        &mut self,
-        node_id: NodeId,
-        cancellation: &CancellationToken,
-    ) -> Result<bool, EngineError> {
-        if !matches!(self.node(node_id)?.plan, NodePlan::NeedsInfo { .. }) {
-            return Ok(false);
-        }
-
-        let result = self
-            .run_agent(node_id, NodeOperation::Acquire, cancellation)
-            .await?;
-        if let NodeOperationOutput::Acquired { need, evidence } = result.output {
-            let artifact_id = self.push_artifact(
-                node_id,
-                ArtifactContentKind::Text,
-                evidence,
-                None,
-                Vec::new(),
-            );
-            self.node_mut(node_id)?
-                .acquired
-                .push(format!("{need}={artifact_id}"));
-            let next_plan = match self.node(node_id)?.plan.clone() {
-                NodePlan::NeedsInfo { then, .. } => *then,
-                _ => NodePlan::Execute,
-            };
-            self.node_mut(node_id)?.plan = next_plan;
-            self.node_mut(node_id)?.status = NodeStatus::Specified;
-            return Ok(true);
-        }
-
-        Ok(false)
     }
 
     fn should_plan(&self, node_id: NodeId) -> Result<bool, EngineError> {
@@ -250,6 +202,60 @@ where
         })
     }
 
+    fn all_children_accepted(&self, node_id: NodeId) -> Result<bool, EngineError> {
+        self.node(node_id)?
+            .children
+            .iter()
+            .try_fold(true, |accepted, child_id| {
+                Ok(accepted && self.node(*child_id)?.accepted_artifact.is_some())
+            })
+    }
+
+    fn mark_parent_blocked_by_children(&mut self, node_id: NodeId) -> Result<(), EngineError> {
+        let child_ids = self.node(node_id)?.children.clone();
+        let child_statuses = child_ids
+            .iter()
+            .map(|child_id| self.node(*child_id).map(|child| (*child_id, child.status)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let waiting_children = child_statuses
+            .iter()
+            .filter_map(|(child_id, status)| {
+                (*status == NodeStatus::WaitingForInfo).then_some(child_id.to_string())
+            })
+            .collect::<Vec<_>>();
+
+        if !waiting_children.is_empty() {
+            self.record(
+                node_id,
+                NodeOperation::Combine,
+                format!(
+                    "waiting for child information before combine: {}",
+                    waiting_children.join(", ")
+                ),
+            );
+            self.node_mut(node_id)?.status = NodeStatus::WaitingForInfo;
+            return Ok(());
+        }
+
+        let unresolved_children = child_statuses
+            .iter()
+            .filter_map(|(child_id, status)| {
+                (!matches!(status, NodeStatus::Committed)).then_some(child_id.to_string())
+            })
+            .collect::<Vec<_>>();
+        self.record(
+            node_id,
+            NodeOperation::Combine,
+            format!(
+                "blocked by unresolved children before combine: {}",
+                unresolved_children.join(", ")
+            ),
+        );
+        self.node_mut(node_id)?.status = NodeStatus::Pruned;
+        Ok(())
+    }
+
     async fn plan_group(
         &mut self,
         node_id: NodeId,
@@ -258,14 +264,28 @@ where
         let result = self
             .run_agent(node_id, NodeOperation::Plan, cancellation)
             .await?;
-        let NodeOperationOutput::Planned { group } = result.output else {
-            return Ok(());
+        let group = match result.output {
+            NodeOperationOutput::Planned { group } => group,
+            NodeOperationOutput::InvalidPlan { reason } => {
+                self.record(
+                    node_id,
+                    NodeOperation::Plan,
+                    format!("invalid plan: {reason}"),
+                );
+                return Err(EngineError::AgentProtocol(format!(
+                    "invalid plan for node {node_id}: {reason}"
+                )));
+            }
+            _ => return Ok(()),
         };
         self.node_mut(node_id)?.plan = NodePlan::Group(group.clone());
+        let parent = self.node(node_id)?.clone();
         let child_ids: Vec<_> = group
             .items
             .into_iter()
-            .map(|template| self.insert_node(Some(node_id), template))
+            .map(|template| {
+                self.insert_node(Some(node_id), inherit_child_defaults(&parent, template))
+            })
             .collect();
         self.node_mut(node_id)?.children = child_ids;
         self.node_mut(node_id)?.status = NodeStatus::Planned;
@@ -513,17 +533,27 @@ where
                 Ok(Some(artifact_id))
             }
             VerificationVerdict::Uncertain { missing_info, .. } => {
-                self.run_agent(node_id, NodeOperation::Acquire, cancellation)
-                    .await?;
                 self.record(
                     node_id,
-                    NodeOperation::Acquire,
-                    format!("uncertain: {missing_info}"),
+                    NodeOperation::Verify,
+                    format!("needs information: {missing_info}"),
                 );
                 self.node_mut(node_id)?.status = NodeStatus::WaitingForInfo;
                 Ok(None)
             }
             VerificationVerdict::Reject { failure_class, .. } => {
+                if matches!(
+                    failure_class,
+                    FailureClass::MissingInfo | FailureClass::SpecAmbiguity
+                ) {
+                    self.record(
+                        node_id,
+                        NodeOperation::Verify,
+                        format!("needs information after reject: {failure_class:?}"),
+                    );
+                    self.node_mut(node_id)?.status = NodeStatus::WaitingForInfo;
+                    return Ok(None);
+                }
                 self.handle_reject(node_id, failure_class, cancellation)
                     .await
             }
@@ -653,7 +683,6 @@ where
                 children: Vec::new(),
                 status: NodeStatus::New,
                 plan: template.plan,
-                acquired: Vec::new(),
                 candidate: None,
                 accepted_artifact: None,
                 execution_attempts: 0,
@@ -990,6 +1019,13 @@ fn path_allowed(path: &str, scopes: &[String]) -> bool {
             || scope == path
             || (scope.ends_with('*') && path.starts_with(scope.trim_end_matches('*')))
     })
+}
+
+fn inherit_child_defaults(parent: &ProblemNode, mut template: NodeTemplate) -> NodeTemplate {
+    template.workspace = parent.workspace.clone();
+    template.capabilities = parent.capabilities.clone();
+    template.budget = parent.budget.clone();
+    template
 }
 
 fn check_cancelled(cancellation: &CancellationToken) -> Result<(), EngineError> {
