@@ -162,6 +162,35 @@ fn run_cli(cli: Cli) -> i32 {
                 }
             },
         },
+        Some(Command::Dogfood { command }) => match command {
+            DogfoodCommand::List => {
+                for scenario in task_run_split_eval_scenarios() {
+                    println!("{}: {}", scenario.id, scenario.task.lines().next().unwrap_or(""));
+                }
+                0
+            }
+            DogfoodCommand::Run {
+                scenario_file,
+                scenario,
+                artifact_dir,
+                route_only,
+                log,
+                json,
+            } => match run_dogfood_run(scenario_file, scenario, artifact_dir, route_only, log, json) {
+                Ok(passed) => {
+                    if passed {
+                        0
+                    } else {
+                        1
+                    }
+                }
+                Err(error) => {
+                    error!(%error, "failed to run dogfood scenario");
+                    eprintln!("failed to run dogfood scenario: {error}");
+                    1
+                }
+            },
+        },
     }
 }
 
@@ -189,6 +218,43 @@ enum Command {
         #[command(subcommand)]
         command: EvalCommand,
     },
+    /// Run dogfood self-development tasks.
+    Dogfood {
+        #[command(subcommand)]
+        command: DogfoodCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DogfoodCommand {
+    /// Run a dogfood scenario through the engine and judge the result.
+    Run {
+        /// YAML scenario file to evaluate.
+        #[arg(long)]
+        scenario_file: Option<PathBuf>,
+
+        /// Scenario id from built-in list, such as sikong-project-analysis.
+        #[arg(long)]
+        scenario: Option<String>,
+
+        /// Write full task-run artifacts to this directory for human review.
+        #[arg(long)]
+        artifact_dir: Option<PathBuf>,
+
+        /// Stop after the root Plan operation so routing can be evaluated cheaply.
+        #[arg(long)]
+        route_only: bool,
+
+        /// Record the outcome in the development log.
+        #[arg(long)]
+        log: bool,
+
+        /// Print full JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List available built-in dogfood scenarios.
+    List,
 }
 
 #[derive(Debug, Subcommand)]
@@ -802,6 +868,183 @@ async fn run_task_run_split_eval_async(
     }
 
     Ok(output.passed)
+}
+
+fn run_dogfood_run(
+    scenario_file: Option<PathBuf>,
+    scenario: Option<String>,
+    artifact_dir: Option<PathBuf>,
+    route_only: bool,
+    log: bool,
+    json_output: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let scenarios = select_task_run_split_eval_scenarios(None, scenario, scenario_file.as_deref())?;
+    if scenarios.is_empty() {
+        return Err("no dogfood scenario selected; use --scenario or --scenario-file".into());
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("siko-dogfood")
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_dogfood_run_async(scenarios, artifact_dir.as_deref(), route_only, log, json_output))
+}
+
+async fn run_dogfood_run_async(
+    scenarios: Vec<TaskRunSplitScenario>,
+    artifact_dir: Option<&Path>,
+    route_only: bool,
+    log: bool,
+    json_output: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let mut results = Vec::new();
+
+    for scenario in scenarios {
+        let run_started = Instant::now();
+        let launch = resolve_agent_host_launch(&debug);
+        let root_workspace = eval_task_workspace_requirement(&scenario)?;
+        let mut engine = Engine::new(
+            Workspaces::default(),
+            ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone()),
+        );
+        if route_only {
+            engine = engine.with_stop_after_route_depth(0);
+        }
+        let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace));
+        let report = engine
+            .run(root)
+            .await
+            .map_err(|error| format!("scenario {} failed: {error:?}", scenario.id))?;
+        let transcript = TaskRunSplitTranscript::from_engine(&scenario, root, &engine, &report);
+        let artifact_files =
+            write_task_run_artifacts(artifact_dir, &scenario, root, &engine, &report)?;
+        let actor_usage = sum_agent_run_usage(&report.agent_runs);
+
+        let judge_launch = resolve_agent_host_launch(&debug);
+        let mut judge = ProcessAgentRunScheduler::new(judge_launch.command, judge_launch.args);
+        let judge_response = judge
+            .run(judge_request(&transcript), CancellationToken::new())
+            .await;
+        let judgement = decode_judgement(judge_response.terminal_call)?;
+        let total_usage = sum_usage(Some(&actor_usage), judge_response.usage.as_ref());
+
+        if log {
+            dogfood_write_devlog_entry(&scenario, &judgement, run_started.elapsed())?;
+        }
+
+        if json_output {
+            let output = serde_json::json!({
+                "scenario": scenario.id,
+                "passed": judgement.passed,
+                "findings": judgement.findings,
+                "evidence": judgement.evidence,
+                "duration_ms": run_started.elapsed().as_millis(),
+                "total_usage": total_usage,
+                "status": report.status,
+                "artifact_files": artifact_files,
+                "agent_runs": report.agent_runs.len(),
+            });
+            serde_json::to_writer_pretty(std::io::stdout(), &output)?;
+            println!();
+        } else {
+            println!(
+                "dogfood {}: {} duration={}ms agent_runs={}",
+                scenario.id,
+                if judgement.passed { "PASSED" } else { "FAILED" },
+                run_started.elapsed().as_millis(),
+                report.agent_runs.len(),
+            );
+            for finding in &judgement.findings {
+                println!("  - {finding}");
+            }
+            for af in &artifact_files {
+                println!("  artifact node {}: {}", af.node_id, af.path);
+            }
+        }
+
+        results.push(judgement.passed);
+    }
+
+    Ok(results.iter().all(|p| *p))
+}
+
+fn dogfood_write_devlog_entry(
+    scenario: &TaskRunSplitScenario,
+    judgement: &TaskRunSplitJudgement,
+    duration: std::time::Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = chrono_now_date();
+    let log_path = Path::new("development-log").join(format!("{now}.md"));
+    let mut log_content = if log_path.exists() {
+        std::fs::read_to_string(&log_path)?
+    } else {
+        format!("## {now} - Dogfood run\n\n")
+    };
+
+    log_content.push_str(&format!(
+        "\n### {} - {}\n\n",
+        now,
+        scenario.id,
+    ));
+    log_content.push_str(&format!("Scenario: {}\n\n", scenario.task.lines().next().unwrap_or("")));
+    log_content.push_str(&format!("Verdict: {}\n\n", if judgement.passed { "PASSED" } else { "FAILED" }));
+    if !judgement.findings.is_empty() {
+        log_content.push_str("Findings:\n");
+        for f in &judgement.findings {
+            log_content.push_str(&format!("- {f}\n"));
+        }
+        log_content.push('\n');
+    }
+    log_content.push_str(&format!("Duration: {}ms\n", duration.as_millis()));
+    log_content.push_str(&format!("Expectation: {}\n", scenario.expectation));
+
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&log_path, log_content)?;
+    eprintln!("dogfood result logged to {}", log_path.display());
+    Ok(())
+}
+
+fn chrono_now_date() -> String {
+    // Simple YYYY-MM-DD from system time without pulling in chrono
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Days since epoch
+    let days = secs / 86400;
+    // Algorithm to compute year/month/day from days since 1970-01-01
+    let mut y = 1970i64;
+    let mut remaining = days as i64;
+    loop {
+        let days_in_year = if is_leap(y) { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        y += 1;
+    }
+    let leap = is_leap(y);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut m = 1;
+    for days_in_month in month_days {
+        if remaining < days_in_month {
+            break;
+        }
+        remaining -= days_in_month;
+        m += 1;
+    }
+    let d = remaining + 1;
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+fn is_leap(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 fn ensure_live_eval_enabled() -> Result<(), Box<dyn std::error::Error>> {
@@ -2886,5 +3129,66 @@ workspace:
                 args: vec!["/configured/runtime-host.ts".to_string()],
             }
         );
+    }
+
+    #[test]
+    fn parses_dogfood_run_command() {
+        let cli =
+            Cli::try_parse_from(["siko", "dogfood", "run", "--scenario", "simple-qa"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Dogfood {
+                command: DogfoodCommand::Run {
+                    scenario_file: None,
+                    scenario: Some(ref s),
+                    artifact_dir: None,
+                    route_only: false,
+                    log: false,
+                    json: false,
+                }
+            }) if s == "simple-qa"
+        ));
+    }
+
+    #[test]
+    fn parses_dogfood_run_with_flags() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "dogfood",
+            "run",
+            "--scenario-file",
+            "evals/task-run/dogfood-doc-review.yaml",
+            "--artifact-dir",
+            "/tmp/artifacts",
+            "--route-only",
+            "--log",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Dogfood {
+                command: DogfoodCommand::Run {
+                    scenario_file: Some(ref path),
+                    artifact_dir: Some(ref dir),
+                    route_only: true,
+                    log: true,
+                    json: true,
+                    ..
+                }
+            }) if path.as_path() == Path::new("evals/task-run/dogfood-doc-review.yaml")
+                && dir.as_path() == Path::new("/tmp/artifacts")
+        ));
+    }
+
+    #[test]
+    fn parses_dogfood_list_command() {
+        let cli = Cli::try_parse_from(["siko", "dogfood", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Dogfood {
+                command: DogfoodCommand::List,
+            })
+        ));
     }
 }

@@ -190,6 +190,12 @@ async function mockTerminalArguments(
       return mockVerdictArgs(input);
     case "finish_turn":
       return mockFinishAssistantTurnArgs(input);
+    case "finish_eval":
+      return {
+        passed: true,
+        findings: ["mock judge: engine completed all operations"],
+        evidence: ["mock agent completed Specify/Execute/Verify cycle"],
+      };
     default:
       return { operation };
   }
