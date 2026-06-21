@@ -20,6 +20,7 @@ pub(crate) struct AssistantPackSet {
 enum AssistantPack {
     Core,
     TaskBoard,
+    Dogfood,
 }
 
 impl AssistantPackSet {
@@ -27,6 +28,7 @@ impl AssistantPackSet {
         let mut packs = vec![AssistantPack::Core];
         if context.task_board.is_some() {
             packs.push(AssistantPack::TaskBoard);
+            packs.push(AssistantPack::Dogfood);
         }
         Self { context, packs }
     }
@@ -119,6 +121,10 @@ impl AssistantPack {
                 "Task Board",
                 "The task board pack is available. Use it when the user asks to start durable work, manage running work, inspect progress, cancel work, or make a decision about an existing task. Keep the user's view focused on goal, status, risk, and next decision; avoid exposing engine internals unless they explain a blocker.",
             )],
+            Self::Dogfood => vec![prompt_section(
+                "Dogfood Development",
+                "When the user asks Sikong to improve itself, treat the user as steer input and use the task board as Sikong's self-development loop. Prefer creating or inspecting one bounded roadmap task over doing implementation work inside the assistant turn. A good dogfood task names the mainline goal, the governing layer, the acceptance evidence, the child autonomy boundary, and the artifact that should come back upward. Use review-only design tasks before broad runtime changes, and keep commits for verified workspace changes outside the assistant turn.",
+            )],
         }
     }
 
@@ -131,6 +137,7 @@ impl AssistantPack {
                     json!(task_board_packet(task_board)),
                 )
             }),
+            Self::Dogfood => Some(("dogfood".to_string(), json!(dogfood_packet()))),
         }
     }
 
@@ -143,6 +150,7 @@ impl AssistantPack {
                 AssistantTool::CreateTask,
                 AssistantTool::CancelTask,
             ],
+            Self::Dogfood => Vec::new(),
         }
     }
 }
@@ -160,6 +168,14 @@ pub struct AssistantTurnTaskPacket {
     pub status: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AssistantDogfoodContextPacket {
+    pub mode: &'static str,
+    pub loop_contract: &'static str,
+    pub preferred_next_action: &'static str,
+    pub task_request_shape: Vec<&'static str>,
+}
+
 fn task_board_packet(
     context: &super::context::AssistantTaskBoardContext,
 ) -> AssistantTaskBoardContextPacket {
@@ -174,6 +190,21 @@ fn task_packet(task: &AssistantContextTask) -> AssistantTurnTaskPacket {
         id: task.id.clone(),
         title: task.title.clone(),
         status: format!("{:?}", task.status),
+    }
+}
+
+fn dogfood_packet() -> AssistantDogfoodContextPacket {
+    AssistantDogfoodContextPacket {
+        mode: "sikong_self_development",
+        loop_contract: "external messages are steer input; Sikong should maintain roadmap tasks and return reviewable artifacts through the recursive task engine",
+        preferred_next_action: "inspect an active self-development task when one exists; otherwise create one bounded task that advances the current roadmap",
+        task_request_shape: vec![
+            "mainline goal",
+            "governing layer",
+            "acceptance evidence",
+            "child autonomy boundary",
+            "upward artifact",
+        ],
     }
 }
 

@@ -67,10 +67,15 @@ world. They return artifacts and side-effect ledgers; Rust decides whether those
 artifacts can be verified and committed.
 
 Prompt construction follows `prompt-guidance.md`. Each operation harness should
-project only the context layer needed for that run, preserve the load-bearing
-30% of the operation, and let the agent loop own local execution detail inside
-the terminal tool contract. Raw traces and full histories should return upward
-only as compressed artifacts, events, verdicts, or workspace-provider facts.
+project only the context layer needed for that run, preserve the operation's
+attention boundary, and let the agent loop own local execution detail inside the
+terminal tool contract. Raw traces and full histories should return upward only
+as compressed artifacts, events, verdicts, or workspace-provider facts.
+Governance boundaries follow `governance-model.md`: `Specify` and `Plan` own
+routing, `Execute` and `Combine` own local work and parent synthesis, and
+`Verify` owns gates. Arch-level changes to protocols, workspace semantics, or
+operation meanings require explicit design authority instead of being hidden in
+local execution.
 When live eval exposes a bad operation result, repair the prompt/tool boundary
 in that order: simplify the prompt projection first, tighten terminal tool
 schema or engine validation when a shape must be enforced, and avoid adding

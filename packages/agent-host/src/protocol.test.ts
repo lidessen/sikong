@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { parseAgentRunRequest, parseRuntimeClientMessage, type AgentRunRequest } from "./protocol";
+import {
+  parseAgentRunRequest,
+  parseAgentRunResponse,
+  parseRuntimeClientMessage,
+  type AgentRunRequest,
+} from "./protocol";
 
 const validRequest: AgentRunRequest = {
   protocolVersion: 1,
@@ -81,6 +86,27 @@ describe("agent-host protocol schemas", () => {
     expect(parseRuntimeClientMessage({ type: "shutdown", id: "shutdown_1" })).toEqual({
       type: "shutdown",
       id: "shutdown_1",
+    });
+  });
+
+  test("accept run responses with structured loop events", () => {
+    const response = parseAgentRunResponse({
+      report: "done",
+      toolCalls: [],
+      usage: { totalTokens: 42 },
+      events: [
+        {
+          source: "agent-loop",
+          event: "tool_call_start",
+          name: "Read",
+          elapsedMs: 12,
+        },
+      ],
+    });
+
+    expect(response.events?.[0]).toMatchObject({
+      event: "tool_call_start",
+      name: "Read",
     });
   });
 });

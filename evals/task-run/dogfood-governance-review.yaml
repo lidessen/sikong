@@ -1,0 +1,23 @@
+id: dogfood-governance-review
+task: |
+  Review the new Sikong governance model design for reliability and fit with
+  the existing recursive task-run engine. Focus on whether it reuses existing
+  operations instead of creating a parallel state machine, whether Arch / Plan /
+  Execute / Verify authority boundaries are clear, whether Combine is correctly
+  treated as parent execution/synthesis, and whether the gate rules are
+  enforceable enough for dogfood self-development. Do not modify files.
+expectation: |
+  Produce a concise design review grounded in repository documents. Passing
+  requires concrete findings tied to design/governance-model.md and at least
+  two adjacent design documents. The review must identify any blocking design
+  risks or explicitly say there are no blockers. It should not propose a large
+  implementation patch; this is a design review.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - design/governance-model.md
+    - design/README.md
+    - design/recursive-agent-engine.md
+    - design/prompt-guidance.md
+    - design/development-philosophy.md
+    - design/dogfood.md

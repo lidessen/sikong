@@ -34,6 +34,7 @@ fn plan_from_scope_assessment(assessment: &ScopeAssessment, current_plan: &NodeP
 pub struct Engine<W: Workspace, A: AgentRunScheduler> {
     workspace: W,
     agent: A,
+    stop_after_route_depth: Option<usize>,
     next_node_id: NodeId,
     next_artifact_id: ArtifactId,
     nodes: HashMap<NodeId, ProblemNode>,
@@ -54,6 +55,7 @@ where
         Self {
             workspace,
             agent,
+            stop_after_route_depth: None,
             next_node_id: 0,
             next_artifact_id: 0,
             nodes: HashMap::new(),
@@ -64,6 +66,11 @@ where
             agent_runs: Vec::new(),
             workspace_resources: WorkspaceResourceRegistry::default(),
         }
+    }
+
+    pub fn with_stop_after_route_depth(mut self, depth: usize) -> Self {
+        self.stop_after_route_depth = Some(depth);
+        self
     }
 
     pub fn insert_root(&mut self, template: NodeTemplate) -> NodeId {
@@ -79,7 +86,7 @@ where
         root: NodeId,
         cancellation: CancellationToken,
     ) -> Result<EngineReport, EngineError> {
-        let result = self.resolve(root, &cancellation).await;
+        let result = self.resolve(root, 0, &cancellation).await;
         self.workspace_resources.release_all_refs();
         let cleanup_result = self.cleanup_releasable_resources();
         let artifact = result?;
@@ -126,6 +133,7 @@ where
     async fn resolve(
         &mut self,
         node_id: NodeId,
+        depth: usize,
         cancellation: &CancellationToken,
     ) -> Result<Option<ArtifactId>, EngineError> {
         check_cancelled(cancellation)?;
@@ -137,17 +145,39 @@ where
 
         self.specify(node_id, cancellation).await?;
 
-        if self.should_plan(node_id)? {
+        let should_plan = self.should_plan(node_id)?;
+        if self.stop_after_route_depth == Some(depth) && !should_plan {
+            self.record(
+                node_id,
+                NodeOperation::Specify,
+                format!("stopped after specify at depth {depth}"),
+            );
+            return Ok(None);
+        }
+
+        if should_plan {
             self.plan_group(node_id, cancellation).await?;
+            if self.stop_after_route_depth == Some(depth) {
+                self.record(
+                    node_id,
+                    NodeOperation::Plan,
+                    format!("stopped after plan at depth {depth}"),
+                );
+                return Ok(None);
+            }
             let child_ids = self.node(node_id)?.children.clone();
             match self.group_mode(node_id)? {
                 Some(PlanGroupMode::Parallel) => {
-                    self.resolve_parallel_children(child_ids, cancellation)
+                    self.resolve_parallel_children(child_ids, depth + 1, cancellation)
                         .await?;
                 }
                 Some(PlanGroupMode::Stage) | None => {
                     for child_id in child_ids {
-                        if self.resolve(child_id, cancellation).await?.is_none() {
+                        if self
+                            .resolve(child_id, depth + 1, cancellation)
+                            .await?
+                            .is_none()
+                        {
                             self.mark_parent_blocked_by_children(node_id)?;
                             return Ok(None);
                         }
@@ -267,14 +297,19 @@ where
             .await?;
         let group = match result.output {
             NodeOperationOutput::Planned { group } => group,
-            NodeOperationOutput::InvalidPlan { reason } => {
+            NodeOperationOutput::InvalidPlan { gate, reason } => {
                 self.record(
                     node_id,
                     NodeOperation::Plan,
-                    format!("invalid plan: {reason}"),
+                    match gate {
+                        Some(gate) => format!("invalid plan {}: {reason}", gate.id()),
+                        None => format!("invalid plan: {reason}"),
+                    },
                 );
                 return Err(EngineError::AgentProtocol(format!(
-                    "invalid plan for node {node_id}: {reason}"
+                    "invalid plan for node {node_id}: {}{reason}",
+                    gate.map(|gate| format!("{}: ", gate.id()))
+                        .unwrap_or_default()
                 )));
             }
             _ => return Ok(()),
@@ -297,9 +332,11 @@ where
     async fn resolve_parallel_children(
         &mut self,
         child_ids: Vec<NodeId>,
+        depth: usize,
         cancellation: &CancellationToken,
     ) -> Result<(), EngineError> {
         let mut branches = JoinSet::new();
+        let stop_after_route_depth = self.stop_after_route_depth;
         for child_id in child_ids {
             check_cancelled(cancellation)?;
             let child = self.node(child_id)?.clone();
@@ -308,9 +345,10 @@ where
             let cancellation = cancellation.clone();
             branches.spawn(async move {
                 let mut branch = Engine::new(workspace, agent);
+                branch.stop_after_route_depth = stop_after_route_depth;
                 branch.next_node_id = child.id;
                 branch.nodes.insert(child.id, child);
-                branch.resolve(child_id, &cancellation).await?;
+                branch.resolve(child_id, depth, &cancellation).await?;
                 Ok::<_, EngineError>((child_id, branch))
             });
         }
@@ -381,6 +419,7 @@ where
                 terminal_payload: run.terminal_payload,
                 duration_ms: run.duration_ms,
                 usage: run.usage,
+                events: run.events,
             });
         }
 
@@ -787,6 +826,7 @@ where
         let duration_ms = started_at.elapsed().as_millis();
         check_cancelled(cancellation)?;
         let usage = worker_result.usage.clone();
+        let events = worker_result.events.clone();
         let terminal_payload = worker_result
             .terminal_call
             .as_ref()
@@ -810,6 +850,7 @@ where
                     terminal_payload,
                     duration_ms,
                     usage,
+                    events,
                 });
                 self.record(node_id, operation, error.message.clone());
                 return Err(EngineError::AgentProtocol(error.message));
@@ -830,6 +871,7 @@ where
             terminal_payload,
             duration_ms,
             usage,
+            events,
         });
         self.record(node_id, operation, result.report.clone());
         Ok(result)

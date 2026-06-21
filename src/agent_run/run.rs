@@ -1,18 +1,31 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::Notify;
+
+#[derive(Debug)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
+impl Default for CancellationState {
+    fn default() -> Self {
+        Self {
+            cancelled: AtomicBool::new(false),
+            notify: Notify::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
+    state: Arc<CancellationState>,
 }
 
 impl CancellationToken {
@@ -21,16 +34,28 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        if !self.state.cancelled.swap(true, Ordering::SeqCst) {
+            self.state.notify.notify_waiters();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
+        self.state.cancelled.load(Ordering::SeqCst)
     }
 
     pub async fn cancelled(&self) {
-        while !self.is_cancelled() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+        if self.is_cancelled() {
+            return;
+        }
+        loop {
+            let notified = self.state.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+            if self.is_cancelled() {
+                return;
+            }
         }
     }
 }
@@ -43,6 +68,8 @@ pub struct AgentRunResponse {
     #[serde(rename = "terminalCall")]
     pub terminal_call: Option<AgentToolCall>,
     pub usage: Option<AgentTokenUsage>,
+    #[serde(default)]
+    pub events: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,12 +95,28 @@ pub struct AgentTokenUsage {
     pub input_tokens: u64,
     #[serde(rename = "outputTokens", default)]
     pub output_tokens: u64,
+    #[serde(rename = "activeTokens", default)]
+    pub active_tokens: u64,
     #[serde(rename = "totalTokens", default)]
     pub total_tokens: u64,
     #[serde(rename = "cacheReadTokens", default)]
     pub cache_read_tokens: u64,
     #[serde(rename = "cacheCreationTokens", default)]
     pub cache_creation_tokens: u64,
+}
+
+impl AgentTokenUsage {
+    pub fn active_tokens(&self) -> u64 {
+        if self.active_tokens > 0 || self.total_tokens == 0 {
+            self.active_tokens
+        } else {
+            self.input_tokens + self.output_tokens + self.cache_creation_tokens
+        }
+    }
+
+    pub fn cached_tokens(&self) -> u64 {
+        self.cache_read_tokens + self.cache_creation_tokens
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -404,6 +404,7 @@ impl ProcessAgentRunScheduler {
             tool_calls: Vec::new(),
             terminal_call: None,
             usage: None,
+            events: Vec::new(),
         }
     }
 }

@@ -18,6 +18,121 @@ pub enum NodeOperation {
     Commit,
 }
 
+impl NodeOperation {
+    pub fn governance_layer(self) -> Option<GovernanceLayer> {
+        match self {
+            Self::Specify | Self::Plan => Some(GovernanceLayer::Plan),
+            Self::Execute | Self::Combine => Some(GovernanceLayer::Execute),
+            Self::Verify => Some(GovernanceLayer::Verify),
+            Self::Commit => None,
+        }
+    }
+
+    pub fn active_hard_gates(self) -> &'static [GovernanceGate] {
+        match self {
+            Self::Specify => &[],
+            Self::Plan => &[
+                GovernanceGate::ArchEscape,
+                GovernanceGate::ParallelDependency,
+                GovernanceGate::SynthesisChild,
+                GovernanceGate::ScopeWiden,
+                GovernanceGate::Protocol,
+            ],
+            Self::Execute => &[
+                GovernanceGate::ArchEscape,
+                GovernanceGate::ScopeWiden,
+                GovernanceGate::Protocol,
+                GovernanceGate::CheckFail,
+            ],
+            Self::Combine => &[
+                GovernanceGate::UnsupportedFact,
+                GovernanceGate::Protocol,
+                GovernanceGate::CheckFail,
+            ],
+            Self::Verify => &[
+                GovernanceGate::PassWithHardViolation,
+                GovernanceGate::Protocol,
+                GovernanceGate::CheckFail,
+            ],
+            Self::Commit => &[],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum GovernanceLayer {
+    Arch,
+    Plan,
+    Execute,
+    Verify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum GovernanceGate {
+    #[serde(rename = "G-ARCH-ESCAPE")]
+    #[schemars(rename = "G-ARCH-ESCAPE")]
+    ArchEscape,
+    #[serde(rename = "G-SCOPE-WIDEN")]
+    #[schemars(rename = "G-SCOPE-WIDEN")]
+    ScopeWiden,
+    #[serde(rename = "G-PARALLEL-DEPENDENCY")]
+    #[schemars(rename = "G-PARALLEL-DEPENDENCY")]
+    ParallelDependency,
+    #[serde(rename = "G-SYNTHESIS-CHILD")]
+    #[schemars(rename = "G-SYNTHESIS-CHILD")]
+    SynthesisChild,
+    #[serde(rename = "G-UNSUPPORTED-FACT")]
+    #[schemars(rename = "G-UNSUPPORTED-FACT")]
+    UnsupportedFact,
+    #[serde(rename = "G-PASS-WITH-HARD-VIOLATION")]
+    #[schemars(rename = "G-PASS-WITH-HARD-VIOLATION")]
+    PassWithHardViolation,
+    #[serde(rename = "G-PROTOCOL")]
+    #[schemars(rename = "G-PROTOCOL")]
+    Protocol,
+    #[serde(rename = "G-CHECK-FAIL")]
+    #[schemars(rename = "G-CHECK-FAIL")]
+    CheckFail,
+}
+
+impl GovernanceGate {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::ArchEscape => "G-ARCH-ESCAPE",
+            Self::ScopeWiden => "G-SCOPE-WIDEN",
+            Self::ParallelDependency => "G-PARALLEL-DEPENDENCY",
+            Self::SynthesisChild => "G-SYNTHESIS-CHILD",
+            Self::UnsupportedFact => "G-UNSUPPORTED-FACT",
+            Self::PassWithHardViolation => "G-PASS-WITH-HARD-VIOLATION",
+            Self::Protocol => "G-PROTOCOL",
+            Self::CheckFail => "G-CHECK-FAIL",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ArchEscape => {
+                "Local work modifies Arch-owned contracts without explicit authority."
+            }
+            Self::ScopeWiden => "A child workspace scope widens beyond the parent scope.",
+            Self::ParallelDependency => {
+                "A parallel plan item depends on sibling output; ordered dependencies must be staged."
+            }
+            Self::SynthesisChild => {
+                "A parallel plan creates a child only to synthesize sibling findings; parent Combine owns synthesis."
+            }
+            Self::UnsupportedFact => {
+                "Combine introduces facts not present in accepted child artifacts or parent context."
+            }
+            Self::PassWithHardViolation => {
+                "Verify returns accept while listing a hard expectation violation."
+            }
+            Self::Protocol => "The agent run violates the terminal tool or payload protocol.",
+            Self::CheckFail => "A deterministic check required for acceptance failed.",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CapabilityProfile {
     pub allow_write: bool,
@@ -104,6 +219,8 @@ pub struct AgentRunRecord {
     pub terminal_payload: Option<Value>,
     pub duration_ms: u128,
     pub usage: Option<AgentTokenUsage>,
+    #[serde(default)]
+    pub events: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

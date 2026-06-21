@@ -1,7 +1,7 @@
 /**
  * Context-window sizing for the `usage` event's `contextWindow` / `usedRatio`
- * fields — the signal the outer task supervisor (ralph loop) uses to decide when
- * a run is about to run out of room and should hand off.
+ * fields — the signal an outer supervisor uses to decide when a run is about
+ * to run out of room and should hand off.
  *
  * Honesty over guessing: the table holds well-known model windows matched by
  * substring; an unknown model resolves to `undefined`, leaving `usedRatio`
@@ -60,12 +60,12 @@ export function resolveContextWindow(
  * Returns an empty object when the window is unknown, so spreading it is a no-op:
  *
  *   ch.push({ type: "usage", inputTokens, outputTokens, totalTokens, source,
- *             ...contextFields(totalTokens, ctx) });
+ *             ...contextFields(activeTokens, ctx) });
  */
 export function contextFields(
-  totalTokens: number,
+  activeTokens: number,
   contextWindow: number | undefined,
 ): { contextWindow?: number; usedRatio?: number } {
   if (!contextWindow || contextWindow <= 0) return {};
-  return { contextWindow, usedRatio: totalTokens / contextWindow };
+  return { contextWindow, usedRatio: activeTokens / contextWindow };
 }

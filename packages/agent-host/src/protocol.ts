@@ -58,6 +58,7 @@ export const agentTokenUsageSchema = z
   .object({
     inputTokens: z.number().nonnegative().optional(),
     outputTokens: z.number().nonnegative().optional(),
+    activeTokens: z.number().nonnegative().optional(),
     totalTokens: z.number().nonnegative().optional(),
     cacheReadTokens: z.number().nonnegative().optional(),
     cacheCreationTokens: z.number().nonnegative().optional(),
@@ -72,6 +73,7 @@ export const agentRunResponseSchema = z
     toolCalls: z.array(agentToolCallSchema).optional(),
     terminalCall: agentToolCallSchema.optional(),
     usage: agentTokenUsageSchema.optional(),
+    events: z.array(jsonValueSchema).optional(),
   })
   .strict();
 

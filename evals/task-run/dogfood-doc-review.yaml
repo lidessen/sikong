@@ -8,7 +8,8 @@ task: |
 
   Identify whether the dogfood design is coherent, whether it conflicts with
   existing architecture, whether it is too abstract or missing concrete
-  acceptance gates, and what the first low-risk document or implementation
+  acceptance gates, whether it applies Sikong's attention contract to
+  dogfood work, and what the first low-risk document or implementation
   improvements should be.
 
   Produce a concise review report with concrete file or section evidence. Do
@@ -20,6 +21,12 @@ expectation: |
   documents, and task-run implementation paths. It may stay atomic if the report
   is coherent and evidence-backed, but it must not fabricate file evidence or
   ignore the requested comparison surfaces.
+
+  The review must check whether dogfood work is guided by method, not only
+  mechanism: a broad dogfood task should name the mainline, owning layer,
+  parent acceptance evidence, child autonomy boundary, and upward artifact; it
+  should let child runs own local evidence surfaces and require the parent to
+  combine compressed artifacts rather than monitor every detail.
 workspace:
   provider: current-file-system
   read_scope:

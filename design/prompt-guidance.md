@@ -48,10 +48,10 @@ Layer violations are prompt bugs:
 - L3 docs should not contain volatile execution details that belong in logs,
   events, or test output.
 
-## The 30/70 Rule
+## Attention Boundary Rule
 
-Every prompt should preserve the load-bearing 30% and let the agent own the
-local 70%.
+Every prompt should preserve the attention boundary and let the agent own local
+execution.
 
 This rule exists because agent work must be governed through divide-and-conquer
 and attention layering. A parent operation cannot safely inspect, remember, and
@@ -69,12 +69,36 @@ In prompt terms:
 - parent operations integrate or reject those results instead of importing the
   whole trace.
 
-The 70% is allowed to change because it is local and cheap. The 30% must be
-stable because it is the parent contract. If a worker discovers that a local
-choice changes the parent contract, it should stop through the appropriate
-terminal result rather than hiding that change inside execution.
+Local execution is allowed to change because it is cheap to retry. The
+attention boundary must be stable because it is the parent contract. If a
+worker discovers that a local choice changes the parent contract, it should
+stop through the appropriate terminal result rather than hiding that change
+inside execution.
 
-The load-bearing 30% is the constraint whose failure invalidates the run:
+The engine already implements recursive decomposition mechanically. Prompts
+must add the operating method:
+
+- `Specify` names the next parent contract and decides whether the work's
+  evidence boundary is atomic or needs a child group.
+- `Plan` divides by the main contradiction: ordered phases become `stage`,
+  independent evidence surfaces become `parallel`, and coherent local changes
+  stay together.
+- `Execute` owns local execution and returns a compact artifact or blocker
+  instead of asking the parent to monitor its trace.
+- `Combine` consumes accepted child artifacts as evidence, preserves the parent
+  mainline, and surfaces any child result that would change the parent
+  contract.
+- `Verify` judges the candidate against the node contract and available
+  evidence, not against newly invented local preferences.
+
+Governance authority follows `governance-model.md`. Prompt text should not
+create a second taxonomy, but it should preserve the same authority boundary:
+Arch frames system contracts, Plan routes work, Execute performs local work and
+parent synthesis, and Verify guards acceptance. A local prompt should tell the
+agent when an observation exceeds the current layer and must return upward as a
+boundary candidate.
+
+The attention boundary is the constraint whose failure invalidates the run:
 
 - for `Specify`: the user's full current intent and the size of the next useful
   work;
@@ -88,7 +112,7 @@ The load-bearing 30% is the constraint whose failure invalidates the run:
 - for `Assistant`: the latest user message, current focus, task board surface,
   and mounted capability packs.
 
-The prompt should not micromanage the 70%:
+The prompt should not micromanage local execution:
 
 - do not prescribe file-by-file steps unless those steps are the acceptance
   boundary;
@@ -98,9 +122,10 @@ The prompt should not micromanage the 70%:
   schema and evidence standard already define success;
 - do not route every local uncertainty to the user.
 
-If ordinary execution discovers that a 70% detail has become load-bearing, the
-agent should stop through the appropriate terminal result: concrete blocker,
-`need_information`, invalid plan, or a report that names the structural issue.
+If ordinary execution discovers that a local detail has become load-bearing,
+the agent should stop through the appropriate terminal result: concrete
+blocker, `need_information`, invalid plan, or a report that names the
+structural issue.
 
 ## Prompt Section Shape
 
@@ -112,7 +137,7 @@ Recommended section order for operation prompts:
 1. `Role`: one sentence naming the operation responsibility.
 2. `Operation Context`: structured JSON packet injected directly, not hidden
    behind a context-reader tool.
-3. operation-specific lens: the 30% constraint for this operation.
+3. operation-specific lens: the attention boundary for this operation.
 4. standard/rubric: what a good terminal result must satisfy.
 5. non-goals/boundaries: what this run must not do.
 6. `Completion`: which terminal tools end the loop.
@@ -142,7 +167,7 @@ rules. Before adding prose, check the simpler failure modes:
 
 The preferred repair order is:
 
-1. reduce the prompt to the current operation's load-bearing 30%;
+1. reduce the prompt to the current operation's attention boundary;
 2. move enforceable shape constraints into JSON Schema, typed Rust decoding, or
    deterministic engine checks;
 3. keep the prompt guidance qualitative and intent-preserving;
@@ -225,7 +250,7 @@ It should use the main contradiction lens:
   `Combine` owns convergence.
 
 Plan items are child responsibilities, not checklist rows. A child should be
-large enough to re-enter `Specify` and solve its own local 70%.
+large enough to re-enter `Specify` and solve its own local problem.
 
 When the parent has a file or git workspace, `Plan` should narrow child
 workspace scope when the child owns one evidence surface. Use coarse `read_scope`
@@ -244,11 +269,13 @@ repository state that was not present in Operation Context.
 
 ### Combine
 
-`Combine` converts child artifacts into one parent artifact.
+`Combine` is the parent execution pass resuming after child artifacts have been
+accepted. It converts child artifacts into one parent artifact.
 
-It should extract, reconcile, and synthesize. It should not paste child outputs
-together, restart execution, or defer because it wants more context. The
-Operation Context is the complete available input for this pass.
+It should extract, reconcile, and synthesize. It should not act as a new
+independent role, paste child outputs together, restart child execution, invent
+unsupported facts, or defer because it wants more context. The Operation Context
+is the complete available input for this pass.
 
 ### Verify
 

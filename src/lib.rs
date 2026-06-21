@@ -27,11 +27,12 @@ pub use task_run::{
     AgentOperationContext, AgentRunDecodeError, AgentRunRecord, AgentRunResult, Artifact,
     ArtifactContentKind, ArtifactId, AttemptRecord, Budget, CapabilityProfile, Engine,
     EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,
-    EngineAgentNodePacket, EngineAgentWorkspaceRequirementPacket,
-    EngineAgentWorkspaceSurfacePacket, EngineError, EngineReport, FailureClass, NodeId,
-    NodeOperation, NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationEvent,
-    OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment,
-    VerificationVerdict, WorkSize,
+    EngineAgentGovernanceGatePacket, EngineAgentGovernancePacket, EngineAgentNodePacket,
+    EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, EngineError,
+    EngineReport, FailureClass, GovernanceGate, GovernanceLayer, NodeId, NodeOperation,
+    NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationEvent, OperationHarness,
+    PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment, VerificationVerdict,
+    WorkSize,
 };
 pub use workspace::{
     FileSystemWorkspace, GitBranchResource, GitCommitResource, GitFileSystemWorkspace,

@@ -582,6 +582,20 @@ async fn file_task_store_persists_task_status_and_report() {
     );
 }
 
+#[test]
+fn file_task_store_records_persist_errors_without_panicking() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let blocker = temp_dir.path().join("not-a-directory");
+    std::fs::write(&blocker, "blocks parent directory creation").unwrap();
+    let store_path = blocker.join("tasks.json");
+    let mut store = FileTaskStore::open(&store_path).unwrap();
+
+    let task_id = store.create_task("persist failure should not panic".to_string());
+
+    assert!(store.get_task(&task_id).is_some());
+    assert!(store.last_persist_error().is_some());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acp_initialize_session_and_prompt_returns_started_task() {
     let store = MemoryTaskStore::new();
@@ -644,6 +658,38 @@ async fn acp_stdio_server_processes_jsonl_requests() {
     assert!(text.contains(r#""id":1"#));
     assert!(text.contains(r#""id":2"#));
     assert!(text.contains("sessionId"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_stdio_shutdown_flushes_completed_task_results() {
+    let input = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"session/new","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"session_1","prompt":"继续推进 Sikong 自我迭代。请创建一个 bounded dogfood roadmap task。"}}"#,
+    ]
+    .join("\n");
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store_path = temp_dir.path().join("tasks.json");
+    let store = FileTaskStore::open(&store_path).unwrap();
+    let session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
+    let server = AcpServer::new(store, session);
+    let mut output = Vec::new();
+
+    run_acp_stdio_server(server, std::io::Cursor::new(input), &mut output)
+        .await
+        .unwrap();
+
+    let reopened = FileTaskStore::open(&store_path).unwrap();
+    let tasks = reopened.list_tasks();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].status, AssistantTaskStatus::Completed);
+    assert!(tasks[0].root_node.is_some());
+    assert!(
+        tasks[0]
+            .events
+            .iter()
+            .any(|event| event.kind == "engine.completed")
+    );
 }
 
 #[derive(Default)]
@@ -735,6 +781,7 @@ impl AgentRunScheduler for RepairingAssistantWorker {
                     arguments: serde_json::json!({}),
                 }),
                 usage: None,
+                events: Vec::new(),
             };
         }
 
@@ -756,6 +803,7 @@ impl AgentRunScheduler for RepairingAssistantWorker {
             tool_calls: vec![create, finish.clone()],
             terminal_call: Some(finish),
             usage: None,
+            events: Vec::new(),
         }
     }
 }

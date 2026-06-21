@@ -10,8 +10,8 @@ use crate::workspace::WorkspaceSurface;
 pub use engine::Engine;
 pub use harness::{
     EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,
-    EngineAgentNodePacket, EngineAgentWorkspaceRequirementPacket,
-    EngineAgentWorkspaceSurfacePacket, OperationHarness,
+    EngineAgentGovernanceGatePacket, EngineAgentGovernancePacket, EngineAgentNodePacket,
+    EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, OperationHarness,
 };
 pub use node::{
     Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroup, PlanGroupMode, ProblemNode,
@@ -19,8 +19,8 @@ pub use node::{
 };
 pub use types::{
     AgentRunRecord, ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError,
-    EngineReport, FailureClass, NodeId, NodeOperation, NodeStatus, OperationEvent, ProblemKey,
-    VerificationVerdict,
+    EngineReport, FailureClass, GovernanceGate, GovernanceLayer, NodeId, NodeOperation, NodeStatus,
+    OperationEvent, ProblemKey, VerificationVerdict,
 };
 
 #[derive(Debug, Clone)]
@@ -48,10 +48,23 @@ pub struct AgentRunDecodeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeOperationOutput {
-    Specified { scope_assessment: ScopeAssessment },
-    Planned { group: PlanGroup },
-    InvalidPlan { reason: String },
-    Executed { output: String },
-    Combined { output: String },
-    Verified { verdict: VerificationVerdict },
+    Specified {
+        scope_assessment: ScopeAssessment,
+    },
+    Planned {
+        group: PlanGroup,
+    },
+    InvalidPlan {
+        gate: Option<GovernanceGate>,
+        reason: String,
+    },
+    Executed {
+        output: String,
+    },
+    Combined {
+        output: String,
+    },
+    Verified {
+        verdict: VerificationVerdict,
+    },
 }

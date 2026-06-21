@@ -60,7 +60,7 @@ describe("loop factories + executor", () => {
     expect(ended).toBe(true);
   });
 
-  test("usage usedRatio is capped when runtime reports cumulative cost", async () => {
+  test("usage usedRatio excludes cache-read cost from context pressure", async () => {
     const adapter: BackendAdapter = {
       id: "cumulative-usage",
       capabilities: ["usage"],
@@ -94,7 +94,8 @@ describe("loop factories + executor", () => {
       (ev): ev is Extract<LoopEvent, { type: "usage" }> => ev.type === "usage",
     );
     expect(usage?.contextWindow).toBe(100);
-    expect(usage?.usedRatio).toBe(1);
+    expect(usage?.activeTokens).toBe(15);
+    expect(usage?.usedRatio).toBe(0.15);
   });
 
   test("onToolUse can deny a tool", async () => {

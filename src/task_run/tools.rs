@@ -2,8 +2,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::{
-    Budget, CapabilityProfile, FailureClass, NodeOperationOutput, NodePlan, NodeTemplate,
-    PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, VerificationVerdict, WorkSize,
+    Budget, CapabilityProfile, FailureClass, GovernanceGate, NodeOperationOutput, NodePlan,
+    NodeTemplate, PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, VerificationVerdict,
+    WorkSize,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -31,6 +32,7 @@ impl EngineTools {
     pub(crate) fn submit_plan_group(&self, args: SubmitPlanGroupArgs) -> NodeOperationOutput {
         if args.items.is_empty() {
             return NodeOperationOutput::InvalidPlan {
+                gate: Some(GovernanceGate::Protocol),
                 reason: "plan group must contain at least one item".to_string(),
             };
         }
@@ -38,6 +40,7 @@ impl EngineTools {
             && args.items.iter().any(|item| item.requires_prior_results)
         {
             return NodeOperationOutput::InvalidPlan {
+                gate: Some(GovernanceGate::ParallelDependency),
                 reason:
                     "parallel plan items must be mutually independent; dependent synthesis belongs in the parent Combine pass"
                         .to_string(),

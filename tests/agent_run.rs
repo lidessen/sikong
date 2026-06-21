@@ -1,5 +1,6 @@
 use serde_json::json;
 use siko::*;
+use tokio::time::{Duration, timeout};
 
 mod support;
 use support::TestAgentRunScheduler;
@@ -46,4 +47,22 @@ async fn test_agent_selects_terminal_tool_from_run_config() {
             }),
         })
     );
+}
+
+#[tokio::test]
+async fn cancellation_token_notifies_waiters_without_polling_delay() {
+    let token = CancellationToken::new();
+    let waiter = {
+        let token = token.clone();
+        tokio::spawn(async move {
+            token.cancelled().await;
+        })
+    };
+
+    token.cancel();
+
+    timeout(Duration::from_millis(50), waiter)
+        .await
+        .expect("cancel waiter should be notified")
+        .expect("cancel waiter task should complete");
 }

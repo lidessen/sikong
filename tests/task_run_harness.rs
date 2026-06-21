@@ -35,6 +35,15 @@ async fn engine_harness_sends_structured_context_packet_to_agent_loop() {
     let packet = parse_context_packet(execute);
     assert_eq!(packet["kind"], "engine_operation");
     assert_eq!(packet["operation"], "Execute");
+    assert_eq!(packet["governance"]["layer"], "Execute");
+    assert_eq!(packet["governance"]["hard_gates"][0]["id"], "G-ARCH-ESCAPE");
+    assert!(
+        packet["governance"]["hard_gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|gate| gate["id"] == "G-SCOPE-WIDEN")
+    );
     assert_eq!(packet["node"]["intent"], "polished text");
     assert_eq!(packet["node"]["workspace"]["provider"], "Memory");
     assert_eq!(packet["node"]["allow_write"], false);
@@ -223,14 +232,14 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             NodeOperation::Specify,
             "submit_specification",
             "Node To Specify",
-            "Turn the raw intent into the next useful unit of work",
+            "repository audit across several top-level subsystems",
             "next",
         ),
         (
             NodeOperation::Plan,
             "submit_plan_group",
-            "Planning Lens",
-            "main contradiction",
+            "Leverage Parent Context",
+            "parent Operation Context already names independent evidence surfaces",
             "items",
         ),
         (
@@ -273,9 +282,14 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
         assert!(request.prompt.len() >= 5);
         assert!(prompt_section_exists(&request.prompt, "Role"));
         assert!(prompt_section_exists(&request.prompt, "Operation Context"));
+        assert!(prompt_section_exists(
+            &request.prompt,
+            "Governance Boundary"
+        ));
         assert!(prompt_section_exists(&request.prompt, expected_section));
         assert!(prompt_section_exists(&request.prompt, "Completion"));
         assert!(prompt_contains(&request.prompt, prompt_fragment));
+        assert!(prompt_contains(&request.prompt, "authority boundary"));
         assert!(prompt_contains(
             &request.prompt,
             "\"kind\": \"engine_operation\""
@@ -328,6 +342,7 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             assert!(!prompt_contains(&request.prompt, "missing_info"));
         }
         if operation == NodeOperation::Plan {
+            assert!(prompt_contains(&request.prompt, "G-PARALLEL-DEPENDENCY"));
             assert!(prompt_contains(
                 &request.prompt,
                 "size and reason when useful"
@@ -367,6 +382,15 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
                 &request.prompt,
                 "allow_write controls mutation only"
             ));
+            assert!(prompt_section_exists(&request.prompt, "External Evidence"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "external URLs, repositories, docs"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "instead of reconstructing details from model memory"
+            ));
             assert!(prompt_contains(&request.prompt, "Self Contained Work"));
             assert!(prompt_contains(
                 &request.prompt,
@@ -378,6 +402,19 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             ));
         }
         if operation == NodeOperation::Combine {
+            assert!(prompt_contains(&request.prompt, "G-UNSUPPORTED-FACT"));
+            assert!(prompt_contains(
+                &request.prompt,
+                "parent execution pass resuming"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "not as a new independent role"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "do not introduce new factual claims"
+            ));
             assert!(prompt_contains(&request.prompt, "complete available input"));
             assert!(prompt_contains(
                 &request.prompt,
@@ -388,12 +425,24 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
         if operation == NodeOperation::Verify {
             assert!(prompt_contains(
                 &request.prompt,
+                "G-PASS-WITH-HARD-VIOLATION"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
                 "exactly one of: accept, reject, need_information"
             ));
             assert!(prompt_contains(&request.prompt, "return verdict=accept"));
             assert!(prompt_contains(
                 &request.prompt,
                 "Empty read_scope is not missing information"
+            ));
+            assert!(prompt_section_exists(
+                &request.prompt,
+                "External Evidence Gate"
+            ));
+            assert!(prompt_contains(
+                &request.prompt,
+                "only reconstructed from training knowledge"
             ));
             assert!(prompt_contains(
                 &request.prompt,
@@ -508,6 +557,7 @@ fn engine_harness_decodes_specification_scope_assessment() {
                 }),
             }),
             usage: None,
+            events: Vec::new(),
         })
         .expect("specification size scope_assessment should decode");
 
@@ -547,6 +597,7 @@ fn engine_harness_decodes_information_gathering_as_next_work() {
                 }),
             }),
             usage: None,
+            events: Vec::new(),
         })
         .expect("information gathering should decode as normal next work");
 
@@ -593,6 +644,7 @@ async fn engine_harness_decodes_agent_friendly_plan_items() {
                 }),
             }),
             usage: None,
+            events: Vec::new(),
         })
         .expect("agent-friendly plan item should decode");
 
@@ -658,13 +710,50 @@ async fn engine_harness_rejects_dependent_parallel_plan_items() {
                 }),
             }),
             usage: None,
+            events: Vec::new(),
         })
         .expect("dependent parallel plan should decode as invalid plan");
 
-    let NodeOperationOutput::InvalidPlan { reason } = result.output else {
+    let NodeOperationOutput::InvalidPlan { gate, reason } = result.output else {
         panic!("expected invalid plan output");
     };
+    assert_eq!(gate, Some(GovernanceGate::ParallelDependency));
     assert!(reason.contains("parallel plan items must be mutually independent"));
+}
+
+#[test]
+fn node_operations_report_governance_layer_and_active_gates() {
+    assert_eq!(
+        NodeOperation::Specify.governance_layer(),
+        Some(GovernanceLayer::Plan)
+    );
+    assert_eq!(
+        NodeOperation::Plan.governance_layer(),
+        Some(GovernanceLayer::Plan)
+    );
+    assert_eq!(
+        NodeOperation::Execute.governance_layer(),
+        Some(GovernanceLayer::Execute)
+    );
+    assert_eq!(
+        NodeOperation::Combine.governance_layer(),
+        Some(GovernanceLayer::Execute)
+    );
+    assert_eq!(
+        NodeOperation::Verify.governance_layer(),
+        Some(GovernanceLayer::Verify)
+    );
+    assert_eq!(NodeOperation::Commit.governance_layer(), None);
+    assert!(
+        NodeOperation::Plan
+            .active_hard_gates()
+            .contains(&GovernanceGate::ParallelDependency)
+    );
+    assert!(
+        NodeOperation::Verify
+            .active_hard_gates()
+            .contains(&GovernanceGate::PassWithHardViolation)
+    );
 }
 
 #[test]
@@ -724,11 +813,15 @@ fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
 
     assert_eq!(request.protocol_version, 1);
     assert_eq!(request.objective, "Assistant turn");
-    assert_eq!(request.prompt.len(), 7);
+    assert_eq!(request.prompt.len(), 8);
     assert!(prompt_section_exists(&request.prompt, "Role"));
     assert!(prompt_section_exists(&request.prompt, "Operating Model"));
     assert!(prompt_section_exists(&request.prompt, "Context"));
     assert!(prompt_section_exists(&request.prompt, "Task Board"));
+    assert!(prompt_section_exists(
+        &request.prompt,
+        "Dogfood Development"
+    ));
     assert!(prompt_section_exists(
         &request.prompt,
         "Recent Conversation"
@@ -736,6 +829,10 @@ fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
     assert!(prompt_section_exists(&request.prompt, "Latest Message"));
     assert!(prompt_section_exists(&request.prompt, "Completion"));
     assert!(prompt_contains(&request.prompt, "assistant-level operator"));
+    assert!(prompt_contains(
+        &request.prompt,
+        "Sikong's self-development loop"
+    ));
     assert!(prompt_contains(&request.prompt, "query_messages"));
     assert!(prompt_contains(&request.prompt, "finish_turn"));
     assert_eq!(request.terminal_tool_set, vec!["finish_turn"]);
@@ -766,6 +863,13 @@ fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
     assert_eq!(packet["task_board"]["active_task"], "task_1");
     assert_eq!(packet["task_board"]["tasks"][0]["id"], "task_1");
     assert_eq!(packet["task_board"]["tasks"][0]["status"], "Running");
+    assert_eq!(packet["dogfood"]["mode"], "sikong_self_development");
+    assert!(
+        packet["dogfood"]["task_request_shape"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("acceptance evidence".to_string()))
+    );
 }
 
 #[test]
@@ -784,12 +888,17 @@ fn assistant_harness_omits_task_board_tools_when_disabled() {
     assert!(!prompt_section_exists(&request.prompt, "Task Board"));
     assert!(!prompt_section_exists(
         &request.prompt,
+        "Dogfood Development"
+    ));
+    assert!(!prompt_section_exists(
+        &request.prompt,
         "Recent Conversation"
     ));
 
     let packet = parse_context_packet(&request);
     assert_eq!(packet["kind"], "assistant_turn");
     assert!(packet.get("task_board").is_none());
+    assert!(packet.get("dogfood").is_none());
     assert_eq!(
         packet["conversation"]["messages"].as_array().unwrap().len(),
         0
@@ -815,6 +924,7 @@ async fn engine_harness_reports_run_decode_error_for_wrong_terminal_tool() {
             arguments: serde_json::json!({}),
         }),
         usage: None,
+        events: Vec::new(),
     });
 
     let error = result.expect_err("wrong terminal tool should fail closed");
@@ -841,6 +951,7 @@ async fn engine_harness_reports_run_decode_error_for_malformed_terminal_payload(
             arguments: serde_json::json!({ "output": 42 }),
         }),
         usage: None,
+        events: Vec::new(),
     });
 
     let error = result.expect_err("malformed terminal payload should fail closed");
@@ -870,6 +981,7 @@ async fn engine_harness_rejects_agent_reported_workspace_facts_in_work_payload()
             }),
         }),
         usage: None,
+        events: Vec::new(),
     });
 
     let error = result.expect_err("agent-reported workspace facts should fail closed");
@@ -901,6 +1013,7 @@ async fn engine_harness_maps_open_verifier_failure_classes() {
                 }),
             }),
             usage: None,
+            events: Vec::new(),
         })
         .expect("open verifier class should decode");
 

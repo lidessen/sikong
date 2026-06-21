@@ -29,6 +29,8 @@ export type LoopEvent =
       /** Uncached input tokens (excludes cache read/creation). */
       inputTokens: number;
       outputTokens: number;
+      /** Context-pressure tokens, excluding cache-read cost. */
+      activeTokens?: number;
       totalTokens: number;
       /** Cache-read input tokens (cheap hits), if the backend reports them. */
       cacheReadTokens?: number;
@@ -66,6 +68,12 @@ export type LoopEvent =
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  /**
+   * Tokens that approximate current context pressure: uncached input + output
+   * + cache-creation tokens. Cache-read tokens are tracked separately because
+   * runtimes may report them cumulatively across snapshots.
+   */
+  activeTokens?: number;
   totalTokens: number;
   /** Cache-read input tokens (cheap hits), if any backend reported them. */
   cacheReadTokens?: number;
@@ -85,6 +93,7 @@ export function addUsage(
   ev: {
     inputTokens: number;
     outputTokens: number;
+    activeTokens?: number;
     totalTokens: number;
     cacheReadTokens?: number;
     cacheCreationTokens?: number;
@@ -98,6 +107,7 @@ export function addUsage(
   return {
     inputTokens: acc.inputTokens + ev.inputTokens,
     outputTokens: acc.outputTokens + ev.outputTokens,
+    activeTokens: activeUsageTokens(acc) + activeUsageTokens(ev),
     totalTokens: acc.totalTokens + ev.totalTokens,
     ...(hasCache
       ? {
@@ -106,6 +116,17 @@ export function addUsage(
         }
       : {}),
   };
+}
+
+export function activeUsageTokens(usage: {
+  inputTokens: number;
+  outputTokens: number;
+  activeTokens?: number;
+  cacheCreationTokens?: number;
+}): number {
+  return (
+    usage.activeTokens ?? usage.inputTokens + usage.outputTokens + (usage.cacheCreationTokens ?? 0)
+  );
 }
 
 /** Rough char-based token estimate for backends that do not report usage. */

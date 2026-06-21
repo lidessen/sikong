@@ -27,6 +27,7 @@ impl AgentRunScheduler for TestAgentRunScheduler {
             tool_calls: terminal_call.clone().into_iter().collect(),
             terminal_call,
             usage: None,
+            events: Vec::new(),
         }
     }
 }

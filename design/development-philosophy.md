@@ -31,18 +31,18 @@ typed completion contracts, replayable state, and reviewable evidence.
 The `agent-worker` skills summarize a lower-level method than the architecture
 docs. That method should guide Sikong work too.
 
-### Name The 30% Before Acting
+### Name The Attention Boundary Before Acting
 
 Before a state-changing move, name the load-bearing constraint:
 
 ```text
-30%: the current principal tension that must not be lost
+Attention boundary: the current principal tension that must not be lost
 ```
 
-The 30% is not a percentage calculation. It is the slow-changing skeleton that
-determines whether the rest of the work is useful: target, system shape,
-acceptance boundary, observation quality, authority, or continuity. Everything
-else is the local 70% and should stay cheap to retry.
+The attention boundary is the slow-changing skeleton that determines whether
+the rest of the work is useful: target, system shape, acceptance boundary,
+observation quality, authority, or continuity. Everything else is local
+execution detail and should stay cheap to retry.
 
 The reason this works is divide-and-conquer plus attention layering. Agent
 development creates too many local details for one controller to govern
@@ -51,7 +51,7 @@ hold the top-level thread tightly, delegate or recurse into bounded
 subproblems, and let those subproblems make local choices inside their own
 contracts.
 
-The 30% is the upper layer of the divide. It preserves the mainline:
+The upper layer of the divide preserves the mainline:
 
 - what problem is being solved;
 - which boundary must not be crossed;
@@ -59,11 +59,11 @@ The 30% is the upper layer of the divide. It preserves the mainline:
 - what authority exists;
 - what result must return upward.
 
-The 70% is the lower layer. It is allowed to vary because local mistakes are
-cheap when the parent boundary is intact. A helper can be renamed, a child can
-choose a different inspection path, a patch can be retried, and a worker can
-repair local output. Those changes are acceptable as long as they do not change
-the parent target, acceptance boundary, authority, or evidence contract.
+The lower layer is local autonomy. It is allowed to vary because local mistakes
+are cheap when the parent boundary is intact. A helper can be renamed, a child
+can choose a different inspection path, a patch can be retried, and a worker
+can repair local output. Those changes are acceptable as long as they do not
+change the parent target, acceptance boundary, authority, or evidence contract.
 
 This is also why the system should not make the top layer watch every detail.
 Full-detail governance is too expensive and eventually collapses into context
@@ -78,11 +78,11 @@ parent preserves mainline and acceptance
 ```
 
 If a child discovers that a local detail now changes the parent boundary, that
-detail is no longer 70%. It must return upward as a 30% candidate instead of
-being handled locally.
+detail is no longer local execution detail. It must return upward as a boundary
+candidate instead of being handled locally.
 
-If the 30% cannot be named, the next action is not implementation. Recover the
-route first.
+If the attention boundary cannot be named, the next action is not
+implementation. Recover the route first.
 
 ### Route By The Layer That Owns The Uncertainty
 
@@ -171,7 +171,7 @@ vague confidence claim.
 
 The main agent owns steering context:
 
-- the 30%;
+- the attention boundary;
 - route and layer ownership;
 - acceptance standard;
 - risk and authority;
@@ -181,7 +181,7 @@ The main agent owns steering context:
 Workers own bounded execution detail:
 
 ```text
-30%: structural constraint to preserve
+Boundary: structural constraint to preserve
 Task: bounded local execution
 Evidence: observable proof to return
 Stop: when to stop instead of expanding scope
@@ -198,9 +198,9 @@ Stop hit:
 ```
 
 Do not import full worker traces into the long-running context unless the
-evidence is insufficient or the 30% itself is in doubt. A worker that discovers
-a new load-bearing constraint should stop and report it as a 30% candidate
-instead of continuing as if it were local 70%.
+evidence is insufficient or the attention boundary itself is in doubt. A
+worker that discovers a new load-bearing constraint should stop and report it
+as a boundary candidate instead of continuing as if it were local detail.
 
 ### Close Every Loop
 
@@ -289,7 +289,7 @@ Reference design anchors:
 
 ## Shared Laws
 
-### 1. Preserve The 30%, Keep The 70% Cheap
+### 1. Preserve The Boundary, Keep Local Detail Cheap
 
 The system should spend most attention on slow variables and keep local detail
 replaceable.
@@ -311,8 +311,8 @@ Keep flexible:
 - first-pass implementation tactics.
 
 When a local detail starts carrying callers, protocols, or acceptance meaning,
-it has migrated into the 30%. Either ratify it through design or restore the
-boundary.
+it has become part of the attention boundary. Either ratify it through design
+or restore the boundary.
 
 ### 2. Conversation Is Not State
 
@@ -353,11 +353,11 @@ prune, repair, or request information rather than silently accept.
 A prompt should project the current layer's load-bearing context, not dump the
 system into the model.
 
-Keep the 30/70 split:
+Keep the attention split:
 
-- the system supplies the load-bearing 30%: objective, boundary, allowed
-  workspace, available tools, terminal schema, acceptance evidence;
-- the agent owns the local 70%: exploration order, implementation detail,
+- the system supplies the boundary: objective, allowed workspace, available
+  tools, terminal schema, and acceptance evidence;
+- the agent owns local execution: exploration order, implementation detail,
   wording, focused checks, and local reasoning.
 
 When behavior is bad, repair in this order:
@@ -506,14 +506,14 @@ Treat these as design review failures:
   gap shrank;
 - fast-loop noise rewrites slow artifacts such as goal, design, AGENTS, or
   runtime policy without repeated evidence;
-- a worker changes the task's 30% instead of stopping and reporting the new
+- a worker changes the task boundary instead of stopping and reporting the new
   load-bearing constraint.
 
 ## Review Checklist
 
 Before accepting a non-trivial change, answer:
 
-1. What is the current 30%?
+1. What is the current attention boundary?
 2. Which layer owns the uncertainty: goal, design, fact, reframe, or harness?
 3. What is the core state transition this change participates in?
 4. What is the source of truth after this change?

@@ -34,6 +34,11 @@ describe("mock engine worker", () => {
         output: "mock output",
       },
     });
+    expect(result.events?.[0]).toMatchObject({
+      source: "agent-loop",
+      event: "tool_call_start",
+      name: "submit_work",
+    });
     expect(result.report).toContain("terminal tool submit_work called");
   });
 

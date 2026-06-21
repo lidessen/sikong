@@ -19,6 +19,52 @@ fn engine() -> Engine<MemoryWorkspace, TestAgentRunScheduler> {
     Engine::new(MemoryWorkspace::default(), TestAgentRunScheduler)
 }
 
+#[derive(Debug, Clone)]
+struct EventfulAgentRunScheduler;
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for EventfulAgentRunScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        _cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        let terminal_tool = input.terminal_tool_set[0].clone();
+        let arguments = match terminal_tool.as_str() {
+            "submit_specification" => serde_json::json!({
+                "next": "record searchable execution events",
+                "size": "small",
+                "reason": "One local logging behavior."
+            }),
+            "submit_work" => serde_json::json!({
+                "output": "searchable event record"
+            }),
+            "submit_verdict" => serde_json::json!({
+                "verdict": "accept",
+                "reason": "event record is present"
+            }),
+            other => serde_json::json!({ "unexpected": other }),
+        };
+        let call = AgentToolCall {
+            name: terminal_tool,
+            arguments,
+        };
+
+        AgentRunResponse {
+            report: format!("eventful worker completed {}", input.objective),
+            tool_calls: vec![call.clone()],
+            terminal_call: Some(call.clone()),
+            usage: None,
+            events: vec![serde_json::json!({
+                "source": "agent-loop",
+                "event": "tool_call_start",
+                "name": call.name,
+                "objective": input.objective
+            })],
+        }
+    }
+}
+
 #[tokio::test]
 async fn simple_leaf_executes_verifies_and_commits() {
     let mut engine = engine();
@@ -75,6 +121,90 @@ async fn simple_leaf_executes_verifies_and_commits() {
             .collect::<Vec<_>>(),
         vec!["submit_specification", "submit_work", "submit_verdict",]
     );
+}
+
+#[tokio::test]
+async fn engine_report_preserves_agent_run_events() {
+    let mut engine = Engine::new(MemoryWorkspace::default(), EventfulAgentRunScheduler);
+    let root = engine.insert_root(NodeTemplate::memory_leaf(
+        "logs",
+        "record searchable execution events",
+    ));
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Committed);
+    assert_eq!(report.agent_runs.len(), 3);
+    assert!(report.agent_runs.iter().all(|run| !run.events.is_empty()));
+    assert_eq!(report.agent_runs[1].events[0]["event"], "tool_call_start");
+    assert_eq!(report.agent_runs[1].events[0]["name"], "submit_work");
+}
+
+#[tokio::test]
+async fn stop_after_root_route_creates_children_without_executing_them() {
+    let child_a = NodeTemplate::memory_leaf("docs", "audit design docs");
+    let child_b = NodeTemplate::memory_leaf("runtime", "audit runtime code");
+    let mut engine = engine().with_stop_after_route_depth(0);
+    let root = engine.insert_root(NodeTemplate {
+        key: ProblemKey("route-only".to_string()),
+        intent: "plan repository audit".to_string(),
+        size: WorkSize::Large,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![child_a, child_b],
+        }),
+    });
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Planned);
+    assert_eq!(report.artifact, None);
+    let root_node = engine.node(root).unwrap();
+    assert_eq!(root_node.children.len(), 2);
+    assert!(
+        root_node
+            .children
+            .iter()
+            .all(|child_id| { engine.node(*child_id).unwrap().status == NodeStatus::New })
+    );
+    assert_eq!(
+        engine
+            .agent_runs()
+            .iter()
+            .map(|run| run.operation)
+            .collect::<Vec<_>>(),
+        vec![NodeOperation::Specify, NodeOperation::Plan]
+    );
+    assert!(engine.events().iter().any(|event| {
+        event.operation == NodeOperation::Plan && event.note == "stopped after plan at depth 0"
+    }));
+}
+
+#[tokio::test]
+async fn stop_after_root_route_does_not_execute_atomic_nodes() {
+    let mut engine = engine().with_stop_after_route_depth(0);
+    let root = engine.insert_root(NodeTemplate::memory_leaf("atomic", "answer directly"));
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Specified);
+    assert_eq!(report.artifact, None);
+    assert_eq!(
+        engine
+            .agent_runs()
+            .iter()
+            .map(|run| run.operation)
+            .collect::<Vec<_>>(),
+        vec![NodeOperation::Specify]
+    );
+    assert!(engine.events().iter().any(|event| {
+        event.operation == NodeOperation::Specify
+            && event.note == "stopped after specify at depth 0"
+    }));
 }
 
 #[tokio::test]
@@ -493,6 +623,7 @@ impl AgentRunScheduler for EvidenceNextAgentRunScheduler {
             tool_calls: terminal_call.clone().into_iter().collect(),
             terminal_call,
             usage: None,
+            events: Vec::new(),
         }
     }
 }
@@ -880,6 +1011,7 @@ impl AgentRunScheduler for WritingGitAgentRunScheduler {
                     }),
                 }),
                 usage: None,
+                events: Vec::new(),
             };
         }
 
@@ -929,6 +1061,7 @@ impl AgentRunScheduler for VerifySurfaceScheduler {
             tool_calls: vec![call.clone()],
             terminal_call: Some(call),
             usage: None,
+            events: Vec::new(),
         }
     }
 }

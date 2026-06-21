@@ -1,0 +1,48 @@
+id: dogfood-next-improvement
+task: |
+  Review the current Sikong dogfood loop and propose exactly one next
+  self-development improvement for this repository.
+
+  Use the current filesystem state. Inspect design/dogfood.md,
+  design/prompt-guidance.md, design/recursive-agent-engine.md, the latest
+  development-log/2026-06.md dogfood entries, existing dogfood eval fixtures,
+  and the implementation surfaces that are directly relevant to the proposed
+  improvement.
+
+  Produce a concise patch-proposal report. Do not modify files.
+
+  The report must include:
+  - mainline and owning layer for the proposed improvement;
+  - parent acceptance evidence;
+  - child autonomy boundary, if the improvement should be split;
+  - the upward artifact expected from the next run;
+  - one recommended implementation slice with file paths;
+  - deterministic checks and one focused live eval to rerun;
+  - why this is the next best step toward a reliable self-development loop.
+expectation: |
+  This is a realistic dogfood iteration task. Passing requires one bounded,
+  evidence-backed next improvement that advances Sikong toward a repeatable
+  self-development loop. The report must be grounded in current repository
+  paths, recent dogfood evidence, and the attention-boundary method. It must
+  not produce generic roadmap advice, suggest multiple competing top priorities,
+  or modify files.
+
+  The task may split if the agent decides the evidence surfaces are independent.
+  If it stays atomic, the final artifact must still explain why one worker can
+  safely inspect the required evidence without losing the mainline.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - design/dogfood.md
+    - design/prompt-guidance.md
+    - design/recursive-agent-engine.md
+    - design/assistant-agent-loop.md
+    - development-log/2026-06.md
+    - evals/task-run/**/*.yaml
+    - src/cli.rs
+    - src/task_run/**/*.rs
+    - src/agent_run/**/*.rs
+    - src/assistant/**/*.rs
+    - packages/agent-host/src/**/*.ts
+    - packages/agent-loop/src/**/*.ts
+    - AGENTS.md

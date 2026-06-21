@@ -60,6 +60,15 @@ export async function runMockAgentWorker(request: AgentRunRequest): Promise<Agen
       : `mock agent worker completed ${request.objective}`,
     toolCalls: loopResult.calls,
     ...(call ? { terminalCall: call } : {}),
+    events: loopResult.calls.map((toolCall, index) => ({
+      source: "agent-loop",
+      event: "tool_call_start",
+      elapsedMs: index,
+      objective: request.objective,
+      terminalToolSet: request.terminalToolSet,
+      name: toolCall.name,
+      args: JSON.stringify(toolCall.arguments),
+    })),
   };
 }
 

@@ -51,6 +51,19 @@ assistant, task-board, task-run, workspace, or agent-host behavior, use the Rust
 paths are reference-only and should not shape new design, tests, or acceptance
 criteria.
 
+## Dogfood Operating Mode
+
+The preferred development loop is Sikong-to-Sikong self-iteration. Treat user
+messages as steer input: inspect or create assistant task-board items, let the
+Rust task-run engine produce reviewable artifacts, then use those artifacts to
+decide the next bounded slice.
+
+Do not directly edit implementation code as the first response to self-improvement
+requests. Intervene manually only when the dogfood loop cannot make progress
+because of missing infrastructure, a runtime failure, an invalid protocol
+boundary, or a clearly mechanical reliability bug. Keep those interventions
+small, tested, and recorded in `development-log/`.
+
 ## Build, Test, and Development Commands
 
 - `bun install` installs Bun workspace dependencies and updates `bun.lock`.
@@ -92,12 +105,12 @@ driven.
   core loops instead of adding independent planner, scheduler, learner, quality,
   memory, or repair subsystems.
 - Before a state-changing design or implementation slice, name the current
-  load-bearing 30% and the layer that owns the uncertainty: `goal`, `design`,
+  attention boundary and the layer that owns the uncertainty: `goal`, `design`,
   `fact`, `reframe`, or `harness`. If that cannot be named, recover the route
   before editing.
 - Prompt and harness changes should follow `design/prompt-guidance.md`: preserve
-  the load-bearing 30%, project only the current layer's context into each run,
-  and let lower-layer agent loops own local execution detail.
+  the attention boundary, project only the current layer's context into each
+  run, and let lower-layer agent loops own local execution detail.
 - When live eval exposes bad model behavior, do not first add long
   forbidden-example lists to the prompt. First ask whether the prompt is
   over-projecting context, making the task more specific than the raw intent,
@@ -144,6 +157,11 @@ driven.
   classify transcript evidence before trusting the agent-written report, make
   one bounded improvement, re-run focused checks, and record reusable feedback
   in `development-log/YYYY-MM.md`.
+- Dogfood runs must follow the attention contract in `design/dogfood.md`:
+  name the mainline, owning layer, parent acceptance evidence, child autonomy
+  boundary, and upward artifact before broad self-development work. Use child
+  runs to own local evidence surfaces; the parent should integrate or reject
+  compressed artifacts, not watch every local detail.
 - For dogfood tasks, prefer `eval task-run-split --scenario-file ... --artifact-dir ...`
   when a human needs to review the accepted artifact. The JSON transcript is
   intentionally compact; artifact sidecars are the review surface for reports,

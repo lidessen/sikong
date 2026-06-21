@@ -113,10 +113,10 @@ fn timestamp_ms() -> u64 {
 
 fn title_from_request(request: &str) -> String {
     let normalized = request.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.len() <= 64 {
+    if normalized.chars().count() <= 64 {
         return normalized;
     }
-    format!("{}...", &normalized[..61])
+    format!("{}...", normalized.chars().take(61).collect::<String>())
 }
 
 fn status_from_node(status: NodeStatus) -> AssistantTaskStatus {
@@ -125,5 +125,20 @@ fn status_from_node(status: NodeStatus) -> AssistantTaskStatus {
         NodeStatus::WaitingForInfo => AssistantTaskStatus::WaitingForInput,
         NodeStatus::Rejected | NodeStatus::Pruned => AssistantTaskStatus::Failed,
         _ => AssistantTaskStatus::Running,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_title_truncates_utf8_safely() {
+        let request = "继续推进 Sikong 自我迭代，请不要直接实现代码，优先创建 bounded dogfood roadmap task，要求产出 reviewable artifact。";
+        let task = AssistantTask::new("task_1".to_string(), request.to_string());
+
+        assert!(task.title.ends_with("..."));
+        assert!(task.title.chars().count() <= 64);
+        assert!(task.title.contains("Sikong"));
     }
 }

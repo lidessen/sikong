@@ -40,6 +40,7 @@ describe("agent-loop worker runtime options", () => {
     expect(runtimeOptionsForWorker(baseRequest, "claude-code")).toMatchObject({
       cwd: "/tmp/siko-worktree",
       allowedPaths: ["/tmp/siko-worktree"],
+      permissionMode: "bypassPermissions",
       systemPromptPreset: "claude_code",
       builtinTools: { type: "preset", preset: "claude_code" },
       disallowedTools: expect.arrayContaining([
@@ -103,5 +104,31 @@ describe("agent-loop worker runtime options", () => {
 
   test("does not create claude runtime options for ai-sdk runs", () => {
     expect(runtimeOptionsForWorker(baseRequest, "ai-sdk")).toBeUndefined();
+  });
+
+  test("keeps web tools available for general external research runs", () => {
+    const options = runtimeOptionsForWorker(
+      {
+        ...baseRequest,
+        runtimeProfile: "general",
+        input: {
+          kind: "engine_operation",
+          operation: "Execute",
+          node: {
+            allow_write: false,
+          },
+        },
+      },
+      "claude-code",
+    );
+
+    expect(options?.systemPromptPreset).toBe("custom");
+    expect(options?.permissionMode).toBe("bypassPermissions");
+    expect(options?.builtinTools).toEqual({ type: "preset", preset: "claude_code" });
+    expect(options?.disallowedTools).toEqual(
+      expect.arrayContaining(["Bash", "Read", "Write", "Glob", "Grep", "LS"]),
+    );
+    expect(options?.disallowedTools).not.toContain("WebFetch");
+    expect(options?.disallowedTools).not.toContain("WebSearch");
   });
 });

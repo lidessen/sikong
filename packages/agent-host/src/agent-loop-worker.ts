@@ -33,8 +33,6 @@ const GENERAL_BUILTIN_DENY_TOOLS = [
   "Glob",
   "Grep",
   "LS",
-  "WebFetch",
-  "WebSearch",
 ];
 
 export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
@@ -45,6 +43,7 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
     const runStartedAt = performance.now();
     const terminalToolNames = new Set(request.terminalToolSet);
     const toolCalls: AgentToolCall[] = [];
+    const events: JsonValue[] = [];
     let terminalCall: AgentToolCall | undefined;
     let run: RunHandle | undefined;
     let resultSettled = false;
@@ -53,14 +52,14 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
       terminalCall = call;
       logAgentLoopEvent(request, "terminal_captured", runStartedAt, {
         terminalTool: call.name,
-      });
+      }, events);
       const fallbackCancelMs = 15_000;
       setTimeout(() => {
         if (resultSettled) return;
         logAgentLoopEvent(request, "terminal_fallback_cancel", runStartedAt, {
           terminalTool: call.name,
           fallbackCancelMs,
-        });
+        }, events);
         run?.cancel(`terminal tool ${call.name} fallback cancel`);
       }, fallbackCancelMs);
     });
@@ -72,7 +71,7 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
       model: options.model,
       maxSteps: options.maxSteps ?? 12,
       effort,
-    });
+    }, events);
     run = loop.run({
       system: renderSystemPrompt(request),
       prompt: renderUserPrompt(request),
@@ -82,9 +81,9 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
       effort,
       runtimeOptions: runtimeOptionsForWorker(request, runtime),
     });
-    logAgentLoopEvent(request, "loop.created", runStartedAt, {});
-    const eventsDone = logLoopEvents(request, run, runStartedAt);
-    logAgentLoopEvent(request, "result.await", runStartedAt, {});
+    logAgentLoopEvent(request, "loop.created", runStartedAt, {}, events);
+    const eventsDone = logLoopEvents(request, run, runStartedAt, events);
+    logAgentLoopEvent(request, "result.await", runStartedAt, {}, events);
     const result = await run.result;
     resultSettled = true;
     await eventsDone;
@@ -95,7 +94,7 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
       usage: result.usage,
       terminalTool: terminalCall?.name,
       toolCallCount: toolCalls.length,
-    });
+    }, events);
 
     return {
       report: [
@@ -110,6 +109,7 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
       toolCalls,
       ...(terminalCall ? { terminalCall } : {}),
       usage: result.usage,
+      events,
     };
   };
 }
@@ -118,19 +118,25 @@ async function logLoopEvents(
   request: AgentRunRequest,
   run: AsyncIterable<unknown>,
   runStartedAt: number,
+  events: JsonValue[],
 ): Promise<void> {
   try {
     for await (const event of run) {
-      logLoopEvent(request, event, runStartedAt);
+      logLoopEvent(request, event, runStartedAt, events);
     }
   } catch (error) {
     logAgentLoopEvent(request, "event_stream_error", runStartedAt, {
       error: errorMessage(error),
-    });
+    }, events);
   }
 }
 
-function logLoopEvent(request: AgentRunRequest, event: unknown, runStartedAt: number): void {
+function logLoopEvent(
+  request: AgentRunRequest,
+  event: unknown,
+  runStartedAt: number,
+  events: JsonValue[],
+): void {
   const record = toRecord(event);
   const type = stringOr(record.type, "unknown");
   switch (type) {
@@ -138,14 +144,14 @@ function logLoopEvent(request: AgentRunRequest, event: unknown, runStartedAt: nu
       logAgentLoopEvent(request, "step", runStartedAt, {
         phase: record.phase,
         index: record.index,
-      });
+      }, events);
       break;
     case "tool_call_start":
       logAgentLoopEvent(request, "tool_call_start", runStartedAt, {
         name: record.name,
         callId: record.callId,
         args: truncateJson(record.args),
-      });
+      }, events);
       break;
     case "tool_call_end":
       logAgentLoopEvent(request, "tool_call_end", runStartedAt, {
@@ -154,18 +160,19 @@ function logLoopEvent(request: AgentRunRequest, event: unknown, runStartedAt: nu
         durationMs: record.durationMs,
         error: record.error,
         result: truncateJson(record.result),
-      });
+      }, events);
       break;
     case "usage":
       logAgentLoopEvent(request, "usage", runStartedAt, {
         inputTokens: record.inputTokens,
         outputTokens: record.outputTokens,
+        activeTokens: record.activeTokens,
         totalTokens: record.totalTokens,
         cacheReadTokens: record.cacheReadTokens,
         cacheCreationTokens: record.cacheCreationTokens,
         usedRatio: record.usedRatio,
         source: record.source,
-      });
+      }, events);
       break;
     case "thinking":
     case "text":
@@ -173,7 +180,7 @@ function logLoopEvent(request: AgentRunRequest, event: unknown, runStartedAt: nu
         logAgentLoopEvent(request, type, runStartedAt, {
           chars: stringOr(record.text, "").length,
           text: truncateText(stringOr(record.text, ""), 400),
-        });
+        }, events);
       }
       break;
     case "hook":
@@ -184,17 +191,17 @@ function logLoopEvent(request: AgentRunRequest, event: unknown, runStartedAt: nu
         outcome: record.outcome,
         stdout: truncateText(stringOr(record.stdout, ""), 300),
         stderr: truncateText(stringOr(record.stderr, ""), 300),
-      });
+      }, events);
       break;
     case "error":
       logAgentLoopEvent(request, "error", runStartedAt, {
         error: errorMessage(record.error),
-      });
+      }, events);
       break;
     default:
       logAgentLoopEvent(request, type, runStartedAt, {
         event: truncateJson(record),
-      });
+      }, events);
       break;
   }
 }
@@ -204,18 +211,19 @@ function logAgentLoopEvent(
   event: string,
   runStartedAt: number,
   fields: Record<string, unknown>,
+  events?: JsonValue[],
 ): void {
-  console.error(
-    JSON.stringify({
-      ts: new Date().toISOString(),
-      source: "agent-loop",
-      event,
-      elapsedMs: Math.round(performance.now() - runStartedAt),
-      objective: request.objective,
-      terminalToolSet: request.terminalToolSet,
-      ...fields,
-    }),
-  );
+  const record = {
+    ts: new Date().toISOString(),
+    source: "agent-loop",
+    event,
+    elapsedMs: Math.round(performance.now() - runStartedAt),
+    objective: request.objective,
+    terminalToolSet: request.terminalToolSet,
+    ...fields,
+  };
+  events?.push(toJsonValue(record));
+  console.error(JSON.stringify(record));
 }
 
 function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
@@ -269,6 +277,7 @@ export function runtimeOptionsForWorker(
   if (request.runtimeProfile === "code") {
     return {
       ...workspaceOptions,
+      permissionMode: "bypassPermissions",
       systemPromptPreset: "claude_code",
       builtinTools: { type: "preset", preset: "claude_code" },
       disallowedTools: uniqueStrings([...ORCHESTRATION_ESCAPE_TOOLS, ...readonlyDisallowedTools]),
@@ -277,8 +286,9 @@ export function runtimeOptionsForWorker(
 
   return {
     ...workspaceOptions,
+    permissionMode: "bypassPermissions",
     systemPromptPreset: "custom",
-    builtinTools: [],
+    builtinTools: { type: "preset", preset: "claude_code" },
     disallowedTools: uniqueStrings([...GENERAL_BUILTIN_DENY_TOOLS, ...readonlyDisallowedTools]),
   };
 }
@@ -378,7 +388,11 @@ function renderUserPrompt(request: AgentRunRequest): string {
 }
 
 function toJsonObject(input: Record<string, unknown>): JsonValue {
-  return JSON.parse(JSON.stringify(input)) as JsonValue;
+  return toJsonValue(input);
+}
+
+function toJsonValue(input: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(input ?? null)) as JsonValue;
 }
 
 function toRecord(input: unknown): Record<string, unknown> {

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::{AssistantTask, AssistantTaskEventRecord, AssistantTaskStatus, TaskId};
 use crate::{EngineReport, NodeId};
 use serde_json::Value;
-use tracing::Level;
+use tracing::{Level, error};
 
 pub trait TaskStore {
     fn create_task(&mut self, request: String) -> TaskId;
@@ -82,6 +82,7 @@ impl TaskStore for MemoryTaskStore {
 pub struct FileTaskStore {
     path: PathBuf,
     tasks: BTreeMap<TaskId, AssistantTask>,
+    last_persist_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,15 +105,30 @@ impl FileTaskStore {
         } else {
             BTreeMap::new()
         };
-        Ok(Self { path, tasks })
+        Ok(Self {
+            path,
+            tasks,
+            last_persist_error: None,
+        })
     }
 
-    fn persist(&self) {
-        if let Err(error) = self.try_persist() {
-            panic!(
-                "failed to persist assistant task store {}: {error}",
-                self.path.display()
-            );
+    pub fn last_persist_error(&self) -> Option<&str> {
+        self.last_persist_error.as_deref()
+    }
+
+    fn persist(&mut self) {
+        match self.try_persist() {
+            Ok(()) => self.last_persist_error = None,
+            Err(error) => {
+                let message = error.to_string();
+                error!(
+                    target: "siko.task",
+                    path = %self.path.display(),
+                    error = %message,
+                    "failed to persist assistant task store"
+                );
+                self.last_persist_error = Some(message);
+            }
         }
     }
 

@@ -6,6 +6,11 @@ The purpose is not to add another engine. Dogfood is an operating model built
 on top of the recursive task-run engine, assistant packs, workspace providers,
 live eval, and the project design log.
 
+Dogfood uses `governance-model.md` as its authority boundary: Arch frames
+system contracts, Plan routes evidence surfaces, Execute performs local work and
+parent synthesis, and Verify gates acceptance. This document describes how that
+model is exercised during self-development, not a separate dogfood workflow.
+
 ## Goal
 
 Sikong should become useful for daily self-development:
@@ -46,6 +51,43 @@ Dogfood uses the existing attention layers:
 The dogfood loop should start at L3 when the desired behavior is not yet clear.
 That means the first self-improvement task for a new area should often be a
 design-document task, not a code patch.
+
+## Dogfood Attention Contract
+
+Every meaningful dogfood run must start by naming the attention boundary before
+launching broad analysis or implementation work:
+
+- **Mainline**: the top-level intent that must not drift during the run.
+- **Owning layer**: which layer owns the current uncertainty: goal, design,
+  fact, reframe, or harness.
+- **Parent acceptance evidence**: what evidence lets the parent accept or
+  reject the result without replaying every local decision.
+- **Child autonomy boundary**: what the child may decide locally, and what it
+  must not change without returning upward.
+- **Upward artifact**: the compressed evidence, proposal, patch, verdict, or
+  blocker that the parent will combine.
+
+This is the dogfood form of divide-and-conquer. The parent layer preserves the
+mainline, authority, and acceptance gate. Child runs own local investigation,
+editing, and tactical choices inside their scoped problem. A child may adjust
+its local path, but if it discovers that the parent target, boundary, or
+acceptance contract is wrong, it should return that as an upward boundary
+candidate or blocker instead of silently changing the mission.
+
+Broad repository dogfood should therefore divide by evidence surface, not by
+the parent trying to watch every file, transcript, and local choice. `Combine`
+integrates accepted child artifacts and rejects weak evidence; it should not
+import the full trace as durable truth.
+
+Dogfood review should reject or return findings when:
+
+- the run does not name the mainline, owning layer, and acceptance evidence;
+- one worker is asked to inspect unrelated evidence surfaces that could be
+  accepted independently;
+- the parent layer is forced to monitor local details instead of accepting
+  compressed artifacts;
+- a child changes the parent mission, boundary, or acceptance gate without
+  reporting that as an upward decision.
 
 ## Dogfood Task Types
 
@@ -172,10 +214,11 @@ A complete dogfood cycle is an operating loop around one accepted task-run
 artifact. It is deliberately reviewable instead of fully autonomous:
 
 ```text
-scope scenario -> run live eval -> inspect transcript and artifact sidecars
-  -> accept one bounded change -> apply in the main workspace
-  -> run deterministic checks -> build/update runtime when needed
-  -> rerun focused live eval -> commit -> record learning
+name mainline and layer -> scope scenario -> run live eval
+  -> inspect transcript and artifact sidecars -> accept one bounded change
+  -> apply in the main workspace -> run deterministic checks
+  -> build/update runtime when needed -> rerun focused live eval
+  -> commit -> record learning
 ```
 
 The loop has three modes.
@@ -215,7 +258,7 @@ mutation is not yet trusted for the slice.
   agent/editor path, then runs deterministic checks.
 
 This is the current default for daily self-development. It lets Sikong do the
-70% investigation and proposal work while the operator owns the final edit and
+local investigation and proposal work while the operator owns the final edit and
 commit decision.
 
 ### Apply Mode
@@ -315,6 +358,7 @@ report is a candidate interpretation of that transcript.
 Every meaningful dogfood loop should record:
 
 - the user goal;
+- the mainline, owning layer, child autonomy boundary, and upward artifact;
 - the scenario or command;
 - the routing outcome, especially `Specify.size` and `PlanGroup.mode`;
 - the most important usage or latency signal;
@@ -356,6 +400,12 @@ cargo run --quiet -- eval task-run-split \
   --artifact-dir /tmp/siko-dogfood-artifacts --json
 ```
 
+Use `evals/task-run/dogfood-next-improvement.yaml` as the standing
+review-only entrypoint for deciding the next self-development slice. It should
+produce exactly one bounded patch proposal, not a broad roadmap. The operator
+can then accept that proposal, apply the bounded change in the main workspace,
+run deterministic checks, and rerun the focused live eval named by the artifact.
+
 Use `current-file-system` when the task must see uncommitted or untracked files
 in the current workspace. Use `current-git` when the task should inspect a clean
 worktree based on `HEAD`.
@@ -383,18 +433,17 @@ minutes.
 ## Current Gap
 
 Recent dogfood runs show that Sikong can start real repository analysis and can
-use isolated git worktrees, but broad project analysis can still be classified
-as atomic work. When that happens, a single `Execute` scans too much repository
-surface, reaches context pressure, and may stall before submitting a terminal
-artifact.
+use isolated git worktrees. Route-only evals can now stop after the root
+routing decision, so broad project analysis no longer has to run expensive child
+execution just to inspect whether `Specify` and `Plan` chose the right shape.
 
 The next design and implementation priority is therefore:
 
 1. make project-level self-development tasks reliably split by evidence
    surface;
 2. keep child scopes narrow enough that parallelism reduces context pressure;
-3. add a cheap route/plan-only dogfood eval so this can be checked before a
-   full task run.
+3. tighten live-eval judging so hard expectation violations, such as overly
+   broad child scopes, cannot be reported as pass-only polish notes.
 
 ## Success Criteria
 
@@ -402,6 +451,9 @@ Sikong has a useful dogfood loop when:
 
 - a request such as "analyze Sikong and suggest improvements" creates a scoped
   repository analysis task rather than one giant worker run;
+- broad self-development names the mainline, current layer, parent
+  acceptance evidence, child autonomy boundary, and upward artifact before
+  execution;
 - a request such as "design how Sikong should improve itself" starts with a
   design-document task;
 - broad analysis produces accepted child artifacts before synthesis;
@@ -415,13 +467,18 @@ Sikong has a useful dogfood loop when:
 1. Treat this document as the dogfood design contract.
 2. Run review-only dogfood with artifact sidecars before editing broad design
    or runtime surfaces.
-3. Add a route/plan-only dogfood eval for `sikong-project-analysis` and similar
-   self-development requests.
-4. Improve `Specify` and `Plan` context projection until broad repository
+3. Use `evals/task-run/dogfood-next-improvement.yaml` to choose the next
+   bounded self-development slice from current dogfood evidence.
+4. Add a route/plan-only dogfood eval for `sikong-project-analysis` and similar
+   self-development requests. Initial support exists through
+   `evals/task-run/dogfood-route-only.yaml` and `task-run-split --route-only`.
+5. Improve `Specify` and `Plan` context projection until broad repository
    analysis reliably produces scoped child work.
-5. Add a `DogfoodPack` for the assistant that injects this design summary,
-   current self-improvement task state, and dogfood task tools.
-6. Add patch-mode dogfood scenarios that produce workspace changes plus
+6. Add a `DogfoodPack` for the assistant that injects this design summary,
+   current self-improvement task state, and dogfood task tools. Initial support
+   now injects the self-development operating model and reuses task-board tools;
+   dogfood-specific eval transcript tools are still a later slice.
+7. Add patch-mode dogfood scenarios that produce workspace changes plus
    deterministic verification evidence.
-7. Promote repeated dogfood findings into design docs or prompt guidance; keep
+8. Promote repeated dogfood findings into design docs or prompt guidance; keep
    one-off eval noise in logs.

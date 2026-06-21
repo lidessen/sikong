@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -10,11 +10,12 @@ use siko::{
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
     AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
-    AssistantTaskEvent, Budget, CancellationToken, CapabilityProfile, DebugConfig, Engine,
-    FileTaskStore, NodeId, NodeOperation, NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate,
-    OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler,
-    SikoConfig, TaskStore, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface,
-    Workspaces, run_acp_stdio_server,
+    AssistantTask, AssistantTaskEvent, AssistantTaskStatus, Budget, CancellationToken,
+    CapabilityProfile, DebugConfig, Engine, FileTaskStore, NodeId, NodeOperation,
+    NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationHarness, PlanGroup,
+    PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig, TaskStore,
+    WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface, Workspaces,
+    run_acp_stdio_server,
 };
 use tracing::error;
 use tracing_subscriber::EnvFilter;
@@ -44,12 +45,57 @@ fn run_cli(cli: Cli) -> i32 {
         },
         Some(Command::Assistant {
             acp: false,
-            command: Some(AssistantCommand::Logs { task_id, json }),
-        }) => match print_assistant_logs(&task_id, json) {
+            command:
+                Some(AssistantCommand::Prompt {
+                    message,
+                    wait_ms,
+                    json,
+                }),
+        }) => match run_assistant_prompt(message, wait_ms, json) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to run assistant prompt");
+                eprintln!("failed to run assistant prompt: {error}");
+                1
+            }
+        },
+        Some(Command::Assistant {
+            acp: false,
+            command:
+                Some(AssistantCommand::Logs {
+                    task_id,
+                    json,
+                    full,
+                }),
+        }) => match print_assistant_logs(&task_id, json, full) {
             Ok(()) => 0,
             Err(error) => {
                 error!(%error, task_id, "failed to print assistant logs");
                 eprintln!("failed to print assistant logs for {task_id}: {error}");
+                1
+            }
+        },
+        Some(Command::Assistant {
+            acp: false,
+            command:
+                Some(AssistantCommand::Events {
+                    task_id,
+                    operation,
+                    event,
+                    tool,
+                    source,
+                    query,
+                    json,
+                }),
+        }) => match print_assistant_events(
+            &task_id,
+            AgentEventFilter::try_new(operation, event, tool, source, query),
+            json,
+        ) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, task_id, "failed to print assistant events");
+                eprintln!("failed to print assistant events for {task_id}: {error}");
                 1
             }
         },
@@ -74,8 +120,16 @@ fn run_cli(cli: Cli) -> i32 {
                 scenario,
                 scenario_file,
                 artifact_dir,
+                route_only,
                 json,
-            } => match run_task_run_split_eval(task, scenario, scenario_file, artifact_dir, json) {
+            } => match run_task_run_split_eval(
+                task,
+                scenario,
+                scenario_file,
+                artifact_dir,
+                route_only,
+                json,
+            ) {
                 Ok(passed) => {
                     if passed {
                         0
@@ -139,12 +193,59 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum AssistantCommand {
+    /// Send one assistant message, run queued work in this process, and print the result.
+    Prompt {
+        /// Milliseconds to keep this process alive while queued tasks run. Set 0 to only enqueue.
+        #[arg(long, default_value_t = 300_000)]
+        wait_ms: u64,
+
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+
+        /// Message to send to the assistant.
+        #[arg(required = true, trailing_var_arg = true)]
+        message: Vec<String>,
+    },
     /// Print persisted task logs in chronological order.
     Logs {
         /// Task id to inspect.
         task_id: String,
 
         /// Print the raw structured log JSON.
+        #[arg(long)]
+        json: bool,
+
+        /// Print the full persisted task record, including engine report and agent-loop events.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Query persisted agent-run events for a task.
+    Events {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Filter by task-run operation, such as Specify, Execute, Verify, or Combine.
+        #[arg(long)]
+        operation: Option<String>,
+
+        /// Filter by event kind, such as tool_call_start, usage, error, or step.
+        #[arg(long)]
+        event: Option<String>,
+
+        /// Filter by tool/event name, such as Read, Grep, WebFetch, or submit_work.
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Filter by event source, such as agent-loop.
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Case-insensitive substring search over the event JSON.
+        #[arg(long)]
+        query: Option<String>,
+
+        /// Print matching events as structured JSON.
         #[arg(long)]
         json: bool,
     },
@@ -170,6 +271,10 @@ enum EvalCommand {
         #[arg(long)]
         artifact_dir: Option<PathBuf>,
 
+        /// Stop after the root Plan operation so routing can be evaluated cheaply.
+        #[arg(long)]
+        route_only: bool,
+
         /// Print full JSON evaluation output.
         #[arg(long)]
         json: bool,
@@ -193,7 +298,7 @@ enum EvalCommand {
 pub fn run_assistant_acp() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("siko-assistant")
-        .enable_time()
+        .enable_all()
         .build()?;
     runtime.block_on(run_assistant_acp_async())
 }
@@ -224,15 +329,120 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn run_assistant_prompt(
+    message: Vec<String>,
+    wait_ms: u64,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let message = message.join(" ").trim().to_string();
+    if message.is_empty() {
+        return Err("assistant prompt message must not be empty".into());
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("siko-assistant-prompt")
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_assistant_prompt_async(message, wait_ms, json_output))
+}
+
+async fn run_assistant_prompt_async(
+    message: String,
+    wait_ms: u64,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = SikoConfig::load()?;
+    let debug = DebugConfig::from_env();
+    let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let launch = resolve_agent_host_launch(&debug);
+    let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
+        launch.command.clone(),
+        launch.args.clone(),
+    ));
+    let mut session = AssistantSession::with_worker_factory(
+        assistant_loop,
+        {
+            let launch = launch.clone();
+            move || ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone())
+        },
+        AssistantSessionConfig {
+            max_parallel_tasks: config.assistant.max_parallel_tasks,
+            task_board_enabled: true,
+            conversation_message_limit: 200,
+        },
+    );
+
+    let reply = session.handle_message(&mut store, message).await;
+    if wait_ms > 0 {
+        session
+            .wait_for_all(&mut store, Duration::from_millis(wait_ms))
+            .await;
+    } else {
+        session.drain(&mut store).await;
+    }
+    let state = session.state();
+    let task_status = reply
+        .task_id
+        .as_deref()
+        .and_then(|task_id| store.get_task(task_id))
+        .map(|task| task.status.clone());
+    let output = AssistantPromptOutput {
+        response: reply.text,
+        task_id: reply.task_id,
+        status: task_status,
+        running_tasks: state.running_tasks,
+        queued_tasks: state.queued_tasks,
+        persist_error: store.last_persist_error().map(ToString::to_string),
+    };
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &output)?;
+        println!();
+        return Ok(());
+    }
+
+    println!("{}", output.response);
+    if let Some(task_id) = &output.task_id {
+        println!("task: {task_id}");
+    }
+    if let Some(status) = &output.status {
+        println!("status: {status:?}");
+    }
+    println!(
+        "task board: {} running, {} queued",
+        output.running_tasks, output.queued_tasks
+    );
+    if let Some(error) = &output.persist_error {
+        eprintln!("warning: failed to persist assistant task store: {error}");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct AssistantPromptOutput {
+    response: String,
+    task_id: Option<String>,
+    status: Option<AssistantTaskStatus>,
+    running_tasks: usize,
+    queued_tasks: usize,
+    persist_error: Option<String>,
+}
+
 fn print_assistant_logs(
     task_id: &str,
     json_output: bool,
+    full_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let task = store
         .get_task(task_id)
         .ok_or_else(|| format!("unknown task id {task_id}"))?;
+
+    if full_output {
+        serde_json::to_writer_pretty(std::io::stdout(), task)?;
+        println!();
+        return Ok(());
+    }
 
     if json_output {
         serde_json::to_writer_pretty(std::io::stdout(), &task.events)?;
@@ -243,6 +453,38 @@ fn print_assistant_logs(
     println!("task {} {} {:?}", task.id, task.title, task.status);
     for event in &task.events {
         println!("{}", format_task_log(event));
+    }
+    Ok(())
+}
+
+fn print_assistant_events(
+    task_id: &str,
+    filter: Result<AgentEventFilter, Box<dyn std::error::Error>>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let filter = filter?;
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let task = store
+        .get_task(task_id)
+        .ok_or_else(|| format!("unknown task id {task_id}"))?;
+    let entries = assistant_agent_events(task, &filter);
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &entries)?;
+        println!();
+        return Ok(());
+    }
+
+    println!(
+        "task {} {} {:?} events={}",
+        task.id,
+        task.title,
+        task.status,
+        entries.len()
+    );
+    for entry in entries {
+        println!("{}", format_agent_event(&entry));
     }
     Ok(())
 }
@@ -283,11 +525,172 @@ fn compact_json(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".to_string())
 }
 
+fn truncate_text(input: &str, max_chars: usize) -> String {
+    let mut chars = input.chars();
+    let truncated = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct AgentEventFilter {
+    operation: Option<NodeOperation>,
+    event: Option<String>,
+    tool: Option<String>,
+    source: Option<String>,
+    query: Option<String>,
+}
+
+impl AgentEventFilter {
+    fn try_new(
+        operation: Option<String>,
+        event: Option<String>,
+        tool: Option<String>,
+        source: Option<String>,
+        query: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            operation: operation.as_deref().map(parse_node_operation).transpose()?,
+            event,
+            tool,
+            source,
+            query,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentEventEntry {
+    task_id: String,
+    run_index: usize,
+    event_index: usize,
+    node_id: NodeId,
+    operation: NodeOperation,
+    source: Option<String>,
+    event: Option<String>,
+    name: Option<String>,
+    elapsed_ms: Option<u64>,
+    objective: Option<String>,
+    record: Value,
+}
+
+fn assistant_agent_events(task: &AssistantTask, filter: &AgentEventFilter) -> Vec<AgentEventEntry> {
+    let Some(report) = &task.last_report else {
+        return Vec::new();
+    };
+
+    report
+        .agent_runs
+        .iter()
+        .enumerate()
+        .flat_map(|(run_index, run)| {
+            run.events
+                .iter()
+                .enumerate()
+                .map(move |(event_index, record)| AgentEventEntry {
+                    task_id: task.id.clone(),
+                    run_index: run_index + 1,
+                    event_index: event_index + 1,
+                    node_id: run.node_id,
+                    operation: run.operation,
+                    source: json_string(record, "source"),
+                    event: json_string(record, "event"),
+                    name: json_string(record, "name"),
+                    elapsed_ms: json_u64(record, "elapsedMs"),
+                    objective: json_string(record, "objective"),
+                    record: record.clone(),
+                })
+        })
+        .filter(|entry| agent_event_matches(entry, filter))
+        .collect()
+}
+
+fn agent_event_matches(entry: &AgentEventEntry, filter: &AgentEventFilter) -> bool {
+    if filter
+        .operation
+        .is_some_and(|operation| entry.operation != operation)
+    {
+        return false;
+    }
+    if !optional_eq(filter.event.as_deref(), entry.event.as_deref()) {
+        return false;
+    }
+    if !optional_eq(filter.tool.as_deref(), entry.name.as_deref()) {
+        return false;
+    }
+    if !optional_eq(filter.source.as_deref(), entry.source.as_deref()) {
+        return false;
+    }
+    if let Some(query) = &filter.query {
+        let haystack = compact_json(&entry.record).to_lowercase();
+        if !haystack.contains(&query.to_lowercase()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn optional_eq(expected: Option<&str>, actual: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    actual.is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+}
+
+fn format_agent_event(entry: &AgentEventEntry) -> String {
+    let source = entry.source.as_deref().unwrap_or("-");
+    let event = entry.event.as_deref().unwrap_or("-");
+    let name = entry.name.as_deref().unwrap_or("-");
+    let objective = entry.objective.as_deref().unwrap_or("-");
+    let elapsed = entry
+        .elapsed_ms
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let record = truncate_text(&compact_json(&entry.record), 500);
+    format!(
+        "run={} event={} node={} op={:?} source={} kind={} name={} elapsed={}ms objective={} record={}",
+        entry.run_index,
+        entry.event_index,
+        entry.node_id,
+        entry.operation,
+        source,
+        event,
+        name,
+        elapsed,
+        objective,
+        record
+    )
+}
+
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value.get(key)?.as_str().map(str::to_string)
+}
+
+fn json_u64(value: &Value, key: &str) -> Option<u64> {
+    value.get(key)?.as_u64()
+}
+
+fn parse_node_operation(input: &str) -> Result<NodeOperation, Box<dyn std::error::Error>> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "specify" => Ok(NodeOperation::Specify),
+        "plan" => Ok(NodeOperation::Plan),
+        "execute" => Ok(NodeOperation::Execute),
+        "combine" => Ok(NodeOperation::Combine),
+        "verify" => Ok(NodeOperation::Verify),
+        "commit" => Ok(NodeOperation::Commit),
+        other => Err(format!("unknown operation {other}").into()),
+    }
+}
+
 fn run_task_run_split_eval(
     task: Option<String>,
     scenario: Option<String>,
     scenario_file: Option<PathBuf>,
     artifact_dir: Option<PathBuf>,
+    route_only: bool,
     json_output: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     ensure_live_eval_enabled()?;
@@ -300,6 +703,7 @@ fn run_task_run_split_eval(
     runtime.block_on(run_task_run_split_eval_async(
         scenarios,
         artifact_dir.as_deref(),
+        route_only,
         json_output,
     ))
 }
@@ -307,6 +711,7 @@ fn run_task_run_split_eval(
 async fn run_task_run_split_eval_async(
     scenarios: Vec<TaskRunSplitScenario>,
     artifact_dir: Option<&Path>,
+    route_only: bool,
     json_output: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
@@ -320,6 +725,9 @@ async fn run_task_run_split_eval_async(
             Workspaces::default(),
             ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone()),
         );
+        if route_only {
+            engine = engine.with_stop_after_route_depth(0);
+        }
         let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace));
         let report = engine
             .run(root)
@@ -369,17 +777,17 @@ async fn run_task_run_split_eval_async(
         );
         for result in &output.results {
             println!(
-                "- {} passed={} duration={}ms agent_tokens={} judge_tokens={} total_tokens={}",
+                "- {} passed={} duration={}ms agent={} judge={} total={}",
                 result.scenario,
                 result.judgement.passed,
                 result.duration_ms,
-                result.actor_usage.total_tokens,
+                format_usage(&result.actor_usage),
                 result
                     .judge_usage
                     .as_ref()
-                    .map(|usage| usage.total_tokens)
-                    .unwrap_or(0),
-                result.total_usage.total_tokens
+                    .map(format_usage)
+                    .unwrap_or_else(|| "0".to_string()),
+                format_usage(&result.total_usage)
             );
             for finding in &result.judgement.findings {
                 println!("  - {finding}");
@@ -523,17 +931,14 @@ async fn run_task_run_operation_eval_async(
         );
         for result in &output.results {
             println!(
-                "- {}:{} passed={} decoded={} duration={}ms terminal={} tokens={} in={} out={} cache_read={}",
+                "- {}:{} passed={} decoded={} duration={}ms terminal={} usage={}",
                 result.operation,
                 result.scenario,
                 result.judgement.passed,
                 result.decoded,
                 result.duration_ms,
                 result.terminal_tool.as_deref().unwrap_or("<none>"),
-                result.total_usage.total_tokens,
-                result.total_usage.input_tokens,
-                result.total_usage.output_tokens,
-                result.total_usage.cache_read_tokens
+                format_usage(&result.total_usage)
             );
             for finding in &result.judgement.findings {
                 println!("  - {finding}");
@@ -791,7 +1196,7 @@ impl TaskRunSplitWorkspace {
 impl TaskRunSplitScenario {
     fn actor_max_steps(&self) -> usize {
         match &self.workspace {
-            TaskRunSplitWorkspace::Memory => 8,
+            TaskRunSplitWorkspace::Memory => 24,
             TaskRunSplitWorkspace::CurrentFileSystem { .. }
             | TaskRunSplitWorkspace::CurrentGit { .. } => 32,
         }
@@ -818,6 +1223,8 @@ struct TaskRunSplitChild {
     key: String,
     intent: String,
     plan: String,
+    read_scope: Vec<String>,
+    write_scope: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -917,6 +1324,7 @@ fn sum_usage(
     for usage in [actor_usage, judge_usage].into_iter().flatten() {
         total.input_tokens += usage.input_tokens;
         total.output_tokens += usage.output_tokens;
+        total.active_tokens += usage.active_tokens();
         total.total_tokens += usage.total_tokens;
         total.cache_read_tokens += usage.cache_read_tokens;
         total.cache_creation_tokens += usage.cache_creation_tokens;
@@ -929,11 +1337,25 @@ fn sum_agent_run_usage(runs: &[siko::AgentRunRecord]) -> AgentTokenUsage {
     for usage in runs.iter().filter_map(|run| run.usage.as_ref()) {
         total.input_tokens += usage.input_tokens;
         total.output_tokens += usage.output_tokens;
+        total.active_tokens += usage.active_tokens();
         total.total_tokens += usage.total_tokens;
         total.cache_read_tokens += usage.cache_read_tokens;
         total.cache_creation_tokens += usage.cache_creation_tokens;
     }
     total
+}
+
+fn format_usage(usage: &AgentTokenUsage) -> String {
+    format!(
+        "active={} total={} in={} out={} cache={} cache_read={} cache_create={}",
+        usage.active_tokens(),
+        usage.total_tokens,
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.cached_tokens(),
+        usage.cache_read_tokens,
+        usage.cache_creation_tokens
+    )
 }
 
 fn select_operation_eval_scenarios(
@@ -1173,7 +1595,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
         OperationEvalScenario {
             id: "normal",
             operation: NodeOperation::Combine,
-            expectation: "Combine should integrate child artifacts into one coherent parent artifact.",
+            expectation: "Combine should integrate accepted child artifacts into one coherent parent artifact without adding unsupported facts.",
             context: operation_context(
                 NodeOperation::Combine,
                 problem_node(
@@ -1196,7 +1618,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
         OperationEvalScenario {
             id: "conflict",
             operation: NodeOperation::Combine,
-            expectation: "Combine should acknowledge conflict paths and describe a coherent resolution.",
+            expectation: "Combine should acknowledge conflict paths and describe a coherent parent-level resolution without acting as an independent investigation role.",
             context: operation_context(
                 NodeOperation::Combine,
                 problem_node(
@@ -1359,9 +1781,14 @@ fn operation_result_summary(result: &AgentRunResult) -> String {
         NodeOperationOutput::Planned { group } => {
             format!("planned mode={:?} items={}", group.mode, group.items.len())
         }
-        NodeOperationOutput::InvalidPlan { reason } => {
-            format!("invalid plan reason={}", truncate_for_eval(reason, 240))
-        }
+        NodeOperationOutput::InvalidPlan { gate, reason } => match gate {
+            Some(gate) => format!(
+                "invalid plan gate={} reason={}",
+                gate.id(),
+                truncate_for_eval(reason, 240)
+            ),
+            None => format!("invalid plan reason={}", truncate_for_eval(reason, 240)),
+        },
         NodeOperationOutput::Executed { output } => {
             format!("executed output={}", truncate_for_eval(output, 500))
         }
@@ -1469,6 +1896,8 @@ impl TaskRunSplitTranscript {
                 key: node.key.0.clone(),
                 intent: node.intent.clone(),
                 plan: format!("{:?}", node.plan),
+                read_scope: node.workspace.read_scope.clone(),
+                write_scope: node.workspace.write_scope.clone(),
             })
             .collect();
         Self {
@@ -1845,6 +2274,7 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use siko::{AgentRunRecord, EngineReport};
     use std::collections::BTreeMap;
     use std::fs;
 
@@ -1875,9 +2305,144 @@ mod tests {
             cli.command,
             Some(Command::Assistant {
                 acp: false,
-                command: Some(AssistantCommand::Logs { task_id, json: true })
+                command: Some(AssistantCommand::Logs {
+                    task_id,
+                    json: true,
+                    full: false,
+                })
             }) if task_id == "task_1"
         ));
+    }
+
+    #[test]
+    fn parses_assistant_logs_full_command() {
+        let cli = Cli::try_parse_from(["siko", "assistant", "logs", "task_1", "--full"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Assistant {
+                acp: false,
+                command: Some(AssistantCommand::Logs {
+                    task_id,
+                    json: false,
+                    full: true,
+                })
+            }) if task_id == "task_1"
+        ));
+    }
+
+    #[test]
+    fn parses_assistant_events_command() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "assistant",
+            "events",
+            "task_1",
+            "--operation",
+            "execute",
+            "--event",
+            "tool_call_start",
+            "--tool",
+            "Read",
+            "--source",
+            "agent-loop",
+            "--query",
+            "src/cli.rs",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Assistant {
+                acp: false,
+                command: Some(AssistantCommand::Events {
+                    task_id,
+                    operation: Some(operation),
+                    event: Some(event),
+                    tool: Some(tool),
+                    source: Some(source),
+                    query: Some(query),
+                    json: true,
+                })
+            }) if task_id == "task_1"
+                && operation == "execute"
+                && event == "tool_call_start"
+                && tool == "Read"
+                && source == "agent-loop"
+                && query == "src/cli.rs"
+        ));
+    }
+
+    #[test]
+    fn assistant_agent_events_filters_persisted_run_events() {
+        let mut task = AssistantTask::new("task_1".to_string(), "inspect logs".to_string());
+        task.apply_report(
+            1,
+            EngineReport {
+                root: 1,
+                status: NodeStatus::Committed,
+                artifact: None,
+                events: Vec::new(),
+                agent_runs: vec![
+                    AgentRunRecord {
+                        node_id: 1,
+                        operation: NodeOperation::Specify,
+                        report: "specified".to_string(),
+                        terminal_tool: Some("submit_specification".to_string()),
+                        terminal_payload: None,
+                        duration_ms: 10,
+                        usage: None,
+                        events: vec![json!({
+                            "source": "agent-loop",
+                            "event": "tool_call_start",
+                            "name": "submit_specification",
+                            "objective": "Specify node 1",
+                            "elapsedMs": 1
+                        })],
+                    },
+                    AgentRunRecord {
+                        node_id: 1,
+                        operation: NodeOperation::Execute,
+                        report: "executed".to_string(),
+                        terminal_tool: Some("submit_work".to_string()),
+                        terminal_payload: None,
+                        duration_ms: 20,
+                        usage: None,
+                        events: vec![
+                            json!({
+                                "source": "agent-loop",
+                                "event": "tool_call_start",
+                                "name": "Read",
+                                "objective": "Execute node 1",
+                                "elapsedMs": 2,
+                                "args": "{\"file_path\":\"src/cli.rs\"}"
+                            }),
+                            json!({
+                                "source": "agent-loop",
+                                "event": "usage",
+                                "objective": "Execute node 1",
+                                "totalTokens": 42
+                            }),
+                        ],
+                    },
+                ],
+            },
+        );
+        let filter = AgentEventFilter::try_new(
+            Some("execute".to_string()),
+            Some("tool_call_start".to_string()),
+            Some("read".to_string()),
+            Some("agent-loop".to_string()),
+            Some("src/cli.rs".to_string()),
+        )
+        .unwrap();
+
+        let entries = assistant_agent_events(&task, &filter);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].run_index, 2);
+        assert_eq!(entries[0].event_index, 1);
+        assert_eq!(entries[0].operation, NodeOperation::Execute);
+        assert_eq!(entries[0].name.as_deref(), Some("Read"));
     }
 
     #[test]
@@ -1899,6 +2464,7 @@ mod tests {
                     scenario: None,
                     scenario_file: None,
                     artifact_dir: None,
+                    route_only: false,
                     json: true
                 }
             }) if task == "improve runtime"
@@ -1917,6 +2483,7 @@ mod tests {
                     scenario: Some(scenario),
                     scenario_file: None,
                     artifact_dir: None,
+                    route_only: false,
                     json: false
                 }
             }) if scenario == "all"
@@ -1941,6 +2508,7 @@ mod tests {
                     scenario: None,
                     scenario_file: Some(path),
                     artifact_dir: None,
+                    route_only: false,
                     json: false
                 }
             }) if path.as_path() == Path::new("evals/task-run/dogfood-doc-review.yaml")
@@ -1967,9 +2535,36 @@ mod tests {
                     scenario: Some(scenario),
                     scenario_file: None,
                     artifact_dir: Some(path),
+                    route_only: false,
                     json: false
                 }
             }) if scenario == "simple-qa" && path.as_path() == Path::new("/tmp/siko-artifacts")
+        ));
+    }
+
+    #[test]
+    fn parses_task_run_split_eval_route_only() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "eval",
+            "task-run-split",
+            "--scenario",
+            "sikong-project-analysis",
+            "--route-only",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Eval {
+                command: EvalCommand::TaskRunSplit {
+                    task: None,
+                    scenario: Some(scenario),
+                    scenario_file: None,
+                    artifact_dir: None,
+                    route_only: true,
+                    json: false
+                }
+            }) if scenario == "sikong-project-analysis"
         ));
     }
 
@@ -2009,6 +2604,9 @@ workspace:
     fn dogfood_scenario_files_are_valid() {
         for path in [
             "evals/task-run/dogfood-doc-review.yaml",
+            "evals/task-run/dogfood-governance-review.yaml",
+            "evals/task-run/dogfood-next-improvement.yaml",
+            "evals/task-run/dogfood-route-only.yaml",
             "evals/task-run/dogfood-verify-surface-smoke.yaml",
         ] {
             let scenario_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
@@ -2065,6 +2663,32 @@ workspace:
                     json: true
                 }
             }) if operation == "verify" && scenario == "reject"
+        ));
+    }
+
+    #[test]
+    fn parses_assistant_prompt_command() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "assistant",
+            "prompt",
+            "--wait-ms",
+            "5000",
+            "--json",
+            "推进",
+            "dogfood",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Assistant {
+                acp: false,
+                command: Some(AssistantCommand::Prompt {
+                    message,
+                    wait_ms: 5000,
+                    json: true,
+                })
+            }) if message == ["推进", "dogfood"]
         ));
     }
 

@@ -1,7 +1,13 @@
 import type { AdapterHookBridge, BackendAdapter, BackendResult, BackendRun } from "../core/adapter";
 import { hasCapability, type CapabilityList } from "../core/capabilities";
 import { createEventChannel } from "../core/channel";
-import { addUsage, emptyUsage, type LoopEvent, type TokenUsage } from "../core/events";
+import {
+  activeUsageTokens,
+  addUsage,
+  emptyUsage,
+  type LoopEvent,
+  type TokenUsage,
+} from "../core/events";
 import { CapabilityNotSupportedError } from "../core/errors";
 import type { HookDecision, Hooks, ToolHookDecision } from "../core/hooks";
 import type {
@@ -196,7 +202,7 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
     settled = true;
     const result: RunResult = {
       events: collected,
-      usage: backendResult?.usage ?? usage,
+      usage: normalizeUsage(backendResult?.usage ?? usage),
       durationMs: backendResult?.durationMs ?? Date.now() - startedAt,
       status,
       error,
@@ -264,8 +270,14 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
             // Fill contextWindow/usedRatio from the backend's declared window
             // when the adapter didn't already (central, DRY).
             const ctx = backendRun.contextWindow;
+            const activeTokens = activeUsageTokens(ev);
+            ev = { ...ev, activeTokens };
             if (ctx && ev.usedRatio === undefined) {
-              ev = { ...ev, contextWindow: ctx, usedRatio: contextUsedRatio(ev.totalTokens, ctx) };
+              ev = {
+                ...ev,
+                contextWindow: ctx,
+                usedRatio: contextUsedRatio(activeTokens, ctx),
+              };
             }
             usage = addUsage(usage, ev);
             await hooks.onUsage?.(ev);
@@ -321,9 +333,13 @@ export function startRun(backend: LazyBackend, input: RunInput): RunHandle {
   };
 }
 
-function contextUsedRatio(totalTokens: number, contextWindow: number): number {
+function normalizeUsage(usage: TokenUsage): TokenUsage {
+  return { ...usage, activeTokens: activeUsageTokens(usage) };
+}
+
+function contextUsedRatio(activeTokens: number, contextWindow: number): number {
   // Some runtimes report cumulative cache-read cost in usage snapshots. That is
   // useful for billing, but it can exceed the model context window by many
   // multiples and should not be rendered as context pressure.
-  return Math.min(totalTokens / contextWindow, 1);
+  return Math.min(activeTokens / contextWindow, 1);
 }

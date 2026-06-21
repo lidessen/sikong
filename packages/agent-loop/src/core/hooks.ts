@@ -61,7 +61,10 @@ export interface StepHookEvent {
 export interface UsageHookEvent {
   inputTokens: number;
   outputTokens: number;
+  activeTokens?: number;
   totalTokens: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
   contextWindow?: number;
   usedRatio?: number;
 }

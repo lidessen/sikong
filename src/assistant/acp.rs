@@ -1,9 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::io::{BufRead, Write};
+use std::{
+    io::{BufRead, Write},
+    time::Duration,
+};
 
 use super::session::{AssistantLoop, AssistantSession};
 use crate::TaskStore;
+
+const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AcpRequest {
@@ -73,6 +78,12 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
             initialized: false,
             session_id: None,
         }
+    }
+
+    pub async fn shutdown(&mut self) {
+        self.session
+            .wait_for_all(&mut self.store, SHUTDOWN_DRAIN_TIMEOUT)
+            .await;
     }
 
     pub async fn handle_request(&mut self, request: AcpRequest) -> AcpResponse {
@@ -184,6 +195,7 @@ where
         output.write_all(b"\n")?;
         output.flush()?;
     }
+    server.shutdown().await;
     Ok(())
 }
 
