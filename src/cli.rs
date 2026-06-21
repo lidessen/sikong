@@ -901,7 +901,7 @@ async fn run_dogfood_run_async(
 
     for scenario in scenarios {
         let run_started = Instant::now();
-        let launch = resolve_agent_host_launch(&debug);
+        let launch = resolve_agent_loop_launch(&debug, scenario.actor_max_steps());
         let (root_workspace, allow_write) = eval_task_workspace_requirement(&scenario)?;
         let mut engine = Engine::new(
             Workspaces::default(),
@@ -920,7 +920,7 @@ async fn run_dogfood_run_async(
             write_task_run_artifacts(artifact_dir, &scenario, root, &engine, &report)?;
         let actor_usage = sum_agent_run_usage(&report.agent_runs);
 
-        let judge_launch = resolve_agent_host_launch(&debug);
+        let judge_launch = resolve_agent_loop_launch(&debug, 6);
         let mut judge = ProcessAgentRunScheduler::new(judge_launch.command, judge_launch.args);
         let judge_response = judge
             .run(judge_request(&transcript), CancellationToken::new())
