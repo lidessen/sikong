@@ -260,10 +260,7 @@ impl SubmitVerdictArgs {
     fn into_verdict(self) -> VerificationVerdict {
         // G-PASS-WITH-HARD-VIOLATION: Accept with hard violations is a reject.
         if self.verdict == VerdictDecision::Accept
-            && self
-                .hard_violations
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
+            && self.hard_violations.as_ref().is_some_and(|v| !v.is_empty())
         {
             return VerificationVerdict::Reject {
                 failure_class: FailureClass::BadOutput,

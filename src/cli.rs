@@ -3,7 +3,7 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use siko::{
@@ -49,16 +49,22 @@ fn run_cli(cli: Cli) -> i32 {
                 Some(AssistantCommand::Prompt {
                     message,
                     wait_ms,
+                    workspace,
+                    allow_write,
+                    write_scope,
                     json,
                 }),
-        }) => match run_assistant_prompt(message, wait_ms, json) {
-            Ok(()) => 0,
-            Err(error) => {
-                error!(%error, "failed to run assistant prompt");
-                eprintln!("failed to run assistant prompt: {error}");
-                1
+        }) => {
+            match run_assistant_prompt(message, wait_ms, workspace, allow_write, write_scope, json)
+            {
+                Ok(()) => 0,
+                Err(error) => {
+                    error!(%error, "failed to run assistant prompt");
+                    eprintln!("failed to run assistant prompt: {error}");
+                    1
+                }
             }
-        },
+        }
         Some(Command::Assistant {
             acp: false,
             command:
@@ -165,7 +171,11 @@ fn run_cli(cli: Cli) -> i32 {
         Some(Command::Dogfood { command }) => match command {
             DogfoodCommand::List => {
                 for scenario in task_run_split_eval_scenarios() {
-                    println!("{}: {}", scenario.id, scenario.task.lines().next().unwrap_or(""));
+                    println!(
+                        "{}: {}",
+                        scenario.id,
+                        scenario.task.lines().next().unwrap_or("")
+                    );
                 }
                 0
             }
@@ -176,20 +186,23 @@ fn run_cli(cli: Cli) -> i32 {
                 route_only,
                 log,
                 json,
-            } => match run_dogfood_run(scenario_file, scenario, artifact_dir, route_only, log, json) {
-                Ok(passed) => {
-                    if passed {
-                        0
-                    } else {
+            } => {
+                match run_dogfood_run(scenario_file, scenario, artifact_dir, route_only, log, json)
+                {
+                    Ok(passed) => {
+                        if passed {
+                            0
+                        } else {
+                            1
+                        }
+                    }
+                    Err(error) => {
+                        error!(%error, "failed to run dogfood scenario");
+                        eprintln!("failed to run dogfood scenario: {error}");
                         1
                     }
                 }
-                Err(error) => {
-                    error!(%error, "failed to run dogfood scenario");
-                    eprintln!("failed to run dogfood scenario: {error}");
-                    1
-                }
-            },
+            }
         },
     }
 }
@@ -265,6 +278,18 @@ enum AssistantCommand {
         #[arg(long, default_value_t = 300_000)]
         wait_ms: u64,
 
+        /// Root workspace used by tasks created from this prompt.
+        #[arg(long, value_enum, default_value_t = AssistantPromptWorkspace::Memory)]
+        workspace: AssistantPromptWorkspace,
+
+        /// Allow created tasks to write within --write-scope.
+        #[arg(long)]
+        allow_write: bool,
+
+        /// Coarse writable glob for --workspace current-git. Repeatable.
+        #[arg(long = "write-scope")]
+        write_scope: Vec<String>,
+
         /// Print structured JSON output.
         #[arg(long)]
         json: bool,
@@ -315,6 +340,12 @@ enum AssistantCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum AssistantPromptWorkspace {
+    Memory,
+    CurrentGit,
 }
 
 #[derive(Debug, Subcommand)]
@@ -388,6 +419,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
             max_parallel_tasks: config.assistant.max_parallel_tasks,
             task_board_enabled: true,
             conversation_message_limit: 200,
+            ..AssistantSessionConfig::default()
         },
     );
     let server = AcpServer::new(store, session);
@@ -398,6 +430,9 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
 fn run_assistant_prompt(
     message: Vec<String>,
     wait_ms: u64,
+    workspace: AssistantPromptWorkspace,
+    allow_write: bool,
+    write_scope: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let message = message.join(" ").trim().to_string();
@@ -408,16 +443,32 @@ fn run_assistant_prompt(
         .thread_name("siko-assistant-prompt")
         .enable_all()
         .build()?;
-    runtime.block_on(run_assistant_prompt_async(message, wait_ms, json_output))
+    runtime.block_on(run_assistant_prompt_async(
+        message,
+        wait_ms,
+        workspace,
+        allow_write,
+        write_scope,
+        json_output,
+    ))
 }
 
 async fn run_assistant_prompt_async(
     message: String,
     wait_ms: u64,
+    workspace: AssistantPromptWorkspace,
+    allow_write: bool,
+    write_scope: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = SikoConfig::load()?;
     let debug = DebugConfig::from_env();
+    let root_workspace = resolve_assistant_prompt_workspace(&debug, workspace, &write_scope)?;
+    let root_capabilities = if allow_write {
+        CapabilityProfile::writable()
+    } else {
+        CapabilityProfile::read_only()
+    };
     let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
     let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
@@ -434,6 +485,8 @@ async fn run_assistant_prompt_async(
             max_parallel_tasks: config.assistant.max_parallel_tasks,
             task_board_enabled: true,
             conversation_message_limit: 200,
+            root_workspace,
+            root_capabilities,
         },
     );
 
@@ -451,10 +504,17 @@ async fn run_assistant_prompt_async(
         .as_deref()
         .and_then(|task_id| store.get_task(task_id))
         .map(|task| task.status.clone());
+    let final_artifact = reply
+        .task_id
+        .as_deref()
+        .and_then(|task_id| store.get_task(task_id))
+        .and_then(|task| task.last_report.as_ref())
+        .and_then(|report| report.artifact_text.clone());
     let output = AssistantPromptOutput {
         response: reply.text,
         task_id: reply.task_id,
         status: task_status,
+        final_artifact,
         running_tasks: state.running_tasks,
         queued_tasks: state.queued_tasks,
         persist_error: store.last_persist_error().map(ToString::to_string),
@@ -473,6 +533,10 @@ async fn run_assistant_prompt_async(
     if let Some(status) = &output.status {
         println!("status: {status:?}");
     }
+    if let Some(artifact) = &output.final_artifact {
+        println!();
+        println!("{artifact}");
+    }
     println!(
         "task board: {} running, {} queued",
         output.running_tasks, output.queued_tasks
@@ -483,11 +547,55 @@ async fn run_assistant_prompt_async(
     Ok(())
 }
 
+fn resolve_assistant_prompt_workspace(
+    debug: &DebugConfig,
+    workspace: AssistantPromptWorkspace,
+    write_scope: &[String],
+) -> Result<WorkspaceRequirement, Box<dyn std::error::Error>> {
+    match workspace {
+        AssistantPromptWorkspace::Memory => {
+            if !write_scope.is_empty() {
+                return Err("--write-scope requires --workspace current-git".into());
+            }
+            Ok(WorkspaceRequirement::memory())
+        }
+        AssistantPromptWorkspace::CurrentGit => {
+            let repo_root = current_git_root()?;
+            let worktree_root = debug.data_dir().join("worktrees").join("assistant");
+            Ok(WorkspaceRequirement::git_repo(
+                repo_root,
+                worktree_root,
+                "HEAD",
+                write_scope.iter().cloned(),
+            ))
+        }
+    }
+}
+
+fn current_git_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "current directory is not inside a git repository: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let root = String::from_utf8(output.stdout)?.trim().to_string();
+    if root.is_empty() {
+        return Err("git did not report a repository root".into());
+    }
+    Ok(PathBuf::from(root))
+}
+
 #[derive(Debug, Serialize)]
 struct AssistantPromptOutput {
     response: String,
     task_id: Option<String>,
     status: Option<AssistantTaskStatus>,
+    final_artifact: Option<String>,
     running_tasks: usize,
     queued_tasks: usize,
     persist_error: Option<String>,
@@ -794,7 +902,11 @@ async fn run_task_run_split_eval_async(
         if route_only {
             engine = engine.with_stop_after_route_depth(0);
         }
-        let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace, allow_write));
+        let root = engine.insert_root(eval_task_root_template(
+            &scenario.task,
+            root_workspace,
+            allow_write,
+        ));
         let report = engine
             .run(root)
             .await
@@ -886,7 +998,13 @@ fn run_dogfood_run(
         .thread_name("siko-dogfood")
         .enable_all()
         .build()?;
-    runtime.block_on(run_dogfood_run_async(scenarios, artifact_dir.as_deref(), route_only, log, json_output))
+    runtime.block_on(run_dogfood_run_async(
+        scenarios,
+        artifact_dir.as_deref(),
+        route_only,
+        log,
+        json_output,
+    ))
 }
 
 async fn run_dogfood_run_async(
@@ -910,7 +1028,11 @@ async fn run_dogfood_run_async(
         if route_only {
             engine = engine.with_stop_after_route_depth(0);
         }
-        let root = engine.insert_root(eval_task_root_template(&scenario.task, root_workspace, allow_write));
+        let root = engine.insert_root(eval_task_root_template(
+            &scenario.task,
+            root_workspace,
+            allow_write,
+        ));
         let report = engine
             .run(root)
             .await
@@ -981,13 +1103,15 @@ fn dogfood_write_devlog_entry(
         format!("## {now} - Dogfood run\n\n")
     };
 
+    log_content.push_str(&format!("\n### {} - {}\n\n", now, scenario.id,));
     log_content.push_str(&format!(
-        "\n### {} - {}\n\n",
-        now,
-        scenario.id,
+        "Scenario: {}\n\n",
+        scenario.task.lines().next().unwrap_or("")
     ));
-    log_content.push_str(&format!("Scenario: {}\n\n", scenario.task.lines().next().unwrap_or("")));
-    log_content.push_str(&format!("Verdict: {}\n\n", if judgement.passed { "PASSED" } else { "FAILED" }));
+    log_content.push_str(&format!(
+        "Verdict: {}\n\n",
+        if judgement.passed { "PASSED" } else { "FAILED" }
+    ));
     if !judgement.findings.is_empty() {
         log_content.push_str("Findings:\n");
         for f in &judgement.findings {
@@ -1029,7 +1153,16 @@ fn chrono_now_date() -> String {
     let month_days = [
         31,
         if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut m = 1;
     for days_in_month in month_days {
@@ -1380,14 +1513,22 @@ impl TaskRunSplitScenarioFileWorkspace {
     }
 }
 
-fn eval_task_root_template(task: &str, workspace: WorkspaceRequirement, allow_write: bool) -> NodeTemplate {
+fn eval_task_root_template(
+    task: &str,
+    workspace: WorkspaceRequirement,
+    allow_write: bool,
+) -> NodeTemplate {
     NodeTemplate {
         key: ProblemKey("task-run-split-eval".to_string()),
         intent: task.to_string(),
         size: WorkSize::Small,
         scope_assessment: None,
         workspace,
-        capabilities: if allow_write { CapabilityProfile::writable() } else { CapabilityProfile::read_only() },
+        capabilities: if allow_write {
+            CapabilityProfile::writable()
+        } else {
+            CapabilityProfile::read_only()
+        },
         budget: Budget::default(),
         plan: NodePlan::Execute,
     }
@@ -2656,6 +2797,7 @@ mod tests {
                 root: 1,
                 status: NodeStatus::Committed,
                 artifact: None,
+                artifact_text: None,
                 events: Vec::new(),
                 agent_runs: vec![
                     AgentRunRecord {
@@ -2964,10 +3106,54 @@ workspace:
                 command: Some(AssistantCommand::Prompt {
                     message,
                     wait_ms: 5000,
+                    workspace: AssistantPromptWorkspace::Memory,
+                    allow_write: false,
+                    write_scope,
                     json: true,
                 })
-            }) if message == ["推进", "dogfood"]
+            }) if message == ["推进", "dogfood"] && write_scope.is_empty()
         ));
+    }
+
+    #[test]
+    fn parses_assistant_prompt_current_git_workspace() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "assistant",
+            "prompt",
+            "--workspace",
+            "current-git",
+            "--allow-write",
+            "--write-scope",
+            "src/**",
+            "推进",
+            "dogfood",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Assistant {
+                acp: false,
+                command: Some(AssistantCommand::Prompt {
+                    message,
+                    workspace: AssistantPromptWorkspace::CurrentGit,
+                    allow_write: true,
+                    write_scope,
+                    ..
+                })
+            }) if message == ["推进", "dogfood"] && write_scope == ["src/**"]
+        ));
+    }
+
+    #[test]
+    fn assistant_prompt_memory_workspace_rejects_write_scope() {
+        let error = resolve_assistant_prompt_workspace(
+            &test_debug_config(),
+            AssistantPromptWorkspace::Memory,
+            &["src/**".to_string()],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--workspace current-git"));
     }
 
     #[test]

@@ -26,6 +26,154 @@ Do not design around a stronger model, a longer prompt, or a more elaborate
 chat history. Design around smaller context projections, explicit tools,
 typed completion contracts, replayable state, and reviewable evidence.
 
+## Agent As Intelligent Node: Simpler, More Stable, More Powerful
+
+The central thesis of this project is that adding agents to a system should
+make it **simpler, more stable, and more powerful** — not more complex.
+If an agent integration makes the system harder to reason about, the
+integration pattern is wrong.
+
+### The Classical Problem
+
+Traditional engineering handles everything with deterministic code: state
+machines, decision trees, pattern matching, heuristic scoring. This works
+well for well-defined paths but breaks down at gray boundaries:
+
+- rules that depend on subtle context;
+- decisions that require nuanced judgment;
+- handling novel situations the original author could not anticipate;
+- producing natural language output that is both structured and fluid;
+- adapting to changing external systems without code changes.
+
+To handle these, classical code resorts to increasingly complex machinery:
+endless configuration parameters, pluggable heuristics, DSLs, scoring
+models, ever-larger switch statements. The system grows more complex, more
+brittle, and harder to change — the opposite of what engineering should aim
+for.
+
+### The Agent-Native Alternative
+
+Replace the complex machinery with a simple orchestration boundary and an
+intelligent node inside it:
+
+```text
+Before (pure code):
+  Input → complex heuristic pipeline → fragile decision → rigid output
+
+After (agent as node):
+  Input → [orchestration: define goal + boundary + tools]
+       → [agent: execute within boundary]
+       → [orchestration: verify + accept/reject]
+```
+
+The orchestration code is **deterministic, testable, and stable**. It defines:
+- what the problem is (goal);
+- what the agent may and may not do (boundary, tools, terminal contracts);
+- how to tell if the result is acceptable (verification gates).
+
+The agent is **non-deterministic, replaceable, and adaptive**. It fills the
+gray area: it reads context, makes judgment calls, handles novel situations,
+and produces output within the constraints set by the orchestration.
+
+### Why This Makes The System Simpler
+
+The orchestration code replaces the complex heuristic pipeline with a few
+dozen lines of state transitions and schema definitions. The agent replaces
+the ever-growing switch statement with contextual reasoning.
+
+The total system complexity is not code + agent. It is:
+
+```text
+simple orchestration + replaceable intelligence
+  <
+complex heuristic code + brittle edge-case handling
+```
+
+Because:
+- orchestration code has no edge cases — it delegates gray areas to the agent;
+- the agent has no special-case logic — it reasons about whatever it receives;
+- the boundary between them is explicit, typed, and testable (terminal tools,
+  schemas, verification gates).
+
+### Why This Makes The System More Stable
+
+Stability comes from **separation of certainty from uncertainty**.
+
+The deterministic parts (orchestration, state machines, resource management,
+verification, persistence) are implemented in a strongly-typed language with
+tests, invariants, and deterministic behavior. They never guess. They never
+"try their best." They either succeed deterministically or fail with a clear
+error.
+
+The non-deterministic parts (agent reasoning) are treated as untrusted
+producers. Their output is a **claim**, not a fact. It must pass verification
+gates before it becomes durable state. A hallucinated file path, a wrong
+analysis, or an invalid plan is rejected — not propagated.
+
+This means:
+- adding an agent does not weaken the system's guarantees;
+- the verification layer catches agent mistakes the same way it catches
+  programmer mistakes;
+- the system can survive bad model behavior without corrupting state.
+
+### Why This Makes The System More Powerful
+
+An agent node can handle situations that deterministic code cannot:
+
+- **Novel input**: a task description the author never anticipated — the
+  agent reads it and figures out what to do;
+- **Complex judgment**: "is this design document consistent with the
+  architecture?" — the agent reads both and makes a reasoned assessment;
+- **Contextual adaptation**: the agent adjusts its approach based on what
+  it discovers during execution;
+- **Natural communication**: the agent produces output that is structured
+  enough for machines and fluid enough for humans.
+
+This is not "magic." It is a different engineering trade: instead of
+anticipating every path in code, you define boundaries and let an
+intelligent node navigate within them.
+
+### The Trap: Agent Adding Complexity
+
+If adding an agent makes your system more complex — more state, more
+configuration, more failure modes, more code paths — you are using it
+wrong. The agent should **replace** complex code, not sit alongside it.
+
+Signs of wrong integration:
+- the system has both an agent path AND a hard-coded heuristic path for
+  the same decision;
+- there are prompt templates, configuration knobs, and fallback logic that
+  try to "help" the agent be more deterministic;
+- the orchestration code has as many edge cases as the heuristic code it
+  replaced;
+- verification is weak or absent, so agent output is trusted by default.
+
+The right integration signs:
+- the deterministic parts are smaller and more testable than before;
+- the agent's boundaries are defined by a few typed schemas and terminal
+  tools;
+- verification is structural and deterministic, not "ask another agent if
+  the first agent was right";
+- the system fails safely when the agent produces invalid output.
+
+### Application to Sikong
+
+Sikong is a direct application of this principle:
+
+| Layer | Deterministic (Rust) | Intelligent (Bun agent) |
+|-------|---------------------|------------------------|
+| Task orchestration | Engine state machine, node scheduling, resource lifecycle | — |
+| Problem solving | — | Operation harnesses (Specify/Plan/Execute/Combine/Verify) |
+| Workspace | Snapshot, capture, merge, cleanup | — |
+| Agent execution | — | Tool calls, file reads/writes, shell commands, reasoning |
+| Verification | Scope gates, deterministic checks, protocol validation | Judge eval, verifier judgment |
+| Persistence | Task store, event log, artifact storage | — |
+
+The Rust-to-Bun boundary is the orchestration-to-agent boundary.
+Rust owns what is deterministic; the agent owns what requires judgment.
+Neither side crosses the boundary without going through a typed terminal
+tool or a workspace provider.
+
 ## Lower-Level Operating Method
 
 The `agent-worker` skills summarize a lower-level method than the architecture

@@ -12,8 +12,8 @@ use tracing::{Level, error, info};
 use crate::{
     AgentRunRequest, AgentRunResponse, AgentRunScheduler, AssistantTaskEventRecord,
     AssistantTaskStatus, Budget, CancellationToken, CapabilityProfile, Engine, EngineError,
-    EngineReport, MemoryWorkspace, NodeId, NodePlan, NodeTemplate, ProblemKey, TaskId, TaskStore,
-    WorkSize,
+    EngineReport, NodeId, NodePlan, NodeTemplate, ProblemKey, TaskId, TaskStore, WorkSize,
+    Workspaces,
 };
 
 type WorkerFactory = dyn Fn() -> Box<dyn AgentRunScheduler + Send> + Send + Sync;
@@ -69,11 +69,21 @@ impl TaskEngineRunnerFactory {
 
 struct RecursiveTaskEngineRunner {
     worker_factory: TaskWorkerFactory,
+    root_workspace: crate::WorkspaceRequirement,
+    root_capabilities: CapabilityProfile,
 }
 
 impl RecursiveTaskEngineRunner {
-    fn new(worker_factory: TaskWorkerFactory) -> Self {
-        Self { worker_factory }
+    fn new(
+        worker_factory: TaskWorkerFactory,
+        root_workspace: crate::WorkspaceRequirement,
+        root_capabilities: CapabilityProfile,
+    ) -> Self {
+        Self {
+            worker_factory,
+            root_workspace,
+            root_capabilities,
+        }
     }
 }
 
@@ -105,9 +115,14 @@ impl TaskEngineRunner for RecursiveTaskEngineRunner {
         request: &str,
         cancellation: CancellationToken,
     ) -> Result<(NodeId, EngineReport), EngineError> {
-        let root_template = task_request_to_root(task_id, request);
+        let root_template = task_request_to_root(
+            task_id,
+            request,
+            self.root_workspace.clone(),
+            self.root_capabilities.clone(),
+        );
         let worker = FactoryAgentRunScheduler::new(self.worker_factory.clone());
-        let mut engine = Engine::new(MemoryWorkspace::default(), worker);
+        let mut engine = Engine::new(Workspaces::default(), worker);
         let root = engine.insert_root(root_template);
         let report = engine.run_with_cancel(root, cancellation).await?;
         Ok((root, report))
@@ -172,8 +187,26 @@ pub struct TaskBoardSnapshot {
 
 impl TaskBoard {
     pub fn new(max_parallel_tasks: usize, worker_factory: TaskWorkerFactory) -> Self {
+        Self::new_with_root(
+            max_parallel_tasks,
+            worker_factory,
+            crate::WorkspaceRequirement::memory(),
+            CapabilityProfile::read_only(),
+        )
+    }
+
+    pub fn new_with_root(
+        max_parallel_tasks: usize,
+        worker_factory: TaskWorkerFactory,
+        root_workspace: crate::WorkspaceRequirement,
+        root_capabilities: CapabilityProfile,
+    ) -> Self {
         let engine_runner_factory = TaskEngineRunnerFactory::new(move || {
-            Box::new(RecursiveTaskEngineRunner::new(worker_factory.clone()))
+            Box::new(RecursiveTaskEngineRunner::new(
+                worker_factory.clone(),
+                root_workspace.clone(),
+                root_capabilities.clone(),
+            ))
         });
         Self::with_engine_runner(max_parallel_tasks, engine_runner_factory)
     }
@@ -542,14 +575,19 @@ fn record_engine_report_logs(
     }
 }
 
-fn task_request_to_root(task_id: &str, request: &str) -> NodeTemplate {
+fn task_request_to_root(
+    task_id: &str,
+    request: &str,
+    workspace: crate::WorkspaceRequirement,
+    capabilities: CapabilityProfile,
+) -> NodeTemplate {
     NodeTemplate {
         key: ProblemKey(task_id.to_string()),
         intent: request.to_string(),
         size: WorkSize::Small,
         scope_assessment: None,
-        workspace: crate::WorkspaceRequirement::memory(),
-        capabilities: CapabilityProfile::read_only(),
+        workspace,
+        capabilities,
         budget: Budget::default(),
         plan: NodePlan::Execute,
     }

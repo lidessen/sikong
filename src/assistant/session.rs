@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::{
     AgentPromptSection, AgentRunRequest, AgentRunScheduler, AgentToolCall, AssistantHarness,
     AssistantTaskStatus, CancellationToken, TaskBoard, TaskBoardSnapshot, TaskId, TaskStore,
-    TaskWorkerFactory,
+    TaskWorkerFactory, WorkspaceRequirement,
 };
 
 use super::context::{AssistantContext, AssistantConversationMessage, AssistantConversationRole};
@@ -188,6 +188,8 @@ pub struct AssistantSessionConfig {
     pub max_parallel_tasks: usize,
     pub task_board_enabled: bool,
     pub conversation_message_limit: usize,
+    pub root_workspace: WorkspaceRequirement,
+    pub root_capabilities: crate::CapabilityProfile,
 }
 
 impl Default for AssistantSessionConfig {
@@ -196,6 +198,8 @@ impl Default for AssistantSessionConfig {
             max_parallel_tasks: 2,
             task_board_enabled: true,
             conversation_message_limit: 200,
+            root_workspace: WorkspaceRequirement::memory(),
+            root_capabilities: crate::CapabilityProfile::read_only(),
         }
     }
 }
@@ -241,7 +245,12 @@ impl<L: AssistantLoop> AssistantSession<L> {
         W: AgentRunScheduler + Send + 'static,
     {
         let worker_factory = TaskWorkerFactory::new(move || Box::new(make_worker()));
-        let task_board = TaskBoard::new(config.max_parallel_tasks, worker_factory);
+        let task_board = TaskBoard::new_with_root(
+            config.max_parallel_tasks,
+            worker_factory,
+            config.root_workspace.clone(),
+            config.root_capabilities.clone(),
+        );
         Self {
             focus_task: None,
             conversation: Vec::new(),
@@ -358,6 +367,9 @@ impl<L: AssistantLoop> AssistantSession<L> {
                         Err(error) => return tool_sequence_error(error),
                     };
                     if store.get_task(&task_id).is_none() {
+                        if !touched_task_ids.is_empty() {
+                            continue;
+                        }
                         return SessionReply {
                             text: format!("Task {task_id} was not found."),
                             task_id: None,
@@ -417,12 +429,12 @@ impl<L: AssistantLoop> AssistantSession<L> {
             };
         }
 
-        let task_id = turn
-            .task_ids
-            .iter()
-            .find(|task_id| !task_id.trim().is_empty())
-            .cloned()
-            .or_else(|| touched_task_ids.first().cloned());
+        let task_id = touched_task_ids.first().cloned().or_else(|| {
+            turn.task_ids
+                .iter()
+                .find(|task_id| !task_id.trim().is_empty() && store.get_task(task_id).is_some())
+                .cloned()
+        });
         SessionReply {
             text: turn.response,
             task_id,

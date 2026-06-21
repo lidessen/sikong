@@ -92,10 +92,16 @@ where
         let artifact = result?;
         cleanup_result?;
         let status = self.node(root)?.status;
+        let artifact_text = artifact.and_then(|artifact_id| {
+            self.artifacts
+                .get(&artifact_id)
+                .map(|artifact| artifact.text.clone())
+        });
         Ok(EngineReport {
             root,
             status,
             artifact,
+            artifact_text,
             events: self.events.clone(),
             agent_runs: self.agent_runs.clone(),
         })

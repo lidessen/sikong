@@ -88,6 +88,7 @@ async fn simple_leaf_executes_verifies_and_commits() {
     );
     let artifact = engine.artifact(report.artifact.unwrap()).unwrap();
     assert_eq!(artifact.text, "polished text");
+    assert_eq!(report.artifact_text.as_deref(), Some("polished text"));
     assert_eq!(
         engine
             .events()
@@ -452,7 +453,10 @@ async fn planned_children_cannot_widen_parent_workspace_scope() {
     let error = engine.run(root).await.unwrap_err();
 
     assert!(matches!(error, EngineError::AgentProtocol(_)));
-    assert!(format!("{error:?}").contains("G-SCOPE-WIDEN: child read_scope outside parent workspace scope"));
+    assert!(
+        format!("{error:?}")
+            .contains("G-SCOPE-WIDEN: child read_scope outside parent workspace scope")
+    );
 }
 
 #[tokio::test]

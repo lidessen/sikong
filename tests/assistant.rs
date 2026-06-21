@@ -136,6 +136,29 @@ impl AssistantLoop for SteeringConversationAssistantLoop {
     }
 }
 
+#[derive(Debug, Default)]
+struct SyntheticTaskIdAssistantLoop;
+
+#[async_trait::async_trait]
+impl AssistantLoop for SyntheticTaskIdAssistantLoop {
+    async fn run_turn(
+        &mut self,
+        context: &AssistantContext,
+    ) -> Result<AssistantTurn, AssistantTurnError> {
+        Ok(assistant_turn(
+            vec![
+                tool_call(
+                    "create_task",
+                    serde_json::json!({ "request": context.current_message.trim() }),
+                ),
+                tool_call("inspect_task", serde_json::json!({ "task_id": "1" })),
+            ],
+            "Created task 1.",
+            vec!["1".to_string()],
+        ))
+    }
+}
+
 fn assistant_turn(
     mut calls: Vec<AgentToolCall>,
     response: &str,
@@ -175,6 +198,7 @@ async fn assistant_session_injects_latest_message_and_recent_conversation() {
             max_parallel_tasks: 2,
             task_board_enabled: false,
             conversation_message_limit: 12,
+            ..AssistantSessionConfig::default()
         },
     );
 
@@ -212,6 +236,7 @@ async fn assistant_session_bounds_long_conversation_context() {
             max_parallel_tasks: 2,
             task_board_enabled: false,
             conversation_message_limit: 3,
+            ..AssistantSessionConfig::default()
         },
     );
 
@@ -264,6 +289,22 @@ async fn assistant_prompt_creates_task_and_runtime_completes_it() {
     let task = store.get_task(&task_id).expect("task");
     assert_eq!(task.status, AssistantTaskStatus::Completed);
     assert!(task.root_node.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_prefers_replayed_task_id_over_model_synthetic_task_id() {
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::new(SyntheticTaskIdAssistantLoop, TestAgentRunScheduler);
+
+    let reply = session
+        .handle_message(&mut store, "check dogfood mainline")
+        .await;
+
+    let task_id = reply.task_id.expect("task id");
+    assert_ne!(task_id, "1");
+    assert!(store.get_task(&task_id).is_some());
+    assert_eq!(store.get_task("1"), None);
+    assert_eq!(store.list_tasks().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -350,6 +391,7 @@ async fn assistant_session_can_run_without_task_board() {
             max_parallel_tasks: 2,
             task_board_enabled: false,
             conversation_message_limit: 12,
+            ..AssistantSessionConfig::default()
         },
     );
 
@@ -397,6 +439,7 @@ async fn assistant_real_kimi_loop_replies_without_task_board_when_enabled() {
             max_parallel_tasks: 2,
             task_board_enabled: false,
             conversation_message_limit: 12,
+            ..AssistantSessionConfig::default()
         },
     );
 
@@ -452,6 +495,7 @@ async fn assistant_accepts_new_prompt_while_another_task_is_running() {
             max_parallel_tasks: 2,
             task_board_enabled: true,
             conversation_message_limit: 12,
+            ..AssistantSessionConfig::default()
         },
     );
 
@@ -721,6 +765,7 @@ impl TaskEngineRunner for RecordingTaskEngineRunner {
                 root: 42,
                 status: NodeStatus::Committed,
                 artifact: None,
+                artifact_text: None,
                 events: Vec::new(),
                 agent_runs: Vec::new(),
             },

@@ -19,7 +19,7 @@ within the boundaries set by current (✓) documents.
 
 | Status | Document | Governs | Last Reviewed |
 |--------|----------|---------|---------------|
-| ✓ | `development-philosophy.md` | All layers — core philosophy, attention method, drift signals | 2026-06-21 |
+| ✓ | `development-philosophy.md` | All layers — core philosophy, attention method, drift signals | 2026-06-21 (Agent As Intelligent Node added) |
 | ✓ | `governance-model.md` | All layers — Arch/Plan/Execute/Verify authority, gates | 2026-06-21 |
 | ✓ | `prompt-guidance.md` | All layers — attention boundary, context projection | 2026-06-21 |
 | ✓ | `dogfood.md` | Self-development loop — doc-first, live eval gates | 2026-06-21 |

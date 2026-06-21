@@ -251,6 +251,7 @@ pub struct EngineReport {
     pub root: NodeId,
     pub status: NodeStatus,
     pub artifact: Option<ArtifactId>,
+    pub artifact_text: Option<String>,
     pub events: Vec<OperationEvent>,
     pub agent_runs: Vec<AgentRunRecord>,
 }
