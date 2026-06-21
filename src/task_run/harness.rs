@@ -146,10 +146,9 @@ fn render_context_json(value: &Value) -> String {
 }
 
 fn operation_prompt_sections(
-    operation: NodeOperation,
     context: &AgentOperationContext,
 ) -> Vec<AgentPromptSection> {
-    match operation {
+    match context.operation {
         NodeOperation::Specify => with_operation_context(
             context,
             operation_prompt! {
@@ -384,7 +383,7 @@ impl OperationHarness {
         let context = self.context();
         let request = AgentRunRequest::new(
             format!("{:?} node {}", context.operation, context.node.id),
-            operation_prompt_sections(context.operation, context),
+            operation_prompt_sections(context),
             operation_input(context),
             operation_tools(context),
             operation_tool_names(context.operation),

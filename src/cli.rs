@@ -990,6 +990,14 @@ fn run_dogfood_run(
     log: bool,
     json_output: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    // Default: run the autonomous iteration scenario
+    let scenario_file = scenario_file.or_else(|| {
+        if scenario.is_none() {
+            Some(Path::new("evals/task-run/autonomous-iteration.yaml").to_path_buf())
+        } else {
+            None
+        }
+    });
     let scenarios = select_task_run_split_eval_scenarios(None, scenario, scenario_file.as_deref())?;
     if scenarios.is_empty() {
         return Err("no dogfood scenario selected; use --scenario or --scenario-file".into());
