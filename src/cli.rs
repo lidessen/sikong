@@ -3814,4 +3814,95 @@ workspace:
     fn optional_eq_filter_none_with_actual_none_returns_true() {
         assert!(optional_eq(None, None));
     }
+
+    // ── Additional utility function tests ─────────────────────────────────
+
+    #[test]
+    fn operation_name_maps_all_variants() {
+        assert_eq!(operation_name(NodeOperation::Specify), "specify");
+        assert_eq!(operation_name(NodeOperation::Plan), "plan");
+        assert_eq!(operation_name(NodeOperation::Execute), "execute");
+        assert_eq!(operation_name(NodeOperation::Combine), "combine");
+        assert_eq!(operation_name(NodeOperation::Verify), "verify");
+        assert_eq!(operation_name(NodeOperation::Commit), "commit");
+    }
+
+    #[test]
+    fn truncate_for_eval_preserves_short_input() {
+        assert_eq!(truncate_for_eval("hello world", 20), "hello world");
+    }
+
+    #[test]
+    fn truncate_for_eval_exact_fit() {
+        assert_eq!(truncate_for_eval("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_for_eval_appends_ellipsis_when_exceeding() {
+        let result = truncate_for_eval("this is a long string that should be truncated", 15);
+        assert_eq!(result, "this is a long ...");
+    }
+
+    #[test]
+    fn truncate_for_eval_handles_empty_string() {
+        assert_eq!(truncate_for_eval("", 10), "");
+    }
+
+    #[test]
+    fn truncate_for_eval_handles_multi_byte_chars() {
+        assert_eq!(truncate_for_eval("日本語の文字列", 4), "日本語の...");
+    }
+
+    #[test]
+    fn assistant_agent_events_returns_empty_when_no_report() {
+        let task = AssistantTask::new("task_empty".to_string(), "no report yet".to_string());
+        let filter =
+            AgentEventFilter::try_new(None, None, None, None, None).unwrap();
+        let entries = assistant_agent_events(&task, &filter);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn render_json_prompt_context_formats_pretty_json() {
+        let value = serde_json::json!({"key": "value", "number": 42});
+        let result = render_json_prompt_context(&value);
+        assert!(result.starts_with("```json"));
+        assert!(result.contains("\"key\": \"value\""));
+        assert!(result.contains("\"number\": 42"));
+        assert!(result.ends_with("```"));
+    }
+
+    #[test]
+    fn render_json_prompt_context_handles_null() {
+        assert_eq!(
+            render_json_prompt_context(&serde_json::Value::Null),
+            "```json\nnull\n```"
+        );
+    }
+
+    #[test]
+    fn render_json_prompt_context_handles_array() {
+        let value = serde_json::json!([1, "two", true]);
+        let result = render_json_prompt_context(&value);
+        assert!(result.starts_with("```json"));
+        assert!(result.contains("\"two\""));
+        assert!(result.ends_with("```"));
+    }
+
+    #[test]
+    fn chrono_now_date_has_correct_format() {
+        let date = chrono_now_date();
+        // Should match YYYY-MM-DD format
+        assert_eq!(date.len(), 10);
+        assert_eq!(date.chars().filter(|&c| c == '-').count(), 2);
+        let parts: Vec<&str> = date.split('-').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].len(), 4); // YYYY
+        assert_eq!(parts[1].len(), 2); // MM
+        assert_eq!(parts[2].len(), 2); // DD
+        // Should be parseable as numbers
+        assert!(parts[0].parse::<i32>().is_ok());
+        assert!(parts[1].parse::<u32>().is_ok());
+        assert!(parts[2].parse::<u32>().is_ok());
+    }
 }

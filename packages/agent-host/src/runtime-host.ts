@@ -1,5 +1,15 @@
 import { rm } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
 import { createServer, type Socket as NodeSocket } from "node:net";
+
+// Ensure nested Claude Code processes can create session directories.
+// When running inside another Claude Code, the default ~/.claude/session-env/
+// may not be writable. Point to a temp directory instead.
+if (!process.env.CLAUDE_SESSION_ENV_DIR) {
+  const sessionDir = `/tmp/siko-sessions-${process.pid}`;
+  try { mkdirSync(sessionDir, { recursive: true }); } catch {}
+  process.env.CLAUDE_SESSION_ENV_DIR = sessionDir;
+}
 
 import { createAgentLoopWorker } from "./agent-loop-worker";
 import type { EffortLevel } from "agent-loop";

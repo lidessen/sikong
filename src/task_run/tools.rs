@@ -288,6 +288,193 @@ mod tests {
             matches!(&output, NodeOperationOutput::InvalidPlan { gate, .. } if *gate == Some(GovernanceGate::Protocol))
         );
     }
+
+    #[test]
+    fn submit_plan_group_rejects_parallel_dependency() {
+        let output = EngineTools.submit_plan_group(SubmitPlanGroupArgs {
+            mode: PlanGroupMode::Parallel,
+            items: vec![
+                PlanItemInput {
+                    key: None,
+                    title: Some("Inspect surface A".to_string()),
+                    intent: None,
+                    description: None,
+                    verification: None,
+                    read_scope: None,
+                    write_scope: None,
+                    size: None,
+                    reason: None,
+                    requires_prior_results: false,
+                },
+                PlanItemInput {
+                    key: None,
+                    title: Some("Inspect surface B".to_string()),
+                    intent: None,
+                    description: None,
+                    verification: None,
+                    read_scope: None,
+                    write_scope: None,
+                    size: None,
+                    reason: None,
+                    requires_prior_results: true,
+                },
+            ],
+        });
+        assert!(
+            matches!(&output, NodeOperationOutput::InvalidPlan { gate, .. } if *gate == Some(GovernanceGate::ParallelDependency))
+        );
+    }
+
+    #[test]
+    fn submit_plan_group_accepts_valid_parallel_items() {
+        let output = EngineTools.submit_plan_group(SubmitPlanGroupArgs {
+            mode: PlanGroupMode::Parallel,
+            items: vec![
+                PlanItemInput {
+                    key: Some("surface-a".to_string()),
+                    title: None,
+                    intent: Some("Inspect surface A".to_string()),
+                    description: None,
+                    verification: Some("must find concrete evidence".to_string()),
+                    read_scope: Some(vec!["src/surface_a/**/*.rs".to_string()]),
+                    write_scope: None,
+                    size: Some(WorkSize::Small),
+                    reason: Some("focused scan".to_string()),
+                    requires_prior_results: false,
+                },
+                PlanItemInput {
+                    key: Some("surface-b".to_string()),
+                    title: None,
+                    intent: Some("Inspect surface B".to_string()),
+                    description: None,
+                    verification: None,
+                    read_scope: None,
+                    write_scope: None,
+                    size: None,
+                    reason: None,
+                    requires_prior_results: false,
+                },
+            ],
+        });
+        assert!(matches!(&output, NodeOperationOutput::Planned { .. }));
+        if let NodeOperationOutput::Planned { group } = &output {
+            assert_eq!(group.mode, PlanGroupMode::Parallel);
+            assert_eq!(group.items.len(), 2);
+            assert_eq!(group.items[0].key.0, "surface-a");
+            assert!(group.items[0].intent.contains("Inspect surface A"));
+            assert!(group.items[0].intent.contains("Acceptance:"));
+            assert!(group.items[0].intent.contains("concrete evidence"));
+            assert_eq!(group.items[0].workspace.write_scope.len(), 0);
+            assert_eq!(group.items[1].key.0, "surface-b");
+        }
+    }
+
+    #[test]
+    fn parses_current_failure_class_names() {
+        assert_eq!(parse_failure_class("missing_info"), Some(FailureClass::MissingInfo));
+        assert_eq!(parse_failure_class("spec_ambiguity"), Some(FailureClass::SpecAmbiguity));
+        assert_eq!(parse_failure_class("incomplete_output"), Some(FailureClass::IncompleteOutput));
+        assert_eq!(parse_failure_class("bad_output"), Some(FailureClass::BadOutput));
+        assert_eq!(parse_failure_class("unsafe_side_effect"), Some(FailureClass::UnsafeSideEffect));
+        assert_eq!(parse_failure_class("merge_conflict"), Some(FailureClass::MergeConflict));
+        assert_eq!(parse_failure_class("budget_exhausted"), Some(FailureClass::BudgetExhausted));
+    }
+
+    #[test]
+    fn parses_legacy_failure_class_names() {
+        assert_eq!(parse_failure_class("MissingInfo"), Some(FailureClass::MissingInfo));
+        assert_eq!(parse_failure_class("SpecAmbiguity"), Some(FailureClass::SpecAmbiguity));
+        assert_eq!(parse_failure_class("incomplete_assessment"), Some(FailureClass::IncompleteOutput));
+        assert_eq!(parse_failure_class("IncompleteOutput"), Some(FailureClass::IncompleteOutput));
+        assert_eq!(parse_failure_class("BadOutput"), Some(FailureClass::BadOutput));
+        assert_eq!(parse_failure_class("UnsafeSideEffect"), Some(FailureClass::UnsafeSideEffect));
+        assert_eq!(parse_failure_class("MergeConflict"), Some(FailureClass::MergeConflict));
+        assert_eq!(parse_failure_class("BudgetExhausted"), Some(FailureClass::BudgetExhausted));
+    }
+
+    #[test]
+    fn parses_unknown_failure_class_as_none() {
+        assert_eq!(parse_failure_class("unknown"), None);
+        assert_eq!(parse_failure_class(""), None);
+        assert_eq!(parse_failure_class("incomplete"), None);
+        assert_eq!(parse_failure_class("BudgetExceeded"), None);
+    }
+
+    #[test]
+    fn reject_verdict_with_unknown_failure_class_defaults_to_bad_output() {
+        let args = SubmitVerdictArgs {
+            verdict: VerdictDecision::Reject,
+            reason: "bad".to_string(),
+            failure_class: Some("unknown_failure".to_string()),
+            missing_info: None,
+            hard_violations: None,
+        };
+        let verdict = args.into_verdict();
+        assert!(matches!(
+            verdict,
+            VerificationVerdict::Reject {
+                failure_class: FailureClass::BadOutput,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn reject_verdict_without_failure_class_defaults_to_bad_output() {
+        let args = SubmitVerdictArgs {
+            verdict: VerdictDecision::Reject,
+            reason: "bad".to_string(),
+            failure_class: None,
+            missing_info: None,
+            hard_violations: None,
+        };
+        let verdict = args.into_verdict();
+        assert!(matches!(
+            verdict,
+            VerificationVerdict::Reject {
+                failure_class: FailureClass::BadOutput,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn need_information_sets_missing_info() {
+        let args = SubmitVerdictArgs {
+            verdict: VerdictDecision::NeedInformation,
+            reason: "need specifics".to_string(),
+            failure_class: None,
+            missing_info: Some("provider selection".to_string()),
+            hard_violations: None,
+        };
+        let verdict = args.into_verdict();
+        assert!(matches!(
+            verdict,
+            VerificationVerdict::Uncertain {
+                missing_info,
+                ..
+            } if missing_info == "provider selection"
+        ));
+    }
+
+    #[test]
+    fn need_information_defaults_empty_missing_info() {
+        let args = SubmitVerdictArgs {
+            verdict: VerdictDecision::NeedInformation,
+            reason: "need specifics".to_string(),
+            failure_class: None,
+            missing_info: None,
+            hard_violations: None,
+        };
+        let verdict = args.into_verdict();
+        assert!(matches!(
+            verdict,
+            VerificationVerdict::Uncertain {
+                missing_info,
+                ..
+            } if missing_info.is_empty()
+        ));
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

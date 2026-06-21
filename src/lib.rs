@@ -41,4 +41,5 @@ pub use workspace::{
     WorkspaceProvider, WorkspaceRequirement, WorkspaceResource, WorkspaceResourceId,
     WorkspaceResourceKind, WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState,
     WorkspaceResult, WorkspaceSnapshot, WorkspaceSnapshotId, WorkspaceSurface, Workspaces,
+    path_allowed,
 };

@@ -288,3 +288,115 @@ impl WorkspaceIds {
         state.next_resource_id
     }
 }
+
+/// Check whether a path is allowed by a set of glob scope patterns.
+///
+/// Each pattern supports:
+/// - `**` — matches any number of path segments (including zero)
+/// - `*` — matches any characters within a single path segment (never crosses `/`)
+/// - `?` — matches exactly one character within a single segment
+///
+/// Returns `true` if `path` matches ANY of the `patterns`.
+/// Returns `false` when `patterns` is empty (no scope = nothing allowed).
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// # use siko::path_allowed as path_allowed;
+///
+/// // Match any .rs file at any depth
+/// assert!(path_allowed(&["**/*.rs".into()], Path::new("src/main.rs")));
+/// assert!(path_allowed(&["**/*.rs".into()], Path::new("nested/a/b/lib.rs")));
+/// assert!(!path_allowed(&["**/*.rs".into()], Path::new("readme.md")));
+///
+/// // Match within a specific directory
+/// let patterns = &["src/**/*.rs".into(), "design/**/*.md".into()];
+/// assert!(path_allowed(patterns, Path::new("src/cli.rs")));
+/// assert!(path_allowed(patterns, Path::new("design/README.md")));
+/// assert!(!path_allowed(patterns, Path::new("tests/test.rs")));
+///
+/// // Empty scope allows nothing
+/// assert!(!path_allowed(&[], Path::new("anything.txt")));
+/// ```
+pub fn path_allowed(patterns: &[String], path: &std::path::Path) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+    let path_str = path.to_string_lossy();
+    patterns.iter().any(|pattern| glob_matches(pattern, &path_str))
+}
+
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    let pattern_segments: Vec<&str> = pattern.split('/').collect();
+    let path_segments: Vec<&str> = path.split('/').collect();
+    segments_match(&pattern_segments, &path_segments, 0, 0)
+}
+
+fn segments_match(pattern: &[&str], path: &[&str], pi: usize, si: usize) -> bool {
+    // All pattern segments consumed → path must also be fully consumed
+    if pi >= pattern.len() {
+        return si >= path.len();
+    }
+
+    // All path segments consumed → remaining pattern must be only `**`
+    if si >= path.len() {
+        return pattern[pi..].iter().all(|seg| *seg == "**");
+    }
+
+    let p_seg = pattern[pi];
+
+    if p_seg == "**" {
+        // `**` matches zero or more path segments; try each possibility
+        for skip in 0..=(path.len() - si) {
+            if segments_match(pattern, path, pi + 1, si + skip) {
+                return true;
+            }
+        }
+        false
+    } else if segment_match(p_seg, path[si]) {
+        segments_match(pattern, path, pi + 1, si + 1)
+    } else {
+        false
+    }
+}
+
+fn segment_match(pattern: &str, segment: &str) -> bool {
+    let p_chars: Vec<char> = pattern.chars().collect();
+    let s_chars: Vec<char> = segment.chars().collect();
+    segment_chars_match(&p_chars, &s_chars, 0, 0)
+}
+
+fn segment_chars_match(pattern: &[char], segment: &[char], pi: usize, si: usize) -> bool {
+    // All pattern chars consumed → all segment chars must also be consumed
+    if pi >= pattern.len() {
+        return si >= segment.len();
+    }
+
+    // Handle `*` — matches zero or more chars within this segment
+    if pattern[pi] == '*' {
+        let remaining = segment.len().saturating_sub(si);
+        for skip in 0..=remaining {
+            if segment_chars_match(pattern, segment, pi + 1, si + skip) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Segment exhausted but pattern remains → no match
+    if si >= segment.len() {
+        return false;
+    }
+
+    // Handle `?` — matches exactly one char
+    if pattern[pi] == '?' {
+        return segment_chars_match(pattern, segment, pi + 1, si + 1);
+    }
+
+    // Exact char match
+    if pattern[pi] != segment[si] {
+        return false;
+    }
+    segment_chars_match(pattern, segment, pi + 1, si + 1)
+}

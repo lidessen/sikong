@@ -339,3 +339,136 @@ where
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
+
+#[cfg(test)]
+mod path_allowed_tests {
+    use siko::path_allowed;
+    use std::path::Path;
+
+    #[test]
+    fn empty_patterns_deny_all() {
+        assert!(!path_allowed(&[], Path::new("anything.txt")));
+        assert!(!path_allowed(&[], Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn globstar_matches_any_depth() {
+        let patterns = &["**/*.rs".into()];
+        assert!(path_allowed(patterns, Path::new("main.rs")));
+        assert!(path_allowed(patterns, Path::new("src/main.rs")));
+        assert!(path_allowed(patterns, Path::new("src/task_run/engine.rs")));
+        assert!(path_allowed(patterns, Path::new("a/b/c/d/e/lib.rs")));
+        assert!(!path_allowed(patterns, Path::new("main.ts")));
+        assert!(!path_allowed(patterns, Path::new("readme.md")));
+    }
+
+    #[test]
+    fn globstar_prefix_matches_under_directory() {
+        let patterns = &["src/**/*".into()];
+        assert!(path_allowed(patterns, Path::new("src/main.rs")));
+        assert!(path_allowed(patterns, Path::new("src/task_run/mod.rs")));
+        assert!(path_allowed(patterns, Path::new("src/deep/nested/file.rs")));
+        assert!(path_allowed(patterns, Path::new("src/lib.rs")));
+        assert!(!path_allowed(patterns, Path::new("lib.rs")));
+        assert!(!path_allowed(patterns, Path::new("tests/test.rs")));
+    }
+
+    #[test]
+    fn multiple_patterns_any_match() {
+        let patterns = &["src/**/*.rs".into(), "design/**/*.md".into()];
+        assert!(path_allowed(patterns, Path::new("src/cli.rs")));
+        assert!(path_allowed(patterns, Path::new("design/README.md")));
+        assert!(!path_allowed(patterns, Path::new("readme.md")));
+        assert!(!path_allowed(patterns, Path::new("design/plan.txt")));
+        assert!(!path_allowed(patterns, Path::new("tests/test.rs")));
+    }
+
+    #[test]
+    fn globstar_alone_matches_everything() {
+        let patterns = &["**".into(), "**/*".into()];
+        assert!(path_allowed(patterns, Path::new("anything")));
+        assert!(path_allowed(patterns, Path::new("nested/path/file.ext")));
+    }
+
+    #[test]
+    fn globstar_matches_zero_segments() {
+        let patterns = &["a/**/b".into()];
+        assert!(path_allowed(patterns, Path::new("a/b")));
+        assert!(path_allowed(patterns, Path::new("a/x/b")));
+        assert!(path_allowed(patterns, Path::new("a/x/y/z/b")));
+        assert!(!path_allowed(patterns, Path::new("a/c")));
+    }
+
+    #[test]
+    fn single_star_wildcard_in_segment() {
+        let patterns = &["*.rs".into()];
+        assert!(path_allowed(patterns, Path::new("main.rs")));
+        assert!(path_allowed(patterns, Path::new("lib.rs")));
+        assert!(!path_allowed(patterns, Path::new("main.rs.bak")));
+        assert!(!path_allowed(patterns, Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn single_star_matches_partial_name() {
+        let patterns = &["test_*.txt".into()];
+        assert!(path_allowed(patterns, Path::new("test_foo.txt")));
+        assert!(path_allowed(patterns, Path::new("test_.txt")));
+        assert!(!path_allowed(patterns, Path::new("test.txt")));
+        assert!(!path_allowed(patterns, Path::new("atest_foo.txt")));
+    }
+
+    #[test]
+    fn question_mark_matches_single_character() {
+        let patterns = &["?.rs".into()];
+        assert!(path_allowed(patterns, Path::new("a.rs")));
+        assert!(path_allowed(patterns, Path::new("b.rs")));
+        assert!(!path_allowed(patterns, Path::new("ab.rs")));
+        assert!(!path_allowed(patterns, Path::new(".rs")));
+    }
+
+    #[test]
+    fn question_mark_and_star_combined() {
+        let patterns = &["src/??_*.rs".into()];
+        assert!(path_allowed(patterns, Path::new("src/cl_main.rs")));
+        assert!(path_allowed(patterns, Path::new("src/te_foo.rs")));
+        assert!(!path_allowed(patterns, Path::new("src/m.rs")));
+    }
+
+    #[test]
+    fn globstar_prefix_with_extension() {
+        let patterns = &["packages/agent-host/src/**/*.ts".into()];
+        assert!(path_allowed(patterns, Path::new("packages/agent-host/src/index.ts")));
+        assert!(path_allowed(patterns, Path::new("packages/agent-host/src/runtime-host.ts")));
+        assert!(path_allowed(
+            patterns,
+            Path::new("packages/agent-host/src/deep/nested/util.ts")
+        ));
+        assert!(!path_allowed(patterns, Path::new("packages/agent-host/src/index.js")));
+        assert!(!path_allowed(patterns, Path::new("packages/agent-host/README.md")));
+    }
+
+    #[test]
+    fn path_with_leading_dot_prefix_is_handled() {
+        let patterns = &[".claude/**".into()];
+        assert!(path_allowed(patterns, Path::new(".claude/config.json")));
+        assert!(path_allowed(patterns, Path::new(".claude/settings.json")));
+        assert!(!path_allowed(patterns, Path::new("claude/config.json")));
+    }
+
+    #[test]
+    fn exact_pattern_matches_single_file() {
+        let patterns = &["Cargo.toml".into()];
+        assert!(path_allowed(patterns, Path::new("Cargo.toml")));
+        assert!(!path_allowed(patterns, Path::new("src/Cargo.toml")));
+        assert!(!path_allowed(patterns, Path::new("Cargo.lock")));
+    }
+
+    #[test]
+    fn globstar_at_start_matches_any_prefix() {
+        let patterns = &["**/Cargo.toml".into()];
+        assert!(path_allowed(patterns, Path::new("Cargo.toml")));
+        assert!(path_allowed(patterns, Path::new("src/Cargo.toml")));
+        assert!(path_allowed(patterns, Path::new("crates/foo/Cargo.toml")));
+        assert!(!path_allowed(patterns, Path::new("Cargo.lock")));
+    }
+}

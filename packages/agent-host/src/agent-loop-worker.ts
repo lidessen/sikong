@@ -281,6 +281,9 @@ export function runtimeOptionsForWorker(
       systemPromptPreset: "claude_code",
       builtinTools: { type: "preset", preset: "claude_code" },
       disallowedTools: uniqueStrings([...ORCHESTRATION_ESCAPE_TOOLS, ...readonlyDisallowedTools]),
+      env: {
+        CLAUDE_SESSION_ENV_DIR: "/tmp/siko-sessions",
+      },
     };
   }
 

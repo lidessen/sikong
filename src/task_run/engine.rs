@@ -1250,8 +1250,7 @@ fn scope_allowed_by_parent(child_scope: &str, parent_scopes: &[String]) -> bool 
 fn parent_scope_allows_child(parent_scope: &str, child_scope: &str) -> bool {
     parent_scope == "**/*"
         || parent_scope == child_scope
-        || scope_prefix(parent_scope)
-            .is_some_and(|prefix| child_scope == prefix || child_scope.starts_with(&prefix))
+        || crate::workspace::path_allowed(&[parent_scope.to_string()], std::path::Path::new(child_scope))
 }
 
 fn scope_prefix(scope: &str) -> Option<String> {
@@ -1421,5 +1420,85 @@ mod tests {
         assert!(glob_matches_path("src/**/*.rs", "src/task_run/types.rs"));
         assert!(!glob_matches_path("src/**/*.rs", "src/lib.js"));
         assert!(!glob_matches_path("src/**/*.rs", "lib/foo.rs"));
+    }
+
+    #[test]
+    fn scope_prefix_returns_none_for_no_glob_marker() {
+        assert_eq!(scope_prefix("no-glob"), None);
+        assert_eq!(scope_prefix(""), None);
+    }
+
+    #[test]
+    fn scope_prefix_returns_none_for_glob_only() {
+        assert_eq!(scope_prefix("**/*"), None);
+        assert_eq!(scope_prefix("*.rs"), None);
+    }
+
+    #[test]
+    fn scope_prefix_extracts_directory_prefix() {
+        assert_eq!(scope_prefix("src/**/*"), Some("src/".to_string()));
+        assert_eq!(scope_prefix("src/**/*.rs"), Some("src/".to_string()));
+        assert_eq!(scope_prefix("packages/**/*.ts"), Some("packages/".to_string()));
+    }
+
+    #[test]
+    fn scope_prefix_single_star_glob() {
+        assert_eq!(scope_prefix("src/*"), Some("src/".to_string()));
+        assert_eq!(scope_prefix("design/*.md"), Some("design/".to_string()));
+    }
+
+    #[test]
+    fn parent_scope_allows_doublestar_wildcard() {
+        assert!(parent_scope_allows_child("**/*", "anything"));
+        assert!(parent_scope_allows_child("**/*", ""));
+        assert!(parent_scope_allows_child("**/*", "src/main.rs"));
+    }
+
+    #[test]
+    fn parent_scope_allows_exact_match() {
+        assert!(parent_scope_allows_child("src/main.rs", "src/main.rs"));
+        assert!(parent_scope_allows_child("AGENTS.md", "AGENTS.md"));
+    }
+
+    #[test]
+    fn parent_scope_allows_narrower_directory_child() {
+        // Parent allows everything under src/, child narrows to src/task_run/
+        assert!(parent_scope_allows_child("src/**/*", "src/task_run/engine.rs"));
+        // Parent allows everything under packages/, child narrows to packages/agent-host/
+        assert!(parent_scope_allows_child("packages/**/*.ts", "packages/agent-host/src/protocol.ts"));
+    }
+
+    #[test]
+    fn parent_scope_rejects_outside_directory() {
+        assert!(!parent_scope_allows_child("src/**/*", "lib/**"));
+        assert!(!parent_scope_allows_child("src/**/*", "tests/"));
+        assert!(!parent_scope_allows_child("design/**/*.md", "src/**"));
+    }
+
+    #[test]
+    fn parent_scope_rejects_unrelated_exact_path() {
+        assert!(!parent_scope_allows_child("src/main.rs", "src/lib.rs"));
+    }
+
+    #[test]
+    fn scope_allowed_by_parent_matches_any_parent() {
+        let parents = vec!["src/**".to_string(), "design/**".to_string()];
+        assert!(scope_allowed_by_parent("src/task_run/**", &parents));
+        assert!(scope_allowed_by_parent("design/README.md", &parents));
+        assert!(!scope_allowed_by_parent("tests/foo.rs", &parents));
+    }
+
+    #[test]
+    fn scope_allowed_by_parent_empty_parents_rejects_all() {
+        let parents: Vec<String> = Vec::new();
+        assert!(!scope_allowed_by_parent("src/main.rs", &parents));
+    }
+
+    #[test]
+    fn scope_allowed_by_parent_single_parent() {
+        let parents = vec!["src/**/*.rs".to_string()];
+        assert!(scope_allowed_by_parent("src/main.rs", &parents));
+        assert!(scope_allowed_by_parent("src/task_run/types.rs", &parents));
+        assert!(!scope_allowed_by_parent("src/main.js", &parents));
     }
 }
