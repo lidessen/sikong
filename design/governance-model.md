@@ -220,6 +220,32 @@ This distinction should guide implementation:
 - do not collapse engine operations when their scheduling and terminal
   contracts differ.
 
+### Commit Role
+
+`Commit` applies a verified artifact to the memo table and marks the node
+`Committed`. It is not a governance decision layer:
+
+- the `Verify` operation already decided acceptance;
+- `Commit` is engine-side durable application, not a new authority;
+- `NodeOperation::governance_layer()` returns `None` for `Commit`,
+  confirming it sits outside the four governance layers.
+
+This means `Commit` must not introduce new checks, gates, or routing. If a
+post-verification concern exists, it should be a `Verify` gate or an
+Arch-level policy, not a `Commit` responsibility.
+
+### Specify Routing Handoff
+
+`Specify` belongs to the `Plan` governance layer because its job is to assess
+scope and route: it submits a size class (`tiny`/`small`/`medium`/`large`/`xlarge`)
+and a refined intent. The engine then decides whether the next operation is
+`Execute` (for atomic sizes) or `Plan` (for large/xlarge).
+
+This means `Specify` is governance-Plan even when the engine routes directly
+to `Execute`. The routing authority stays with `Plan`; the execution authority
+is only invoked when the engine issues an `Execute` operation. Readers should
+not conflate "`Specify` is governance-Plan" with "`Specify` always plans."
+
 ## Authority Matrix
 
 | Layer   | May decide                                      | Must not decide                                | Returns upward                       |
@@ -228,6 +254,10 @@ This distinction should guide implementation:
 | Plan    | size, route, group mode, child scopes           | implementation, verification, protocol changes | planned children or atomic next work |
 | Execute | local artifact, local patch, parent synthesis   | scope widening, Arch changes, final acceptance | artifact, evidence, boundary issue   |
 | Verify  | accept/reject, hard gate result, rework request | implementation or new target definition        | verdict, gate evidence               |
+| Commit  | durable application of accepted artifact        | new checks, gates, or routing                  | committed node (engine-side only)    |
+
+`Commit` is included in the matrix for completeness but is engine-side, not a
+governance layer. See [Commit Role](#commit-role) above.
 
 ## Finite Decomposition
 
