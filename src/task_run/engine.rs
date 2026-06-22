@@ -729,7 +729,7 @@ where
         // execution-quality failure: skip Specify, route directly back to Execute
         self.record(
             node_id,
-            NodeOperation::Specify,
+            NodeOperation::Execute,
             format!("retrying execute after {failure_class:?}"),
         );
         self.node_mut(node_id)?.candidate = None;
