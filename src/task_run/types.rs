@@ -92,6 +92,20 @@ impl fmt::Display for GovernanceLayer {
     }
 }
 
+impl fmt::Display for VerificationVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Accept => f.write_str("Accept"),
+            Self::Reject { failure_class, reason } => {
+                write!(f, "Reject({}): {}", failure_class, reason)
+            }
+            Self::Uncertain { missing_info, reason } => {
+                write!(f, "Uncertain(missing: {}): {}", missing_info, reason)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum GovernanceGate {
     #[serde(rename = "G-ARCH-ESCAPE")]
@@ -435,5 +449,22 @@ mod tests {
         // ProblemKey
         assert_eq!(format!("{}", ProblemKey("hello".to_string())), "hello");
         assert_eq!(format!("{}", ProblemKey("task-run-split-eval".to_string())), "task-run-split-eval");
+
+        // VerificationVerdict
+        assert_eq!(format!("{}", VerificationVerdict::Accept), "Accept");
+        assert_eq!(
+            format!("{}", VerificationVerdict::Reject {
+                failure_class: FailureClass::BadOutput,
+                reason: "wrong format".to_string(),
+            }),
+            "Reject(bad_output): wrong format"
+        );
+        assert_eq!(
+            format!("{}", VerificationVerdict::Uncertain {
+                missing_info: "schema version".to_string(),
+                reason: "need more data".to_string(),
+            }),
+            "Uncertain(missing: schema version): need more data"
+        );
     }
 }

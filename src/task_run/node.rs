@@ -48,6 +48,12 @@ impl ScopeAssessment {
     }
 }
 
+impl fmt::Display for ScopeAssessment {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[{}] {} — {}", self.size, self.next, self.reason)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodePlan {
     Execute,
@@ -142,6 +148,18 @@ pub enum ArtifactContentKind {
     Yaml,
     Markdown,
     Patch,
+}
+
+impl fmt::Display for ArtifactContentKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Text => "text",
+            Self::Json => "json",
+            Self::Yaml => "yaml",
+            Self::Markdown => "markdown",
+            Self::Patch => "patch",
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,5 +359,23 @@ mod tests {
     fn plan_group_mode_display_is_readable() {
         assert_eq!(format!("{}", PlanGroupMode::Stage), "stage");
         assert_eq!(format!("{}", PlanGroupMode::Parallel), "parallel");
+    }
+
+    #[test]
+    fn scope_assessment_display_includes_size_next_and_reason() {
+        let sa = ScopeAssessment::new("Add tests", WorkSize::Small, "Improve coverage");
+        let display = format!("{}", sa);
+        assert!(display.contains("small"), "expected small in '{}'", display);
+        assert!(display.contains("Add tests"), "expected 'Add tests' in '{}'", display);
+        assert!(display.contains("Improve coverage"), "expected 'Improve coverage' in '{}'", display);
+    }
+
+    #[test]
+    fn artifact_content_kind_display_is_readable() {
+        assert_eq!(format!("{}", ArtifactContentKind::Text), "text");
+        assert_eq!(format!("{}", ArtifactContentKind::Json), "json");
+        assert_eq!(format!("{}", ArtifactContentKind::Yaml), "yaml");
+        assert_eq!(format!("{}", ArtifactContentKind::Markdown), "markdown");
+        assert_eq!(format!("{}", ArtifactContentKind::Patch), "patch");
     }
 }
