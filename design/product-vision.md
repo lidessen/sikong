@@ -91,7 +91,45 @@ catches mistakes before they become durable state.
 
 ---
 
-## 2. Strategic Territory
+## 2½. 人民史观 — People's History View
+
+The project operates on a philosophical conviction: **engineering achievements
+built by many ordinary agents working together within a sound architecture will
+far surpass what a single super-agent can accomplish alone.**
+
+This is not a metaphor. It is a structural claim about how reliable
+intelligence scales:
+
+- One super-agent with 1M context and every tool is a single point of failure.
+  Its output is limited by its context window, its attention span, and the
+  reliability of a single model call. A mistake propagates everywhere before it
+  can be caught.
+
+- Many ordinary agents, each with a bounded task, a focused context projection,
+  typed completion contracts, and independent verification gates, produce
+  results that are:
+  - **More reliable** — each output passes verification before becoming durable.
+    A single agent's hallucination is caught by the next agent's verification
+    gate.
+  - **More auditable** — each step produces retrievable evidence. The path from
+    problem to solution is replayable.
+  - **More composable** — verified artifacts from independent agents combine
+    without cascading errors.
+  - **More scalable** — adding more agents means adding more parallel evidence
+    surfaces, not stretching a single context window.
+
+The recursive engine's divide-and-conquer is the mechanism of this philosophy.
+Each `Specify`/`Execute`/`Verify` cycle is one ordinary agent doing one bounded
+job. The system's strength comes from the **architecture of coordination** —
+the governance model, the terminal tools, the verification gates, the memo
+table — not from any individual agent's capability.
+
+Sikong is not a vehicle for a single powerful agent. It is a **society of
+ordinary agents**, coordinated by a deterministic kernel, producing results
+that no single agent, however powerful, could produce alone.
+
+This is why the engine is the product, not the model. The model is replaceable.
+The architecture of reliable coordination is durable.
 
 Sikong operates at the intersection of three territories that no existing tool
 owns together:
