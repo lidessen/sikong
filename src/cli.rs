@@ -2814,64 +2814,65 @@ fn init_tracing() {
 }
 
 fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::{self, BufRead, Write};
+    use dialoguer::{Input, Select, theme::ColorfulTheme};
+    use std::path::PathBuf;
 
+    let theme = ColorfulTheme::default();
     let config_dir = std::env::var("HOME")
         .map(PathBuf::from)
         .map(|home| home.join(".sikong"))
         .unwrap_or_else(|_| PathBuf::from(".sikong"));
     let config_path = config_dir.join("config.yaml");
 
-    println!("╔══════════════════════════════════════════════════╗");
-    println!("║         Sikong Setup                             ║");
-    println!("╚══════════════════════════════════════════════════╝");
+    println!("╔══════════════════════════════════════════════╗");
+    println!("║         Sikong Setup                         ║");
+    println!("╚══════════════════════════════════════════════╝");
     println!();
 
-    // Step 1: Detect available API keys
-    let _deepseek_key = std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty());
-    let _kimi_key = std::env::var("KIMI_CODE_API_KEY").ok().filter(|k| !k.is_empty());
-    let _anthropic_key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty());
-    let _openai_key = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty());
+    // Auto-detect available tools
+    let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty()).is_some();
+    let has_kimi_key = std::env::var("KIMI_CODE_API_KEY").ok().filter(|k| !k.is_empty()).is_some();
+    let has_claude_code = std::process::Command::new("which").arg("claude").output()
+        .map(|o| o.status.success()).unwrap_or(false);
+    let has_codex = std::process::Command::new("which").arg("codex").output()
+        .map(|o| o.status.success()).unwrap_or(false);
 
-    println!("🔍 Detecting API keys in environment...");
-    for (name, found) in [
-        ("DEEPSEEK_API_KEY", std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
-        ("KIMI_CODE_API_KEY", std::env::var("KIMI_CODE_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
-        ("ANTHROPIC_API_KEY", std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
-        ("OPENAI_API_KEY", std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
-    ] {
-        println!("   {} {}", name, if found { "✅ found" } else { "⛔ not set" });
+    println!("🔍 Auto-detection:");
+    println!("   DEEPSEEK_API_KEY       {}", if has_deepseek_key { "✅ found" } else { "⛔ not set" });
+    println!("   KIMI_CODE_API_KEY      {}", if has_kimi_key { "✅ found" } else { "⛔ not set" });
+    println!("   Claude Code CLI        {}", if has_claude_code { "✅ detected" } else { "⛔ not found" });
+    println!("   Codex CLI              {}", if has_codex { "✅ detected" } else { "⛔ not found" });
+    println!();
+
+    if has_claude_code {
+        println!("   ℹ️  Claude Code detected. Will configure agent-loop worker automatically.");
     }
+    if has_codex {
+        println!("   ℹ️  Codex detected. Will configure agent-loop worker automatically.");
+    }
+    println!();
 
-    // Step 2: Show available provider + backend combos
-    println!();
-    println!("📦 Available provider + backend combinations:");
-    println!();
-    let combos: Vec<(&str, &str, &str, &str)> = vec![
-        ("1", "DeepSeek v4 Flash", "ai-sdk", "Fast, cost-effective. Default runtime."),
-        ("2", "DeepSeek v4 Flash", "claude-code", "DeepSeek model via Claude Code runtime."),
-        ("3", "Kimi", "claude-code", "Kimi provider via Claude Code runtime."),
+    // Provider selection
+    let providers = vec![
+        "DeepSeek v4 Flash",
+        "DeepSeek v4 Flash + Claude Code runtime",
+        "Kimi (Claude Code runtime only)",
     ];
-    for (key, provider, backend, note) in &combos {
-        println!("   {}. {} + {} — {}", key, provider, backend, note);
-    }
+    let default_idx = if has_deepseek_key { 0usize } else if has_kimi_key { 2 } else { 0 };
+    let provider_idx = Select::with_theme(&theme)
+        .with_prompt("Select provider + backend")
+        .default(default_idx)
+        .items(&providers)
+        .interact()?;
 
-    // Step 3: Let user pick
-    println!();
-    print!("👉 Select combination (default 1): ");
-    io::stdout().flush()?;
-    let mut choice = String::new();
-    io::stdin().lock().read_line(&mut choice)?;
-    let choice = choice.trim();
-
-    let (provider, backend) = match choice {
-        "2" => ("deepseek", "claude-code"),
-        "3" => ("kimi", "claude-code"),
-        _ => ("deepseek", "ai-sdk"),
+    let (provider, backend, worker_type) = match provider_idx {
+        0 => ("deepseek", "ai-sdk", "agent-loop"),
+        1 => ("deepseek", "claude-code", "agent-loop"),
+        2 => ("kimi", "claude-code", "agent-loop"),
+        _ => ("deepseek", "ai-sdk", "agent-loop"),
     };
 
-    // Step 4: Prompt for API key if missing
-    println!();
+    // API key prompt if missing
     let key_var = match provider {
         "deepseek" => "DEEPSEEK_API_KEY",
         "kimi" => "KIMI_CODE_API_KEY",
@@ -2880,17 +2881,18 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     let has_key = std::env::var(key_var).ok().filter(|k| !k.is_empty()).is_some();
 
     if !has_key {
+        println!();
         println!("🔑 {} is not set.", key_var);
-        print!("   Enter your API key (or press Enter to skip): ");
-        io::stdout().flush()?;
-        let mut api_key = String::new();
-        io::stdin().lock().read_line(&mut api_key)?;
-        let api_key = api_key.trim().to_string();
+        let api_key: String = Input::with_theme(&theme)
+            .with_prompt("Enter your API key (or leave empty to skip)")
+            .allow_empty(true)
+            .interact_text()?;
+        let masked = if api_key.len() > 4 {
+            format!("{}...", &api_key[..4])
+        } else {
+            String::new()
+        };
         if !api_key.is_empty() {
-            println!();
-            println!("   ℹ️  Add this to your shell profile (~/.zshrc, ~/.bashrc):");
-            println!("      export {}={}", key_var, api_key);
-            // Write to .env file in config dir
             std::fs::create_dir_all(&config_dir)?;
             let env_path = config_dir.join(".env");
             let mut env_content = String::new();
@@ -2899,14 +2901,19 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
             }
             if !env_content.contains(key_var) {
                 use std::fmt::Write;
-                writeln!(&mut env_content, "export {}={}", key_var, api_key)?;
+                writeln!(&mut env_content, "{}={}", key_var, api_key)?;
                 std::fs::write(&env_path, env_content)?;
                 println!("   ✅ Saved to {}", env_path.display());
             }
+            println!("   ℹ️  Also add this to your shell profile (~/.zshrc):");
+            println!("      export {}={}", key_var, masked);
         }
     }
 
-    // Step 5: Write config
+    // Auto-configure agent-loop if claude or codex is available
+    let use_real_agent = has_claude_code || has_codex || worker_type == "agent-loop";
+
+    // Write config
     std::fs::create_dir_all(&config_dir)?;
     let config_content = format!(
         r#"version: 1
@@ -2915,34 +2922,40 @@ backend: {}
 assistant:
   max_parallel_tasks: 2
 worker:
-  # inherits from global defaults
+{}
 "#,
-        provider, backend
+        provider,
+        backend,
+        if use_real_agent {
+            format!("  worker_type: agent-loop")
+        } else {
+            String::new()
+        }
     );
     std::fs::write(&config_path, config_content)?;
+
     println!();
     println!("✅ Config written to {}", config_path.display());
     println!();
     println!("📋 Summary:");
-    println!("   Global provider: {}", provider);
-    println!("   Global backend:  {}", backend);
-    println!("   Assistant:       inherits global (override per-component if needed)");
-    println!("   Worker:          inherits global (override per-component if needed)");
-    println!("   Config:          {}", config_path.display());
+    println!("   Provider:   {}", provider);
+    println!("   Backend:    {}", backend);
+    println!("   Worker:     {}", if use_real_agent { "agent-loop (real agents)" } else { "mock (default)" });
+    println!();
+    println!("🚀 Quick start:");
+    println!("   siko setup                 # Re-run this setup");
+    println!("   siko run \"analyze this\"     # Run a task");
+    println!("   siko assistant --acp       # ACP server for external tools");
+    println!("   siko dogfood run           # Self-iteration loop");
+
     if !has_key {
-        println!("   API key:         {} (set in env or ~/.sikong/.env)", key_var);
+        println!();
+        println!("⚠️  No API key configured. Set it in your environment:");
+        println!("   export {}=", key_var);
     }
-    println!();
-    println!("🚀 You can now use Sikong:");
-    println!("   siko assistant --acp");
-    println!("   siko dogfood run");
-    println!();
-    println!("💡 Set SIKONG_AGENT_HOST_WORKER=agent-loop to use real agents");
-    println!("   (currently defaults to mock for quick testing)");
 
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
