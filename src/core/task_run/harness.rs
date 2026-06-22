@@ -5,7 +5,7 @@ use crate::AgentToolSpec;
 use crate::core::agent_run::{
     AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRuntimeProfile,
 };
-use crate::base::workspace::WorkspaceProvider;
+use crate::common::workspace::WorkspaceProvider;
 
 use super::tools::{EngineTool, EngineTools};
 use super::{

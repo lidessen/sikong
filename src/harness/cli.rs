@@ -7,7 +7,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use crate::{
-    base::metrics::{MetricsCollector, MetricsFormatter},
+    common::metrics::{MetricsCollector, MetricsFormatter},
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
     AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
@@ -1050,7 +1050,7 @@ async fn run_task_run_split_eval_async(
             .map_err(|error| format!("task run failed for scenario {}: {error:?}", scenario.id))?;
 
         // Collect per-agent-run metrics
-        let mut metrics_collector = crate::base::metrics::MetricsCollector::new();
+        let mut metrics_collector = crate::common::metrics::MetricsCollector::new();
         for agent_run in &report.agent_runs {
             let operation = agent_run.operation.to_string();
             let duration_ms = agent_run.duration_ms;
@@ -1209,7 +1209,7 @@ async fn run_dogfood_run_async(
             .map_err(|error| format!("scenario {} failed: {error:?}", scenario.id))?;
 
         // Collect per-agent-run metrics
-        let mut metrics_collector = crate::base::metrics::MetricsCollector::new();
+        let mut metrics_collector = crate::common::metrics::MetricsCollector::new();
         for agent_run in &report.agent_runs {
             let operation = agent_run.operation.to_string();
             let duration_ms = agent_run.duration_ms;

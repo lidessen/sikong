@@ -145,8 +145,8 @@ impl PlanItemInput {
             intent,
             size,
             scope_assessment,
-            workspace: crate::base::workspace::WorkspaceRequirement {
-                provider: crate::base::workspace::WorkspaceProvider::Memory,
+            workspace: crate::common::workspace::WorkspaceRequirement {
+                provider: crate::common::workspace::WorkspaceProvider::Memory,
                 read_scope: self.read_scope.unwrap_or_default(),
                 write_scope: self.write_scope.unwrap_or_default(),
                 git: None,

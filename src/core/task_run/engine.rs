@@ -5,7 +5,7 @@ use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::core::agent_run::{AgentRunScheduler, CancellationToken};
-use crate::base::workspace::{
+use crate::common::workspace::{
     GitWorkspaceSurface, Workspace, WorkspaceChange, WorkspaceProvider, WorkspaceResource,
     WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceSurface,
 };
@@ -687,7 +687,7 @@ where
             let out_of_scope = change
                 .changed_paths
                 .iter()
-                .any(|path| !crate::base::workspace::path_allowed(&node.workspace.write_scope, std::path::Path::new(path.as_str())));
+                .any(|path| !crate::common::workspace::path_allowed(&node.workspace.write_scope, std::path::Path::new(path.as_str())));
             if out_of_scope {
                 return Ok(Some(VerificationVerdict::Reject {
                     failure_class: FailureClass::UnsafeSideEffect,
@@ -1309,7 +1309,7 @@ fn scope_allowed_by_parent(child_scope: &str, parent_scopes: &[String]) -> bool 
 fn parent_scope_allows_child(parent_scope: &str, child_scope: &str) -> bool {
     parent_scope == "**/*"
         || parent_scope == child_scope
-        || crate::base::workspace::path_allowed(&[parent_scope.to_string()], std::path::Path::new(child_scope))
+        || crate::common::workspace::path_allowed(&[parent_scope.to_string()], std::path::Path::new(child_scope))
 }
 
 fn check_cancelled(cancellation: &CancellationToken) -> Result<(), EngineError> {

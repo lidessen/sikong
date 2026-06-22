@@ -1,10 +1,10 @@
-pub mod base;
+pub mod common;
 pub mod core;
 pub mod harness;
 
-pub use base::config::*;
-pub use base::metrics::*;
-pub use base::workspace::*;
+pub use common::config::*;
+pub use common::metrics::*;
+pub use common::workspace::*;
 
 pub use core::agent_run::{
     AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRunScheduler,

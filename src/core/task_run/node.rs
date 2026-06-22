@@ -1,4 +1,4 @@
-use crate::base::workspace::{WorkspaceChange, WorkspaceRequirement};
+use crate::common::workspace::{WorkspaceChange, WorkspaceRequirement};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -175,7 +175,7 @@ pub struct Artifact {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::workspace::WorkspaceRequirement;
+    use crate::common::workspace::WorkspaceRequirement;
     use crate::CapabilityProfile;
     use crate::Budget;
 
