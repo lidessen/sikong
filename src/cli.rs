@@ -302,7 +302,8 @@ enum Command {
         #[command(subcommand)]
         command: EvalCommand,
     },
-    /// Run dogfood self-development tasks.
+    /// Run dogfood self-development tasks (internal).
+    #[command(hide = true)]
     Dogfood {
         #[command(subcommand)]
         command: DogfoodCommand,
