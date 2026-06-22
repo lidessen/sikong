@@ -116,3 +116,168 @@ pub struct Artifact {
     pub workspace_change: Option<WorkspaceChange>,
     pub children: Vec<ArtifactId>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::WorkspaceRequirement;
+    use crate::CapabilityProfile;
+    use crate::Budget;
+
+    #[test]
+    fn scope_assessment_new_sets_all_fields() {
+        let assessment = ScopeAssessment::new("Implement feature X", WorkSize::Medium, "Requires new module");
+        assert_eq!(assessment.next, "Implement feature X");
+        assert_eq!(assessment.size, WorkSize::Medium);
+        assert_eq!(assessment.reason, "Requires new module");
+    }
+
+    #[test]
+    fn scope_assessment_new_with_tiny_size() {
+        let assessment = ScopeAssessment::new("Fix typo", WorkSize::Tiny, "One line change");
+        assert_eq!(assessment.size, WorkSize::Tiny);
+    }
+
+    #[test]
+    fn scope_assessment_new_with_large_size() {
+        let assessment = ScopeAssessment::new("Big refactor", WorkSize::Large, "Multiple modules affected");
+        assert_eq!(assessment.size, WorkSize::Large);
+    }
+
+    #[test]
+    fn scope_assessment_new_with_xlarge_size() {
+        let assessment = ScopeAssessment::new("Architecture change", WorkSize::XLarge, "Core redesign");
+        assert_eq!(assessment.size, WorkSize::XLarge);
+    }
+
+    #[test]
+    fn work_size_default_is_small() {
+        assert_eq!(WorkSize::default(), WorkSize::Small);
+    }
+
+    #[test]
+    fn node_template_memory_leaf_creates_execute_plan() {
+        let template = NodeTemplate::memory_leaf("test-key", "do something");
+        assert_eq!(template.key, ProblemKey("test-key".to_string()));
+        assert_eq!(template.intent, "do something");
+        assert_eq!(template.size, WorkSize::Small);
+        assert_eq!(template.plan, NodePlan::Execute);
+    }
+
+    #[test]
+    fn node_template_memory_leaf_uses_memory_workspace() {
+        let template = NodeTemplate::memory_leaf("key", "intent");
+        assert_eq!(template.workspace, WorkspaceRequirement::memory());
+    }
+
+    #[test]
+    fn node_template_memory_leaf_uses_read_only_capabilities() {
+        let template = NodeTemplate::memory_leaf("key", "intent");
+        assert_eq!(template.capabilities, CapabilityProfile::read_only());
+    }
+
+    #[test]
+    fn node_template_memory_leaf_has_default_budget() {
+        let template = NodeTemplate::memory_leaf("key", "intent");
+        assert_eq!(template.budget, Budget::default());
+    }
+
+    #[test]
+    fn node_template_memory_leaf_scope_assessment_is_none() {
+        let template = NodeTemplate::memory_leaf("key", "intent");
+        assert!(template.scope_assessment.is_none());
+    }
+
+    #[test]
+    fn plan_group_mode_variants_are_distinct() {
+        assert_ne!(PlanGroupMode::Stage, PlanGroupMode::Parallel);
+    }
+
+    #[test]
+    fn node_plan_variants_are_distinct() {
+        assert_ne!(NodePlan::Execute, NodePlan::Split);
+        assert_ne!(NodePlan::Execute, NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![],
+        }));
+        assert_ne!(NodePlan::Split, NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Stage,
+            items: vec![],
+        }));
+    }
+
+    #[test]
+    fn plan_group_holds_items() {
+        let items = vec![
+            NodeTemplate::memory_leaf("a", "first"),
+            NodeTemplate::memory_leaf("b", "second"),
+        ];
+        let group = PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: items.clone(),
+        };
+        assert_eq!(group.mode, PlanGroupMode::Parallel);
+        assert_eq!(group.items.len(), 2);
+        assert_eq!(group.items[0].key, ProblemKey("a".to_string()));
+        assert_eq!(group.items[1].key, ProblemKey("b".to_string()));
+    }
+
+    #[test]
+    fn plan_group_stage_mode() {
+        let group = PlanGroup {
+            mode: PlanGroupMode::Stage,
+            items: vec![NodeTemplate::memory_leaf("first", "step 1")],
+        };
+        assert_eq!(group.mode, PlanGroupMode::Stage);
+    }
+
+    #[test]
+    fn scope_assessment_serde_roundtrip() {
+        let original = ScopeAssessment::new("test", WorkSize::Large, "because");
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: ScopeAssessment = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn work_size_serde_roundtrip() {
+        for size in [WorkSize::Tiny, WorkSize::Small, WorkSize::Medium, WorkSize::Large, WorkSize::XLarge] {
+            let json = serde_json::to_string(&size).unwrap();
+            let deserialized: WorkSize = serde_json::from_str(&json).unwrap();
+            assert_eq!(size, deserialized);
+        }
+    }
+
+    #[test]
+    fn plan_group_mode_serde_roundtrip() {
+        for mode in [PlanGroupMode::Stage, PlanGroupMode::Parallel] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let deserialized: PlanGroupMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(mode, deserialized);
+        }
+    }
+
+    #[test]
+    fn node_plan_serde_roundtrip() {
+        let plans = vec![
+            NodePlan::Execute,
+            NodePlan::Split,
+            NodePlan::Group(PlanGroup {
+                mode: PlanGroupMode::Parallel,
+                items: vec![NodeTemplate::memory_leaf("k", "v")],
+            }),
+        ];
+        for plan in plans {
+            let json = serde_json::to_string(&plan).unwrap();
+            let deserialized: NodePlan = serde_json::from_str(&json).unwrap();
+            assert_eq!(plan, deserialized);
+        }
+    }
+
+    #[test]
+    fn problem_key_newtype_wraps_string() {
+        let key = ProblemKey("hello".to_string());
+        assert_eq!(key.0, "hello");
+        assert_eq!(format!("{:?}", key), "ProblemKey(\"hello\")");
+    }
+}
