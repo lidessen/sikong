@@ -45,13 +45,13 @@ task: |
   check that the proposed improvement is bounded, actionable, and testable.
 
   == EXECUTION RULES ==
-  - Do NOT modify any engine code (src/task_run/engine.rs) or CLI code
-    (src/cli.rs). Only analysis and a one-bounded-improvement proposal.
-  - The combined output is a proposal, not an implementation. The proposal
-    should describe what to change and why, with enough detail that a
-    developer (or a future agent run) could implement it.
-  - Focus on analysis and evidence-gathering. Use the full read scope
-    to inspect the project.
+  - After Combine, select the SINGLE most impactful finding and implement
+    it: write the code change, run cargo build and cargo test, then
+    git add -A && git commit -m '...'.
+  - Do implement. Analysis without implementation is incomplete.
+  - Each child has a bounded scope — analyze one aspect independently.
+    Use the full read scope to inspect the project.
+  - The combined output is an implementation commit, not just a proposal.
 expectation: |
   The engine must demonstrate the full recursive divide-and-conquer cycle:
   1. Specify — assess scope as Large, triggering Plan

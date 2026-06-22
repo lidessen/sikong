@@ -1,0 +1,5 @@
+{"round":1,"passed":true,"status":"Pruned","agent_runs":32,"duration_ms":357236,"scenario":"autonomous-iteration","note":"2-level deep decomposition (node 5 had children). Passed judge but pruned by engine — children rejected but judge accepted partial result. No code change produced."}
+{"round":2,"passed":true,"status":"Committed","agent_runs":16,"duration_ms":289774,"note":"Full parallel decomposition. 4 child nodes analyzed independently. Combine synthesized. Engine committed artifact. No git commit (analysis-only scenario by design)."}
+{"round":3,"passed":"unknown","status":"ended","note":"2-level deep decomp started but no final result captured"}
+{"round":4,"passed":true,"status":"Committed","agent_runs":16,"duration_ms":284894,"note":"Full parallel decomposition. 4 children analyzed independently. Combine+Broad verification. Engine committed."}
+{"round":5,"passed":"likely","note":"2-level deep decomposition started. Output cut off. All tests green."}
