@@ -1378,4 +1378,82 @@ mod tests {
         assert!(scope_allowed_by_parent("src/task_run/types.rs", &parents));
         assert!(!scope_allowed_by_parent("src/main.js", &parents));
     }
+    use crate::task_run::node::PlanGroup;
+
+    // --- plan_from_scope_assessment tests ---
+
+    #[test]
+    fn plan_from_assessment_tiny_executes() {
+        let assessment = ScopeAssessment::new("do it", WorkSize::Tiny, "small task");
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute);
+        assert_eq!(plan, NodePlan::Execute);
+    }
+
+    #[test]
+    fn plan_from_assessment_small_executes() {
+        let assessment = ScopeAssessment::new("do it", WorkSize::Small, "small task");
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute);
+        assert_eq!(plan, NodePlan::Execute);
+    }
+
+    #[test]
+    fn plan_from_assessment_medium_executes() {
+        let assessment = ScopeAssessment::new("do it", WorkSize::Medium, "medium task");
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute);
+        assert_eq!(plan, NodePlan::Execute);
+    }
+
+    #[test]
+    fn plan_from_assessment_large_with_execute_plan_becomes_needs_planning() {
+        let assessment = ScopeAssessment::new("big task", WorkSize::Large, "needs decomposition");
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute);
+        assert_eq!(plan, NodePlan::NeedsPlanning);
+    }
+
+    #[test]
+    fn plan_from_assessment_large_with_needs_planning_becomes_needs_planning() {
+        let assessment = ScopeAssessment::new("big task", WorkSize::Large, "needs decomposition");
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning);
+        assert_eq!(plan, NodePlan::NeedsPlanning);
+    }
+
+    #[test]
+    fn plan_from_assessment_large_preserves_existing_group_plan() {
+        let group = NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![NodeTemplate::memory_leaf("child", "work")],
+        });
+        let assessment = ScopeAssessment::new("big task", WorkSize::Large, "already planned");
+        let plan = plan_from_scope_assessment(&assessment, &group);
+        assert_eq!(plan, group);
+    }
+
+    #[test]
+    fn plan_from_assessment_xlarge_with_execute_plan_becomes_needs_planning() {
+        let assessment = ScopeAssessment::new("huge task", WorkSize::XLarge, "needs planning");
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute);
+        assert_eq!(plan, NodePlan::NeedsPlanning);
+    }
+
+    #[test]
+    fn plan_from_assessment_xlarge_preserves_existing_group_plan() {
+        let group = NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Stage,
+            items: vec![
+                NodeTemplate::memory_leaf("step1", "first"),
+                NodeTemplate::memory_leaf("step2", "second"),
+            ],
+        });
+        let assessment = ScopeAssessment::new("huge task", WorkSize::XLarge, "already staged");
+        let plan = plan_from_scope_assessment(&assessment, &group);
+        assert_eq!(plan, group);
+    }
+
+    #[test]
+    fn plan_from_assessment_tiny_ignores_needs_planning_current_plan() {
+        let assessment = ScopeAssessment::new("tiny fix", WorkSize::Tiny, "trivial");
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning);
+        assert_eq!(plan, NodePlan::Execute);
+    }
+
 }
