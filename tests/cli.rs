@@ -1,7 +1,7 @@
-/// CLI integration tests for the `siko` binary.
-///
-/// These tests invoke the compiled binary via `std::process::Command` and
-/// assert properties of its stdout/stderr output.
+//! CLI integration tests for the `siko` binary.
+//!
+//! These tests invoke the compiled binary via `std::process::Command` and
+//! assert properties of its stdout/stderr output.
 
 use std::process::Command;
 
@@ -10,7 +10,7 @@ fn run_siko(args: &[&str]) -> (String, String, i32) {
     let binary = std::env::current_exe()
         .ok()
         .map(|p| p.parent().unwrap().parent().unwrap().join("siko"))
-        .unwrap_or_else(|| path_buf_from_env_var());
+        .unwrap_or_else(path_buf_from_env_var);
 
     let output = Command::new(&binary)
         .args(args)
