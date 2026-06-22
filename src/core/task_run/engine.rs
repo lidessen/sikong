@@ -714,15 +714,15 @@ where
             || failure_class == FailureClass::MergeConflict
             || attempts >= max_attempts
         {
-            let status = if failure_class == FailureClass::BudgetExhausted {
-                NodeStatus::Rejected
+            let (status, recorded_class) = if attempts >= max_attempts {
+                (NodeStatus::Rejected, FailureClass::BudgetExhausted)
             } else {
-                NodeStatus::Pruned
+                (NodeStatus::Pruned, failure_class)
             };
             self.record(
                 node_id,
                 NodeOperation::Verify,
-                format!("rejected terminally: {failure_class:?}"),
+                format!("rejected terminally: {recorded_class:?}"),
             );
             self.node_mut(node_id)?.status = status;
             return Ok(None);

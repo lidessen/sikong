@@ -1,23 +1,21 @@
 id: autonomous-iteration
 max_steps: 64
 task: |
-  这是 Sikong 自我迭代的一轮。每一轮都是前一轮的延续——前一轮做了什么、学到了什么、还剩什么没做，都在 development-log 里。
+  这是 Sikong 自我迭代的一轮。当前目标是 M1: Developer Preview ——
+  让开发者能交给 siko 一个有界的开发任务，并且信任结果。
+
+  前一轮做了什么、学到了什么，在 development-log 里。
 
   你的工作：
-  1. 读 development-log/2026-06.md 和最近的 git log，
-     了解当前状态和上一轮做了什么
-  2. 决定这一轮做什么能让项目更好。不是"修一个 bug"，
-     是"在这一轮结束时，项目比开始的时候好了什么"
-  3. 做出来。改代码、加测试、删冗余、改文档——什么都行。
-  4. 验证。cargo build && cargo test。
-  5. 记下来。在 development-log 里追加这一轮做了什么、
-     学到了什么、下一轮可以考虑做什么。
+  1. 读 development-log 和 git log，了解当前状态
+  2. 读设计/哲学/product-vision.md 了解 M1 的具体要求
+  3. 选一件能让项目朝 M1 前进一步的事，做出来
+  4. 验证：cargo build && cargo test
+  5. 记到 development-log：做了什么、离 M1 还差什么
 
-  引擎会自己决定怎么拆、怎么合、怎么验。
-  你只需要告诉它：这一轮要往哪个方向走。
+  引擎会自己处理拆和合。你只需要定方向。
 expectation: |
-  一轮迭代完成：项目比开始时更好了。有代码变更或文档更新，
-  验证通过，提交了，记录了。
+  项目向 M1 前进了一步。代码变更或文档更新，验证通过，提交了。
 workspace:
   provider: current-file-system
   read_scope:

@@ -705,7 +705,7 @@ async fn verify_reject_retries_leaf_until_accept() {
 }
 
 #[tokio::test]
-async fn repeated_failure_prunes_after_budget() {
+async fn repeated_failure_rejected_after_budget() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         key: ProblemKey("fail".to_string()),
@@ -720,9 +720,20 @@ async fn repeated_failure_prunes_after_budget() {
 
     let report = engine.run(root).await.unwrap();
 
-    assert_eq!(report.status, NodeStatus::Pruned);
+    assert_eq!(report.status, NodeStatus::Rejected);
     assert!(report.artifact.is_none());
     assert_eq!(engine.node(root).unwrap().execution_attempts, 2);
+    assert_eq!(engine.node(root).unwrap().status, NodeStatus::Rejected);
+    assert!(
+        engine
+            .events()
+            .iter()
+            .any(|event| {
+                event.operation == NodeOperation::Verify
+                    && event.note.contains("BudgetExhausted")
+            }),
+        "budget-exhausted event should be recorded when budget is exceeded"
+    );
 }
 
 #[tokio::test]
