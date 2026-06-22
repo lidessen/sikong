@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sikong — Recursive Agent Engine</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem; line-height: 1.6; color: #1a1a2e; }
+    pre { background: #f5f5f5; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+    code { font-size: 0.9em; }
+    h1 { font-size: 2rem; margin-bottom: 0.3rem; }
+    .subtitle { color: #666; font-size: 1.1rem; margin-top: 0; }
+    .cmd { background: #1a1a2e; color: #00ff88; padding: 1rem 1.5rem; border-radius: 8px; font-family: monospace; font-size: 1rem; }
+    .features { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 2rem 0; }
+    .feature { background: #f8f9ff; padding: 1rem; border-radius: 8px; border: 1px solid #e0e3f0; }
+    .feature h3 { margin: 0 0 0.3rem; font-size: 1rem; }
+    .feature p { margin: 0; font-size: 0.9rem; color: #555; }
+    hr { border: none; border-top: 1px solid #eee; margin: 2rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Sikong</h1>
+  <p class="subtitle">Recursive agent engine — autonomous self-iterative development</p>
+
+  <div class="cmd">curl -fsSL https://sikong.dev/install.sh | sh</div>
+
+  <div class="features">
+    <div class="feature">
+      <h3>Self-iterating</h3>
+      <p>Analyzes, improves, and commits to its own codebase autonomously.</p>
+    </div>
+    <div class="feature">
+      <h3>Recursive engine</h3>
+      <p>Decomposes complex tasks into smaller sub-tasks with verification gates.</p>
+    </div>
+    <div class="feature">
+      <h3>Agent agnostic</h3>
+      <p>Works with DeepSeek, Kimi, or any OpenAI-compatible provider.</p>
+    </div>
+    <div class="feature">
+      <h3>Governance model</h3>
+      <p>Arch → Plan → Execute → Verify — typed boundaries, not prompts.</p>
+    </div>
+  </div>
+
+  <h2>Quick start</h2>
+  <pre><code>siko setup                    # Interactive configuration
+siko run "analyze this"       # Run a task through the assistant
+siko assistant --acp          # ACP server for external tool integration
+siko dogfood run              # Let Sikong improve itself</code></pre>
+
+  <hr>
+
+  <h2>Install</h2>
+  <pre><code># Via install script (recommended)
+curl -fsSL https://sikong.dev/install.sh | sh
+
+# Manual
+curl -fsSL https://sikong.dev/releases/siko-darwin-arm64.tar.gz | tar -xz
+install siko /usr/local/bin/
+install siko-agent-host /usr/local/bin/</code></pre>
+
+  <h2>Configure API keys</h2>
+  <pre><code>export DEEPSEEK_API_KEY=sk-...
+# or
+export OPENAI_API_KEY=sk-...</code></pre>
+
+  <hr>
+
+  <p style="color:#999;font-size:0.85rem;text-align:center;">
+    Sikong — <a href="https://github.com/sikong/sikong" style="color:#999;">GitHub</a>
+  </p>
+</body>
+</html>
