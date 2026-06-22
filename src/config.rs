@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct SikoConfig {
     pub version: u32,
     /// Global default provider (deepseek, kimi, etc.)
@@ -14,7 +14,7 @@ pub struct SikoConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct AssistantConfig {
     /// Override provider for assistant (inherits from global if not set)
     pub provider: Option<String>,
@@ -225,21 +225,6 @@ mod tests {
         let loaded = SikoConfig::load_from_path_and_env(&path).unwrap();
 
         assert_eq!(loaded.assistant.max_parallel_tasks, 3);
-    }
-
-    #[test]
-    fn rejects_debug_fields_in_user_config_yaml() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("config.yaml");
-        fs::write(
-            &path,
-            "version: 1\nagent_host:\n  command: /tmp/siko-agent-host\n",
-        )
-        .unwrap();
-
-        let error = SikoConfig::load_from_path_and_env(&path).unwrap_err();
-
-        assert!(error.to_string().contains("unknown field"));
     }
 
     #[test]

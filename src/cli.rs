@@ -168,6 +168,25 @@ fn run_cli(cli: Cli) -> i32 {
                 }
             },
         },
+        Some(Command::Run {
+            task,
+            wait_ms,
+            json,
+        }) => match run_assistant_prompt(
+            task,
+            wait_ms,
+            AssistantPromptWorkspace::CurrentGit,
+            false,
+            Vec::new(),
+            json,
+        ) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to run task");
+                eprintln!("failed to run task: {error}");
+                1
+            }
+        },
         Some(Command::Dogfood { command }) => match command {
             DogfoodCommand::List => {
                 for scenario in task_run_split_eval_scenarios() {
@@ -238,6 +257,21 @@ enum Command {
         /// Serve the Assistant Agent over ACP JSON-RPC stdio.
         #[arg(long)]
         acp: bool,
+    },
+    /// Run a task through the assistant. This is the primary user-facing command.
+    /// Use the assistant layer to understand requests, create tasks, and return results.
+    Run {
+        /// Task description. Example: "analyze this project", "fix the bug in src/main.rs"
+        #[arg(required = true, trailing_var_arg = true)]
+        task: Vec<String>,
+
+        /// Wait time in milliseconds for task completion (default 300000 = 5 min).
+        #[arg(long, default_value_t = 300_000)]
+        wait_ms: u64,
+
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
     },
     /// Run explicit live evaluation scenarios.
     Eval {

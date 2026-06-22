@@ -54,7 +54,7 @@ enabled = true   # language server tools; servers launch lazily when used
 # Rules are "Tool" or "Tool(specifier)"; e.g. Bash(go test:*), Edit(src/**).
 mode  = "ask"
 # deny = ["Bash(rm -rf*)", "Bash(git push*)"]   # hard-blocked in every mode
-allow = ["explore", "Bash(cd /Users/lidessen/workspaces/sikong && git status)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --cached --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && echo \"=== Untracked files ===\" && for f in $(git ls-files --others --exclude-standard); do echo \"--- $f ---\"; head -5 \"$f\"; echo; done)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- src/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- packages/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- design/ development-log/ evals/)"]
+allow = ["explore", "Bash(cd /Users/lidessen/workspaces/sikong && git status)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --cached --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && echo \"=== Untracked files ===\" && for f in $(git ls-files --others --exclude-standard); do echo \"--- $f ---\"; head -5 \"$f\"; echo; done)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- src/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- packages/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- design/ development-log/ evals/)", "Edit"]
 # ask = ["Edit(src/**)"]   # force a prompt even if otherwise allowed
 
 [sandbox]

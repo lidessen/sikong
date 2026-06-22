@@ -1,0 +1,14 @@
+id: project-analysis
+task: |
+  Analyze the current project directory and produce a concise report covering:
+  1. Project structure (language, build system, major modules)
+  2. Code quality observations (patterns, potential issues)
+  3. Three concrete improvement suggestions with file-level evidence
+  Do not modify any files.
+expectation: |
+  Produce a structured analysis report grounded in actual project files.
+  Must include specific file paths and code-level observations.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
