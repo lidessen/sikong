@@ -34,6 +34,20 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
 fn run_cli(cli: Cli) -> i32 {
     match cli.command {
         Some(Command::Assistant {
+            acp: false,
+            command:
+                Some(AssistantCommand::List {
+                    json,
+                }),
+        }) => match print_assistant_list(json) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to list assistant tasks");
+                eprintln!("failed to list assistant tasks: {error}");
+                1
+            }
+        },
+        Some(Command::Assistant {
             acp: true,
             command: None,
         }) => match run_assistant_acp() {
@@ -389,6 +403,12 @@ enum AssistantCommand {
         #[arg(long)]
         json: bool,
     },
+    /// List all persisted tasks, showing ID (first 12 chars), status, and first line.
+    List {
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -689,6 +709,27 @@ fn print_assistant_logs(
     println!("task {} {} {:?}", task.id, task.title, task.status);
     for event in &task.events {
         println!("{}", format_task_log(event));
+    }
+    Ok(())
+}
+
+fn print_assistant_list(
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let tasks = store.list_tasks();
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
+        println!();
+        return Ok(());
+    }
+
+    for task in &tasks {
+        let id_prefix: String = task.id.chars().take(12).collect();
+        let first_line = task.request.lines().next().unwrap_or("").to_string();
+        println!("{}  {:?}  {}", id_prefix, task.status, first_line);
     }
     Ok(())
 }
