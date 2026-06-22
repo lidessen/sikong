@@ -2853,43 +2853,55 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Provider selection
-    // Build available options based on what's actually detected
-    let mut options: Vec<(String, &str, &str)> = Vec::new();
-    let mut default_idx = 0usize;
-
-    if has_deepseek_key {
-        let idx = options.len();
-        options.push(("DeepSeek v4 Flash (ai-sdk)".to_string(), "deepseek", "ai-sdk"));
-        if default_idx == 0 && idx == 0 { default_idx = idx; }
+    // Step 1: Select provider (based on available API keys)
+    let mut provider_options: Vec<(&str, &str)> = Vec::new();
+    if has_deepseek_key { provider_options.push(("DeepSeek v4 Flash", "deepseek")); }
+    if has_kimi_key { provider_options.push(("Kimi", "kimi")); }
+    if provider_options.is_empty() {
+        provider_options.push(("No API key detected — use DeepSeek (add later)", "deepseek"));
     }
 
-    if has_deepseek_key && has_claude_code {
-        let idx = options.len();
-        options.push(("DeepSeek v4 Flash + Claude Code runtime".to_string(), "deepseek", "claude-code"));
-        if default_idx == 0 { default_idx = idx; }
-    }
-
-    if has_kimi_key && has_claude_code {
-        let idx = options.len();
-        options.push(("Kimi + Claude Code runtime".to_string(), "kimi", "claude-code"));
-        if default_idx == 0 { default_idx = idx; }
-    }
-
-    // Fallback: if nothing is detected, offer a generic option
-    if options.is_empty() {
-        options.push(("No API keys or tools detected — configure manually".to_string(), "deepseek", "ai-sdk"));
-    }
-
-    let labels: Vec<&str> = options.iter().map(|(l, _, _)| l.as_str()).collect();
+    let provider_labels: Vec<&str> = provider_options.iter().map(|(l, _)| *l).collect();
     let provider_idx = Select::with_theme(&theme)
-        .with_prompt("Select configuration")
-        .default(default_idx)
-        .items(&labels)
+        .with_prompt("Select LLM provider")
+        .default(0)
+        .items(&provider_labels)
         .interact()?;
+    let provider = provider_options[provider_idx].1;
 
-    let (_label, provider, backend) = &options[provider_idx];
-    let provider = *provider;
-    let backend = *backend;
+    // Step 2: Select backend (based on available runtimes)
+    let mut backend_options: Vec<(&str, &str)> = Vec::new();
+    backend_options.push(("ai-sdk (fast, cost-effective)", "ai-sdk"));
+    if has_claude_code {
+        backend_options.push(("Claude Code runtime (richer tool access)", "claude-code"));
+    }
+    if has_codex {
+        backend_options.push(("Codex runtime", "claude-code"));
+    }
+    // Kimi only supports claude-code backend
+    if provider == "kimi" && !has_claude_code && !has_codex {
+        backend_options = vec![("⚠️  Kimi requires Claude Code CLI — install with 'npm i -g @anthropic-ai/claude-code'", "none")];
+    }
+
+    let backend_labels: Vec<&str> = backend_options.iter().map(|(l, _)| *l).collect();
+    let backend_idx = Select::with_theme(&theme)
+        .with_prompt("Select execution backend")
+        .default(0)
+        .items(&backend_labels)
+        .interact()?;
+    let mut backend = backend_options[backend_idx].1;
+
+    // Validate: Kimi only works with claude-code
+    if provider == "kimi" && backend != "claude-code" {
+        println!();
+        println!("⚠️  Kimi only works with Claude Code runtime. Will use claude-code.");
+        backend = "claude-code";
+    }
+    if backend == "none" {
+        println!();
+        println!("⚠️  No valid backend available. Install Claude Code CLI and re-run setup.");
+        return Ok(());
+    }
 
     // API key prompt if missing
     let key_var = match provider {
