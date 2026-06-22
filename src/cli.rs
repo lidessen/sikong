@@ -2670,7 +2670,9 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
     let mut launch = resolve_agent_host_launch(debug);
     let provider = std::env::var("SIKONG_AGENT_HOST_PROVIDER")
         .ok()
-        .filter(|value| value == "deepseek" || value == "kimi")
+        .filter(|value| {
+            value == "deepseek" || value == "kimi" || value == "claude" || value == "codex"
+        })
         .unwrap_or_else(|| "deepseek".to_string());
     let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
         .ok()
@@ -2815,6 +2817,7 @@ fn init_tracing() {
 
 fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     use dialoguer::{Input, Select, theme::ColorfulTheme};
+    use std::fmt::Write;
     use std::path::PathBuf;
 
     let theme = ColorfulTheme::default();
@@ -2829,7 +2832,6 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     println!("╚══════════════════════════════════════════════╝");
     println!();
 
-    // Auto-detect available tools
     let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty()).is_some();
     let has_kimi_key = std::env::var("KIMI_CODE_API_KEY").ok().filter(|k| !k.is_empty()).is_some();
     let has_claude_code = std::process::Command::new("which").arg("claude").output()
@@ -2844,124 +2846,91 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Codex CLI              {}", if has_codex { "✅ detected" } else { "⛔ not found" });
     println!();
 
-    if has_claude_code {
-        println!("   ℹ️  Claude Code detected. Will configure agent-loop worker automatically.");
-    }
-    if has_codex {
-        println!("   ℹ️  Codex detected. Will configure agent-loop worker automatically.");
-    }
-    println!();
-
-    // Provider selection
-    // Step 1: Select provider (based on available API keys)
-    let mut provider_options: Vec<(&str, &str)> = Vec::new();
-    if has_deepseek_key { provider_options.push(("DeepSeek v4 Flash", "deepseek")); }
-    if has_kimi_key { provider_options.push(("Kimi", "kimi")); }
-    if provider_options.is_empty() {
-        provider_options.push(("No API key detected — use DeepSeek (add later)", "deepseek"));
+    // Step 1: Select provider
+    let mut provider_opts: Vec<(&str, &str)> = Vec::new();
+    if has_deepseek_key { provider_opts.push(("DeepSeek v4 Flash (needs API key)", "deepseek")); }
+    if has_kimi_key { provider_opts.push(("Kimi (needs API key)", "kimi")); }
+    if has_claude_code { provider_opts.push(("Claude Code (uses your subscription, no API key needed)", "claude")); }
+    if has_codex { provider_opts.push(("Codex (uses your subscription, no API key needed)", "codex")); }
+    if provider_opts.is_empty() {
+        provider_opts.push(("No API keys or tools detected — configure later", "none"));
     }
 
-    let provider_labels: Vec<&str> = provider_options.iter().map(|(l, _)| *l).collect();
-    let provider_idx = Select::with_theme(&theme)
+    let prov_idx = Select::with_theme(&theme)
         .with_prompt("Select LLM provider")
         .default(0)
-        .items(&provider_labels)
+        .items(&provider_opts.iter().map(|(l,_)| *l).collect::<Vec<_>>())
         .interact()?;
-    let provider = provider_options[provider_idx].1;
+    let provider = provider_opts[prov_idx].1;
 
-    // Step 2: Select backend (based on available runtimes)
-    let mut backend_options: Vec<(&str, &str)> = Vec::new();
-    backend_options.push(("ai-sdk (fast, cost-effective)", "ai-sdk"));
-    if has_claude_code {
-        backend_options.push(("Claude Code runtime (richer tool access)", "claude-code"));
-    }
-    if has_codex {
-        backend_options.push(("Codex runtime", "claude-code"));
-    }
-    // Kimi only supports claude-code backend
-    if provider == "kimi" && !has_claude_code && !has_codex {
-        backend_options = vec![("⚠️  Kimi requires Claude Code CLI — install with 'npm i -g @anthropic-ai/claude-code'", "none")];
-    }
-
-    let backend_labels: Vec<&str> = backend_options.iter().map(|(l, _)| *l).collect();
-    let backend_idx = Select::with_theme(&theme)
-        .with_prompt("Select execution backend")
-        .default(0)
-        .items(&backend_labels)
-        .interact()?;
-    let mut backend = backend_options[backend_idx].1;
-
-    // Validate: Kimi only works with claude-code
-    if provider == "kimi" && backend != "claude-code" {
-        println!();
-        println!("⚠️  Kimi only works with Claude Code runtime. Will use claude-code.");
-        backend = "claude-code";
-    }
-    if backend == "none" {
-        println!();
-        println!("⚠️  No valid backend available. Install Claude Code CLI and re-run setup.");
-        return Ok(());
-    }
-
-    // API key prompt if missing
-    let key_var = match provider {
-        "deepseek" => "DEEPSEEK_API_KEY",
-        "kimi" => "KIMI_CODE_API_KEY",
-        _ => "DEEPSEEK_API_KEY",
+    // Step 2: Determine backend
+    let (backend, needs_api_key) = match provider {
+        "claude" | "codex" => {
+            println!("   ℹ️  {} uses Claude Code runtime with your existing subscription.", provider);
+            ("claude-code".to_string(), false)
+        }
+        "kimi" => {
+            if has_claude_code {
+                println!("   ℹ️  Kimi requires Claude Code runtime.");
+                ("claude-code".to_string(), true)
+            } else {
+                println!("⚠️  Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code");
+                return Ok(());
+            }
+        }
+        _ => {
+            // deepseek — let user choose backend
+            let mut backend_opts: Vec<(&str, &str)> = Vec::new();
+            backend_opts.push(("ai-sdk (fast, cost-effective)", "ai-sdk"));
+            if has_claude_code {
+                backend_opts.push(("Claude Code runtime (richer tool access)", "claude-code"));
+            }
+            let b_idx = Select::with_theme(&theme)
+                .with_prompt("Select execution backend")
+                .default(0)
+                .items(&backend_opts.iter().map(|(l,_)| *l).collect::<Vec<_>>())
+                .interact()?;
+            (backend_opts[b_idx].1.to_string(), true)
+        }
     };
-    let has_key = std::env::var(key_var).ok().filter(|k| !k.is_empty()).is_some();
 
-    if !has_key {
-        println!();
-        println!("🔑 {} is not set.", key_var);
-        let api_key: String = Input::with_theme(&theme)
-            .with_prompt("Enter your API key (or leave empty to skip)")
-            .allow_empty(true)
-            .interact_text()?;
-        let masked = if api_key.len() > 4 {
-            format!("{}...", &api_key[..4])
-        } else {
-            String::new()
+    // Step 3: API key prompt if needed
+    if needs_api_key {
+        let key_var = match provider {
+            "deepseek" => "DEEPSEEK_API_KEY",
+            "kimi" => "KIMI_CODE_API_KEY",
+            _ => "DEEPSEEK_API_KEY",
         };
-        if !api_key.is_empty() {
-            std::fs::create_dir_all(&config_dir)?;
-            let env_path = config_dir.join(".env");
-            let mut env_content = String::new();
-            if env_path.exists() {
-                env_content = std::fs::read_to_string(&env_path)?;
+        let has_key = std::env::var(key_var).ok().filter(|k| !k.is_empty()).is_some();
+        if !has_key {
+            println!();
+            println!("🔑 {} is not set.", key_var);
+            let api_key: String = Input::with_theme(&theme)
+                .with_prompt("Enter your API key (or leave empty to skip)")
+                .allow_empty(true)
+                .interact_text()?;
+            if !api_key.is_empty() {
+                std::fs::create_dir_all(&config_dir)?;
+                let env_path = config_dir.join(".env");
+                let mut env_content = String::new();
+                if env_path.exists() { env_content = std::fs::read_to_string(&env_path)?; }
+                if !env_content.contains(key_var) {
+                    writeln!(&mut env_content, "{}={}", key_var, api_key)?;
+                    std::fs::write(&env_path, env_content)?;
+                    println!("   ✅ Saved to {}", env_path.display());
+                }
+                let masked = if api_key.len() > 4 { format!("{}...", &api_key[..4]) } else { String::new() };
+                println!("   ℹ️  Also add to shell: export {}={}", key_var, masked);
             }
-            if !env_content.contains(key_var) {
-                use std::fmt::Write;
-                writeln!(&mut env_content, "{}={}", key_var, api_key)?;
-                std::fs::write(&env_path, env_content)?;
-                println!("   ✅ Saved to {}", env_path.display());
-            }
-            println!("   ℹ️  Also add this to your shell profile (~/.zshrc):");
-            println!("      export {}={}", key_var, masked);
         }
     }
 
-    // Auto-configure agent-loop if claude or codex is available, or if claude-code backend selected
+    // Step 4: Write config
     let use_real_agent = has_claude_code || has_codex || backend == "claude-code";
-
-    // Write config
     std::fs::create_dir_all(&config_dir)?;
     let config_content = format!(
-        r#"version: 1
-provider: {}
-backend: {}
-assistant:
-  max_parallel_tasks: 2
-worker:
-{}
-"#,
-        provider,
-        backend,
-        if use_real_agent {
-            format!("  worker_type: agent-loop")
-        } else {
-            String::new()
-        }
+        "version: 1\nprovider: {}\nbackend: {}\nassistant:\n  max_parallel_tasks: 2\n",
+        provider, backend,
     );
     std::fs::write(&config_path, config_content)?;
 
@@ -2974,17 +2943,13 @@ worker:
     println!("   Worker:     {}", if use_real_agent { "agent-loop (real agents)" } else { "mock (default)" });
     println!();
     println!("🚀 Quick start:");
-    println!("   siko setup                 # Re-run this setup");
     println!("   siko run \"analyze this\"     # Run a task");
     println!("   siko assistant --acp       # ACP server for external tools");
     println!("   siko dogfood run           # Self-iteration loop");
-
-    if !has_key {
+    if needs_api_key && !std::env::var(match provider {"deepseek"=>"DEEPSEEK_API_KEY","kimi"=>"KIMI_CODE_API_KEY",_=>""}).ok().filter(|k|!k.is_empty()).is_some() {
         println!();
-        println!("⚠️  No API key configured. Set it in your environment:");
-        println!("   export {}=", key_var);
+        println!("⚠️  No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...");
     }
-
     Ok(())
 }
 #[cfg(test)]

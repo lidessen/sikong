@@ -1,5 +1,6 @@
 import {
   aiSdkLoop,
+  anthropic,
   claudeCodeLoop,
   defineTool,
   deepseek,
@@ -13,7 +14,7 @@ import {
 import type { AgentRunRequest, AgentRunResponse, AgentToolCall, JsonValue } from "./protocol";
 
 export interface AgentLoopWorkerOptions {
-  provider?: "deepseek" | "kimi";
+  provider?: "deepseek" | "kimi" | "claude" | "codex";
   runtime?: "ai-sdk" | "claude-code";
   model?: string;
   maxSteps?: number;
@@ -256,20 +257,22 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
   switch (provider) {
     case "deepseek":
       if (runtime === "claude-code") {
-        return claudeCodeLoop({
-          provider: createProvider(options),
-        });
+        return claudeCodeLoop({ provider: createProvider(options) });
       }
       return aiSdkLoop({ provider: createProvider(options) });
     case "kimi":
       if (runtime === "claude-code") {
-        return claudeCodeLoop({
-          provider: createProvider(options),
-        });
+        return claudeCodeLoop({ provider: createProvider(options) });
       }
       throw new Error(
         "Kimi Code does not support the ai-sdk runtime without client allowlist onboarding.",
       );
+    case "claude":
+    case "codex":
+      // Use Claude Code's own authentication — no API key needed from Sikong
+      return claudeCodeLoop({
+        provider: createProvider(options),
+      });
   }
 }
 
@@ -283,6 +286,10 @@ function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
       return deepseek({ model: options.model ?? "deepseek-v4-flash" });
     case "kimi":
       return kimi({});
+    case "claude":
+      return anthropic({ model: options.model ?? "claude-sonnet-4-20250514" });
+    case "codex":
+      return anthropic({ model: options.model ?? "claude-sonnet-4-20250514" });
   }
 }
 
