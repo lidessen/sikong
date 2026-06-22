@@ -85,6 +85,7 @@ impl fmt::Display for ScopeAssessment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodePlan {
+    FastExecute,
     Execute,
     NeedsPlanning,
     Group(PlanGroup),
@@ -93,6 +94,7 @@ pub enum NodePlan {
 impl fmt::Display for NodePlan {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
+            Self::FastExecute => "FastExecute",
             Self::Execute => "Execute",
             Self::NeedsPlanning => "NeedsPlanning",
             Self::Group(_) => "Group",
@@ -288,7 +290,16 @@ mod tests {
 
     #[test]
     fn node_plan_variants_are_distinct() {
+        assert_ne!(NodePlan::FastExecute, NodePlan::Execute);
+        assert_ne!(NodePlan::FastExecute, NodePlan::NeedsPlanning);
         assert_ne!(NodePlan::Execute, NodePlan::NeedsPlanning);
+        assert_ne!(
+            NodePlan::FastExecute,
+            NodePlan::Group(PlanGroup {
+                mode: PlanGroupMode::Parallel,
+                items: vec![],
+            })
+        );
         assert_ne!(
             NodePlan::Execute,
             NodePlan::Group(PlanGroup {
@@ -365,6 +376,7 @@ mod tests {
     #[test]
     fn node_plan_serde_roundtrip() {
         let plans = vec![
+            NodePlan::FastExecute,
             NodePlan::Execute,
             NodePlan::NeedsPlanning,
             NodePlan::Group(PlanGroup {
@@ -397,6 +409,7 @@ mod tests {
 
     #[test]
     fn node_plan_display_is_readable() {
+        assert_eq!(format!("{}", NodePlan::FastExecute), "FastExecute");
         assert_eq!(format!("{}", NodePlan::Execute), "Execute");
         assert_eq!(format!("{}", NodePlan::NeedsPlanning), "NeedsPlanning");
         assert_eq!(

@@ -1,0 +1,51 @@
+id: analyze-engine-efficiency
+task: |
+  研究一个问题：Sikong 的引擎为什么做不了大任务？
+
+  现象：
+  - 小任务（删重复函数、改 import）可以在 2-3 分钟内完成
+  - 大任务需要并行分解成多个子节点时，每个子节点都要跑
+    Specify → Execute → Verify → Commit，每个操作都调用一次 LLM
+  - 一次 LLM 调用约 5-15 秒
+  - 5 个子节点 × 4 个操作 = 20 次调用 ≈ 2-5 分钟
+  - 如果深度分解成两层，就是 10+ 节点，轻松超过 10 分钟
+  - max_steps 设高了跑几个小时，设低了跑不完
+
+  需要你研究的问题：
+
+  1. 引擎现在的 resolve 流程是怎样的？（读 src/core/task_run/engine.rs）
+     - 每个节点必须完整走完 4 个操作吗？
+     - 有没有跳过的路径？
+     - 子节点等待父节点合并是不是阻塞的？
+
+  2. 瓶颈在哪里？
+     - 是 LLM 调用太慢（API 延迟）？
+     - 是操作太多（每次都 Specify→Execute→Verify→Commit）？
+     - 是并行不够（子节点不是真正并行跑的）？
+     - 是调用次数太多（每个操作一次，而 Claude Code 一次可以做多个 tool call）？
+
+  3. 其他工具（Claude Code、Codex）是怎么处理大任务的？
+     - 它们没有递归分解架构，那它们怎么做大改动？
+     - 它们一次能改多少个文件？
+     - 它们的工具执行机制和 Sikong 有什么不同？
+
+  4. 提出 3 个具体改进方向，每个改进方向应该：
+     - 说明解决什么问题
+     - 预计能提高多少效率（比如：快 2 倍）
+     - 改动范围有多大（改 engine 还是改 agent-host 还是改 prompt）
+     - 风险和副作用
+
+  最后输出一个设计文档 design/efficiency-analysis.md。
+  不要改代码，只分析。
+expectation: |
+  一个全面的效率分析文档，包含瓶颈定位、对比分析和 3 个改进方向。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - src/
+    - packages/
+    - design/
+  write_scope:
+    - design/
+  allow_write: true
+max_steps: 32

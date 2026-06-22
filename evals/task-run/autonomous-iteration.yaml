@@ -1,32 +1,16 @@
 id: autonomous-iteration
-max_steps: 128
+max_steps: 24
 task: |
-  这是 Sikong 自我迭代的一轮。目标是 M5：大规模目标分解。
-  Sikong 的工程优势是能把大目标分解成并行子任务，多 agent 协同完成。
-
-  当前大目标：让 `siko run` 能完成一个完整的 feature 开发周期。
-  也就是：分析 → 设计 → 实现 → 测试 → 文档，全链路走通。
-
-  这一轮你要做的是：为 `siko run --allow-write` 命令补全缺失的能力。
-
-  具体来说，`siko run --allow-write` 刚刚添加，但它还缺少：
-  - 传递 write_scope 给 engine task（当前是 mock workspace）
-  - 让 assistant 知道它有写权限（pack 里应该反映 allow_write）
-  - 确保完成后能 git commit（engine task 应该能提交）
-
-  这是一项跨多层的工程，不是改一个文件就能完成的。
-  引擎应该自己决定怎么拆、怎么合。你可以并行分析 common/、core/、
-  harness/ 的不同文件，然后综合实现。
-
-  最后必须完成：git add -A && git commit -m '描述性消息'
-  然后验证：cargo build && cargo test。
-  最后记到 development-log：做了什么、离 M5 还差什么。
+  看一下 development-log，找到最近的方向，然后往前推进一步。
+  改完跑 cargo build && cargo test，然后 git add && git commit。
+  记到 development-log 里。
 expectation: |
-  项目朝 M5 前进了实质性的一步。改动涉及多个层，不是单文件修补。
+  推进了项目。有代码变更或文档更新。
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - src/
+    - development-log/
   write_scope:
-    - '**/*'
+    - src/**
   allow_write: true

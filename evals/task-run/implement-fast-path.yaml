@@ -1,0 +1,36 @@
+id: implement-fast-path
+task: |
+  实现效率分析中的"改进方向一：轻量级执行路径（Fast Path）"。
+
+  方案细节在 design/efficiency-analysis.md 的"4. 改进方向" → "改进方向一"。
+
+  核心思路：对 tiny/small 的简单任务，合并 Execute + Verify 为一步，
+  从 3 次 LLM 调用减少到 1 次。
+
+  具体实现：
+
+  1. 在 src/core/task_run/node.rs 的 NodePlan 枚举中新增 FastExecute 变体
+  2. 在 src/core/task_run/engine.rs 的 plan_from_scope_assessment 中，
+     WorkSize::Tiny 映射到 NodePlan::FastExecute
+  3. 在 engine.rs 的 resolve() 中新增 fast_execute 分支：
+     - 当 plan == FastExecute 且无 candidate 时，调用 fast_execute(node)
+     - fast_execute 内部完成执行并自我验证
+  4. 新建 fast_execute 函数，调用 run_agent 执行，产物通过后直接 commit
+  5. 验证：cargo build && cargo test
+
+  约束：
+  - 不改动已有 Execute/Verify 流程（只新增 FastExecute 路径）
+  - FastExecute 失败时回退到标准路径（先 Verify，再 reject）
+  - 所有测试必须通过
+expectation: |
+  Tiny 节点走 FastExecute 路径，减少一次 LLM 调用。所有测试通过。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - src/core/task_run/
+    - design/
+    - tests/
+  write_scope:
+    - src/core/task_run/**/*.rs
+  allow_write: true
+max_steps: 24

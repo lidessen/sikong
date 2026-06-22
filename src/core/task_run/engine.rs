@@ -23,7 +23,8 @@ use super::{
 
 fn plan_from_scope_assessment(assessment: &ScopeAssessment, current_plan: &NodePlan) -> NodePlan {
     match assessment.size {
-        WorkSize::Tiny | WorkSize::Small | WorkSize::Medium => NodePlan::Execute,
+        WorkSize::Tiny => NodePlan::FastExecute,
+        WorkSize::Small | WorkSize::Medium => NodePlan::Execute,
         WorkSize::Large | WorkSize::XLarge => match current_plan {
             NodePlan::Group(_) => current_plan.clone(),
             _ => NodePlan::NeedsPlanning,
@@ -196,7 +197,19 @@ where
             }
             self.combine(node_id, cancellation).await?;
         } else if self.node(node_id)?.candidate.is_none() {
-            self.execute(node_id, cancellation).await?;
+            match self.node(node_id)?.plan {
+                NodePlan::FastExecute => {
+                    self.fast_execute(node_id, cancellation).await?;
+                    // If fast_execute self-verified and already committed,
+                    // return the accepted artifact and skip verify.
+                    if self.node(node_id)?.status == NodeStatus::Committed {
+                        return Ok(self.node(node_id)?.accepted_artifact);
+                    }
+                }
+                _ => {
+                    self.execute(node_id, cancellation).await?;
+                }
+            }
         }
 
         self.verify_and_maybe_commit(node_id, cancellation).await
@@ -516,6 +529,53 @@ where
         node.execution_attempts += 1;
         node.candidate = Some(artifact_id);
         node.status = NodeStatus::Verifying;
+        Ok(())
+    }
+
+    /// Lightweight fast path for tiny tasks.
+    ///
+    /// Runs the agent directly (no workspace surface), and on success
+    /// self-verifies by committing the output immediately. On failure
+    /// (e.g., agent returns unexpected output), falls back to the
+    /// standard verify-then-reject path by creating a candidate artifact.
+    async fn fast_execute(
+        &mut self,
+        node_id: NodeId,
+        cancellation: &CancellationToken,
+    ) -> Result<(), EngineError> {
+        self.record(
+            node_id,
+            NodeOperation::Execute,
+            "fast execute path",
+        );
+
+        let result = self
+            .run_agent(node_id, NodeOperation::Execute, cancellation)
+            .await?;
+
+        let NodeOperationOutput::Executed { output } = result.output else {
+            // Fast path failed — agent did not produce Executed output.
+            // Fall back: create an empty candidate so verify handles it.
+            self.node_mut(node_id)?.execution_attempts += 1;
+            self.record(
+                node_id,
+                NodeOperation::Execute,
+                "fast execute did not produce Executed output, falling back to verify",
+            );
+            return Ok(());
+        };
+
+        // Success path: self-verify by committing directly.
+        let artifact_id = self.push_artifact(
+            node_id,
+            ArtifactContentKind::Text,
+            output,
+            None,
+            Vec::new(),
+        );
+
+        self.node_mut(node_id)?.execution_attempts += 1;
+        self.commit(node_id, artifact_id)?;
         Ok(())
     }
 
@@ -1487,10 +1547,10 @@ mod tests {
     // --- plan_from_scope_assessment tests ---
 
     #[test]
-    fn plan_from_assessment_tiny_executes() {
-        let assessment = ScopeAssessment::new("do it", WorkSize::Tiny, "small task");
+    fn plan_from_assessment_tiny_becomes_fast_execute() {
+        let assessment = ScopeAssessment::new("do it", WorkSize::Tiny, "tiny task");
         let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute);
-        assert_eq!(plan, NodePlan::Execute);
+        assert_eq!(plan, NodePlan::FastExecute);
     }
 
     #[test]
@@ -1557,6 +1617,6 @@ mod tests {
     fn plan_from_assessment_tiny_ignores_needs_planning_current_plan() {
         let assessment = ScopeAssessment::new("tiny fix", WorkSize::Tiny, "trivial");
         let plan = plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning);
-        assert_eq!(plan, NodePlan::Execute);
+        assert_eq!(plan, NodePlan::FastExecute);
     }
 }

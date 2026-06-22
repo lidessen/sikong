@@ -296,7 +296,7 @@ async fn specify_can_rewrite_missing_context_into_evidence_work() {
         "Identify which provider and model are selected in the current runtime config."
     );
     assert_eq!(node.size, WorkSize::Tiny);
-    assert_eq!(node.plan, NodePlan::Execute);
+    assert_eq!(node.plan, NodePlan::FastExecute);
     assert_eq!(
         node.scope_assessment.as_ref().unwrap().reason,
         "The evidence-gathering work is tiny even though the broader setup depends on it."
@@ -315,7 +315,6 @@ async fn specify_can_rewrite_missing_context_into_evidence_work() {
         vec![
             NodeOperation::Specify,
             NodeOperation::Execute,
-            NodeOperation::Verify,
         ]
     );
 }
