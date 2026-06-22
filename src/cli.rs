@@ -2671,8 +2671,13 @@ struct AgentHostLaunch {
     args: Vec<String>,
 }
 
-fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHostLaunch {
+fn resolve_agent_loop_launch(
+    debug: &DebugConfig,
+    max_steps: usize,
+) -> AgentHostLaunch {
     let mut launch = resolve_agent_host_launch(debug);
+    let config = SikoConfig::load().ok();
+    
     let provider = std::env::var("SIKONG_AGENT_HOST_PROVIDER")
         .ok()
         .filter(|value| {
@@ -2694,7 +2699,13 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
         .unwrap_or_else(|| "ai-sdk".to_string());
     let model = std::env::var("SIKONG_AGENT_HOST_MODEL")
         .ok()
-        .filter(|v| !v.is_empty());
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            config
+                .as_ref()
+                .and_then(|c| c.current_model())
+                .map(|m| m.to_string())
+        });
     launch.args.extend(
         [
             "--worker",
@@ -2982,13 +2993,20 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         format!("provider: {}", provider),
         format!("backend: {}", backend),
     ];
-    if !model.is_empty() {
-        config_lines.push(format!("model: {}", model));
-    }
-    if !env_entries.is_empty() {
-        config_lines.push("env:".to_string());
-        for (k, v) in &env_entries {
-            config_lines.push(format!("  {}: \"{}\"", k, v));
+    // Per-provider config
+    let has_model = !model.is_empty();
+    let has_env = !env_entries.is_empty();
+    if has_model || has_env {
+        config_lines.push("providers:".to_string());
+        config_lines.push(format!("  {}:", provider));
+        if has_model {
+            config_lines.push(format!("    model: {}", model));
+        }
+        if has_env {
+            config_lines.push("    env:".to_string());
+            for (k, v) in &env_entries {
+                config_lines.push(format!("      {}: \"{}\"", k, v));
+            }
         }
     }
     config_lines.push("assistant:".to_string());

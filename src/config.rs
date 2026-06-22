@@ -5,17 +5,34 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 pub struct SikoConfig {
     pub version: u32,
-    /// Global default provider (deepseek, kimi, etc.)
+    /// Active provider (deepseek, claude, codex, etc.)
     pub provider: Option<String>,
-    /// Global default backend (ai-sdk, claude-code)
+    /// Active backend (ai-sdk, claude-code, codex)
     pub backend: Option<String>,
-    /// Model override (e.g. "claude-sonnet-4-20250514", "deepseek-v4-flash")
-    pub model: Option<String>,
-    /// Environment variable overrides (merged into process env at startup)
-    #[serde(default)]
-    pub env: std::collections::HashMap<String, String>,
     pub assistant: AssistantConfig,
     pub worker: WorkerConfig,
+    /// Per-provider configuration (model, env, etc.)
+    #[serde(default)]
+    pub providers: std::collections::HashMap<String, ProviderConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct ProviderConfig {
+    /// Model for this provider
+    pub model: Option<String>,
+    /// Environment overrides for this provider
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            model: None,
+            env: std::collections::HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -69,10 +86,9 @@ impl Default for SikoConfig {
             version: 1,
             provider: None,
             backend: None,
-            model: None,
-            env: std::collections::HashMap::new(),
             assistant: AssistantConfig::default(),
             worker: WorkerConfig::default(),
+            providers: std::collections::HashMap::new(),
         }
     }
 }
@@ -116,20 +132,25 @@ impl SikoConfig {
         builder.build()?.try_deserialize()
     }
 
-    /// Apply env overrides from config to process environment.
-    /// Returns warnings for any failures (non-fatal).
-    pub fn apply_env(&self) -> Vec<String> {
-        let mut warnings = Vec::new();
-        for (key, value) in &self.env {
-            if std::env::var(key).is_err()
-                || std::env::var("SIKONG_ENV_OVERRIDE").as_deref() == Ok("1")
-            {
-                // Safety: this is called early in main before any other threads.
-                // The env vars override is intentional and user-configured.
-                unsafe { std::env::set_var(key, value) };
+    /// Apply env overrides from the current provider's config.
+    pub fn apply_env(&self) {
+        if let Some(active) = &self.provider {
+            if let Some(pc) = self.providers.get(active) {
+                for (key, value) in &pc.env {
+                    if std::env::var(key).is_err() {
+                        unsafe { std::env::set_var(key, value) };
+                    }
+                }
             }
         }
-        warnings
+    }
+
+    /// Get the model for the current provider.
+    pub fn current_model(&self) -> Option<&str> {
+        self.provider
+            .as_ref()
+            .and_then(|p| self.providers.get(p))
+            .and_then(|pc| pc.model.as_deref())
     }
 
     pub fn assistant_provider(&self) -> String {
@@ -412,8 +433,7 @@ mod tests {
             version: 1,
             provider: Some("deepseek".to_string()),
             backend: Some("ai-sdk".to_string()),
-            model: None,
-            env: std::collections::HashMap::new(),
+            providers: std::collections::HashMap::new(),
             assistant: AssistantConfig::default(),
             worker: WorkerConfig::default(),
         };
@@ -430,8 +450,7 @@ mod tests {
             version: 1,
             provider: Some("deepseek".to_string()),
             backend: Some("ai-sdk".to_string()),
-            model: None,
-            env: std::collections::HashMap::new(),
+            providers: std::collections::HashMap::new(),
             assistant: AssistantConfig {
                 provider: Some("kimi".to_string()),
                 backend: Some("claude-code".to_string()),
