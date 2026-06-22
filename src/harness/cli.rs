@@ -203,19 +203,27 @@ fn run_cli(cli: Cli) -> i32 {
             task,
             wait_ms,
             json,
-        }) => match run_assistant_prompt(
-            task,
-            wait_ms,
-            AssistantPromptWorkspace::CurrentFileSystem,
-            false,
-            Vec::new(),
-            json,
-        ) {
-            Ok(()) => 0,
-            Err(error) => {
-                error!(%error, "failed to run task");
-                eprintln!("failed to run task: {error}");
-                1
+            allow_write,
+        }) => {
+            let write_scope = if allow_write {
+                vec!["**/*".to_string()]
+            } else {
+                Vec::new()
+            };
+            match run_assistant_prompt(
+                task,
+                wait_ms,
+                AssistantPromptWorkspace::CurrentFileSystem,
+                allow_write,
+                write_scope,
+                json,
+            ) {
+                Ok(()) => 0,
+                Err(error) => {
+                    error!(%error, "failed to run task");
+                    eprintln!("failed to run task: {error}");
+                    1
+                }
             }
         },
         Some(Command::Dogfood { command }) => {
@@ -319,6 +327,11 @@ enum Command {
         /// Print structured JSON output.
         #[arg(long)]
         json: bool,
+
+        /// Allow the agent to modify files in the workspace. Without this flag,
+        /// the agent can only read files and produce analysis.
+        #[arg(long)]
+        allow_write: bool,
     },
     /// Run evaluation scenarios (internal).
     #[command(hide = true)]

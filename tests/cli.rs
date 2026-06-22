@@ -90,3 +90,19 @@ fn test_metrics_command_accepts_help_flag() {
     assert_eq!(code, 0, "siko metrics --help should exit with code 0");
     assert!(stdout.contains("metrics"), "help should mention 'metrics'");
 }
+
+#[test]
+fn test_run_command_help_mentions_allow_write() {
+    let (stdout, stderr, code) = run_siko(&["run", "--help"]);
+
+    eprint!("{}", stderr);
+    assert_eq!(code, 0, "siko run --help should exit with code 0");
+    assert!(
+        stdout.contains("allow-write"),
+        "help should mention '--allow-write' flag; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("modify files"),
+        "help description should mention file modification; got: {stdout}"
+    );
+}
