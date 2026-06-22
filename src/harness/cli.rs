@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use siko::{
-    metrics::{MetricsCollector, MetricsFormatter},
+use crate::{
+    foundation::metrics::{MetricsCollector, MetricsFormatter},
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
     AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
@@ -670,7 +670,7 @@ fn resolve_assistant_prompt_workspace(
             Ok(WorkspaceRequirement::memory())
         }
         AssistantPromptWorkspace::CurrentFileSystem => Ok(WorkspaceRequirement {
-            provider: siko::WorkspaceProvider::FileSystem,
+            provider: crate::WorkspaceProvider::FileSystem,
             read_scope: vec!["**/*".to_string()],
             write_scope: write_scope.to_vec(),
             git: None,
@@ -1050,7 +1050,7 @@ async fn run_task_run_split_eval_async(
             .map_err(|error| format!("task run failed for scenario {}: {error:?}", scenario.id))?;
 
         // Collect per-agent-run metrics
-        let mut metrics_collector = siko::metrics::MetricsCollector::new();
+        let mut metrics_collector = crate::foundation::metrics::MetricsCollector::new();
         for agent_run in &report.agent_runs {
             let operation = agent_run.operation.to_string();
             let duration_ms = agent_run.duration_ms;
@@ -1209,7 +1209,7 @@ async fn run_dogfood_run_async(
             .map_err(|error| format!("scenario {} failed: {error:?}", scenario.id))?;
 
         // Collect per-agent-run metrics
-        let mut metrics_collector = siko::metrics::MetricsCollector::new();
+        let mut metrics_collector = crate::foundation::metrics::MetricsCollector::new();
         for agent_run in &report.agent_runs {
             let operation = agent_run.operation.to_string();
             let duration_ms = agent_run.duration_ms;
@@ -1782,7 +1782,7 @@ fn eval_task_workspace_requirement(
                     provider: WorkspaceProvider::GitFileSystem,
                     read_scope: read_scope.clone(),
                     write_scope: write_scope.clone(),
-                    git: Some(siko::GitWorkspaceRequirement {
+                    git: Some(crate::GitWorkspaceRequirement {
                         repo_root,
                         worktree_root,
                         base_ref: "HEAD".to_string(),
@@ -1952,7 +1952,7 @@ struct OperationEvalScenario {
     id: &'static str,
     operation: NodeOperation,
     expectation: &'static str,
-    context: siko::AgentOperationContext,
+    context: crate::AgentOperationContext,
 }
 
 fn sum_usage(
@@ -1966,7 +1966,7 @@ fn sum_usage(
         .sum()
 }
 
-fn sum_agent_run_usage(runs: &[siko::AgentRunRecord]) -> AgentTokenUsage {
+fn sum_agent_run_usage(runs: &[crate::AgentRunRecord]) -> AgentTokenUsage {
     runs.iter()
         .filter_map(|run| run.usage.as_ref())
         .cloned()
@@ -2334,8 +2334,8 @@ fn operation_context(
     candidate: Option<Artifact>,
     child_artifacts: Vec<Artifact>,
     workspace_surface: Option<WorkspaceSurface>,
-) -> siko::AgentOperationContext {
-    siko::AgentOperationContext {
+) -> crate::AgentOperationContext {
+    crate::AgentOperationContext {
         node,
         operation,
         candidate,
@@ -2512,7 +2512,7 @@ impl TaskRunSplitTranscript {
         scenario: &TaskRunSplitScenario,
         root: u64,
         engine: &Engine<Workspaces, ProcessAgentRunScheduler>,
-        report: &siko::EngineReport,
+        report: &crate::EngineReport,
     ) -> Self {
         let root_node = engine.node(root).expect("root node should exist");
         let root_children = root_node
@@ -2571,7 +2571,7 @@ fn write_task_run_artifacts(
     scenario: &TaskRunSplitScenario,
     root: u64,
     engine: &Engine<Workspaces, ProcessAgentRunScheduler>,
-    report: &siko::EngineReport,
+    report: &crate::EngineReport,
 ) -> Result<Vec<TaskRunArtifactFile>, Box<dyn std::error::Error>> {
     let Some(artifact_dir) = artifact_dir else {
         return Ok(Vec::new());
@@ -2632,7 +2632,7 @@ fn collect_accepted_artifact_ids(
 
 fn render_task_run_artifact_file(
     scenario: &TaskRunSplitScenario,
-    report: &siko::EngineReport,
+    report: &crate::EngineReport,
     artifact: &Artifact,
 ) -> String {
     format!(
@@ -3115,7 +3115,7 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use siko::{AgentRunRecord, EngineReport};
+    use crate::{AgentRunRecord, EngineReport};
     use std::collections::BTreeMap;
     use std::fs;
 
@@ -3684,7 +3684,7 @@ workspace:
             source: "agent".to_string(),
             message: "completed execute".to_string(),
             node_id: Some(3),
-            operation: Some(siko::NodeOperation::Execute),
+            operation: Some(crate::NodeOperation::Execute),
             payload: serde_json::json!({
                 "terminal_tool": "submit_work"
             }),

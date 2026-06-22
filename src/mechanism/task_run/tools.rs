@@ -12,7 +12,7 @@ pub(crate) struct EngineTools;
 
 #[siko_macros::toolset(
     enum_name = "EngineTool",
-    output = "crate::task_run::NodeOperationOutput"
+    output = "crate::mechanism::task_run::NodeOperationOutput"
 )]
 impl EngineTools {
     #[tool(
@@ -145,8 +145,8 @@ impl PlanItemInput {
             intent,
             size,
             scope_assessment,
-            workspace: crate::workspace::WorkspaceRequirement {
-                provider: crate::workspace::WorkspaceProvider::Memory,
+            workspace: crate::foundation::workspace::WorkspaceRequirement {
+                provider: crate::foundation::workspace::WorkspaceProvider::Memory,
                 read_scope: self.read_scope.unwrap_or_default(),
                 write_scope: self.write_scope.unwrap_or_default(),
                 git: None,

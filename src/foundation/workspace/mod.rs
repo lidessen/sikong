@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{ArtifactId, NodeId};
+use crate::foundation::types::{ArtifactId, NodeId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

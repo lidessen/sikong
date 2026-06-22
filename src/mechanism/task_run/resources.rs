@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::workspace::{
+use crate::foundation::workspace::{
     WorkspaceResource, WorkspaceResourceId, WorkspaceResourceRef, WorkspaceResourceState,
 };
 
@@ -74,7 +74,7 @@ impl WorkspaceResourceRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::{
+    use crate::foundation::workspace::{
         WorkspaceProvider, WorkspaceResourceKind, WorkspaceResourceMetadata,
     };
 
