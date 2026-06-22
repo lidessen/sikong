@@ -402,6 +402,34 @@ fn segment_chars_match(pattern: &[char], segment: &[char], pi: usize, si: usize)
     segment_chars_match(pattern, segment, pi + 1, si + 1)
 }
 
+
+/// Stage and commit only those changed files in `worktree_path` whose paths
+/// match at least one of the `write_scope` glob patterns.
+///
+/// Files outside the write scope remain as unstaged working-tree changes.
+/// Returns the list of committed paths and the commit SHA (if any commits
+/// were made).
+///
+/// This is the public entry point for the engine's post-completion lifecycle
+/// hook and can also be used as a programmatic trigger by tasks that want to
+/// commit their own completed work within the declared write scope.
+///
+/// # Graceful degradation
+///
+/// When `git` is not installed or the worktree path is not part of a git
+/// repository, the function returns an empty result (no paths, no SHA) rather
+/// than failing. Callers can distinguish "no git" from "no changes" by the
+/// return value.
+pub fn commit_write_scope_paths(
+    worktree_path: &std::path::Path,
+    message: &str,
+    write_scope: &[String],
+) -> WorkspaceResult<(Vec<String>, Option<String>)> {
+    use git_cli::GitCli;
+    let result = GitCli::commit_write_scope(worktree_path, message, write_scope)?;
+    Ok((result.changed_paths, result.commit_sha))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

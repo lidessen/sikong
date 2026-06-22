@@ -1,21 +1,27 @@
 id: autonomous-iteration
-max_steps: 64
+max_steps: 128
 task: |
-  这是 Sikong 自我迭代的一轮。当前目标是 M1: Developer Preview ——
-  让开发者能交给 siko 一个有界的开发任务，并且信任结果。
+  这是 Sikong 自我迭代的一轮。目标是 M5：大规模目标分解。
+  Sikong 的工程优势是能把大目标分解成并行子任务，多 agent 协同完成。
 
-  前一轮做了什么、学到了什么，在 development-log 里。
+  当前大目标：让 `siko run` 能完成一个完整的 feature 开发周期。
+  也就是：分析 → 设计 → 实现 → 测试 → 文档，全链路走通。
 
-  你的工作：
-  1. 读 development-log 和 git log，了解当前状态
-  2. 读设计/哲学/product-vision.md 了解 M1 的具体要求
-  3. 选一件能让项目朝 M1 前进一步的事，做出来
-  4. 验证：cargo build && cargo test
-  5. 记到 development-log：做了什么、离 M1 还差什么
+  这一轮你要做的是：为 `siko run --allow-write` 命令补全缺失的能力。
 
-  引擎会自己处理拆和合。你只需要定方向。
+  具体来说，`siko run --allow-write` 刚刚添加，但它还缺少：
+  - 传递 write_scope 给 engine task（当前是 mock workspace）
+  - 让 assistant 知道它有写权限（pack 里应该反映 allow_write）
+  - 确保完成后能 git commit（engine task 应该能提交）
+
+  这是一项跨多层的工程，不是改一个文件就能完成的。
+  引擎应该自己决定怎么拆、怎么合。你可以并行分析 common/、core/、
+  harness/ 的不同文件，然后综合实现。
+
+  最后验证：cargo build && cargo test。
+  然后记到 development-log：做了什么、离 M5 还差什么。
 expectation: |
-  项目向 M1 前进了一步。代码变更或文档更新，验证通过，提交了。
+  项目朝 M5 前进了实质性的一步。改动涉及多个层，不是单文件修补。
 workspace:
   provider: current-file-system
   read_scope:

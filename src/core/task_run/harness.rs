@@ -248,7 +248,13 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                     )
                 }
                 "Workspace Rules" {
-                    "If workspace_surface is present, treat it as the concrete execution surface. Respect read_scope, write_scope, provider details, and allow_write exactly. read_scope controls what files may be read. allow_write controls mutation only; do not report a write-permission blocker for read-only inspection work. Submit only the work result; the workspace provider captures file changes and side effects. If the work asks you to inspect files or external state but read_scope is empty and the context provides no readable surface, say exactly that no readable file or external evidence surface is available."
+                    format!(
+                        "If workspace_surface is present, treat it as the concrete execution surface. Respect read_scope, write_scope, provider details, and allow_write exactly. read_scope controls what files may be read. allow_write controls mutation only; do not report a write-permission blocker for read-only inspection work. Submit only the work result; the workspace provider captures file changes and side effects. If the work asks you to inspect files or external state but read_scope is empty and the context provides no readable surface, say exactly that no readable file or external evidence surface is available.
+
+Write permission: {} (allow_write={})",
+                        if context.node.capabilities.allow_write { "enabled" } else { "disabled" },
+                        context.node.capabilities.allow_write,
+                    )
                 }
                 "Self Contained Work" {
                     "If the node asks for a self-contained analysis, design proposal, readiness package, test plan, explanation, or memory-only artifact, do the work from the supplied task text and operation context. Empty read_scope is not a blocker for that kind of work. Keep unknown details at the appropriate abstraction level; submit a blocker only when the node explicitly requires evidence that is unavailable."

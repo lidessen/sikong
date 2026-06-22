@@ -495,6 +495,8 @@ where
         };
 
         let change = self.workspace.capture_changes(&surface, Vec::new())?;
+        // Post-completion lifecycle hook: commit write_scope paths
+        self.post_completion_write_scope_commit(node_id, &surface)?;
         self.workspace_resources.track_all(change.resources.clone());
 
         let artifact_id = self.push_artifact(
@@ -558,6 +560,8 @@ where
         };
 
         let change = self.workspace.capture_changes(&merge_surface, Vec::new())?;
+        // Post-completion lifecycle hook: commit write_scope paths
+        self.post_completion_write_scope_commit(node_id, &merge_surface)?;
         self.workspace_resources.track_all(change.resources.clone());
         let artifact_id = self.push_artifact(
             node_id,
@@ -1044,6 +1048,86 @@ where
         Ok(())
     }
 
+
+    /// Post-completion lifecycle hook: commit only those changed files that
+    /// fall within the node's declared `write_scope`.
+    ///
+    /// This serves two purposes:
+    /// (a) **Auto-commit** — when the workspace has git metadata (e.g., a
+    ///     `GitFileSystem` worktree), the method stages and commits only
+    ///     paths matching the node's write_scope. This ensures that changes
+    ///     outside the write scope (e.g., transient by-products) are not
+    ///     included in the commit history.
+    /// (b) **Programmatic trigger** — tasks that want to commit their own
+    ///     completed work within a custom write scope can call this method
+    ///     (or the public `crate::common::workspace::commit_write_scope_paths`)
+    ///     at any point before the workspace resources are released.
+    ///
+    /// # Graceful degradation
+    ///
+    /// When git is not configured for the workspace (provider is `FileSystem`
+    /// or `Memory`, or the surface has no `git` metadata), the method logs
+    /// a warning at the `info` level and returns `Ok(())`.
+    fn post_completion_write_scope_commit(
+        &mut self,
+        node_id: NodeId,
+        surface: &crate::common::workspace::WorkspaceSurface,
+    ) -> Result<(), EngineError> {
+        let write_scope = &self.node(node_id)?.workspace.write_scope;
+        if write_scope.is_empty() {
+            return Ok(());
+        }
+
+        // Check whether the surface has git metadata with a worktree path
+        let git = match &surface.git {
+            Some(git) => git,
+            None => {
+                info!(
+                    "post-completion hook: no git surface for node {},                     skipping write-scope commit",
+                    node_id,
+                );
+                return Ok(());
+            }
+        };
+
+        let message = format!(
+            "sikong write-scope commit for node {} \"{}\"",
+            node_id,
+            self.node(node_id)?.key.0,
+        );
+
+        match crate::common::workspace::commit_write_scope_paths(
+            &git.worktree_path,
+            &message,
+            write_scope,
+        ) {
+            Ok((changed_paths, commit_sha)) => {
+                if let Some(sha) = commit_sha {
+                    info!(
+                        "post-completion hook committed {} path(s) (sha={}) for node {}",
+                        changed_paths.len(),
+                        sha,
+                        node_id,
+                    );
+                } else {
+                    info!(
+                        "post-completion hook: no write-scope changes to commit for node {}",
+                        node_id,
+                    );
+                }
+                Ok(())
+            }
+            Err(error) => {
+                // Graceful degradation: log the error, do not fail the node
+                warn!(
+                    "post-completion hook git commit failed for node {}: {}",
+                    node_id,
+                    error,
+                );
+                Ok(())
+            }
+        }
+    }
     fn node_mut(&mut self, id: NodeId) -> Result<&mut ProblemNode, EngineError> {
         self.nodes.get_mut(&id).ok_or(EngineError::MissingNode(id))
     }

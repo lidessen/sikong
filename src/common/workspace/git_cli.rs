@@ -75,6 +75,8 @@ impl GitCli {
         .map(|_| ())
     }
 
+    /// Stage and commit all changed files (modified, added, deleted, untracked)
+    /// within the worktree. This is the general-purpose "commit everything" path.
     pub(super) fn commit_all(
         worktree_path: &Path,
         message: &str,
@@ -96,6 +98,100 @@ impl GitCli {
         let commit_sha = Self::rev_parse(worktree_path, "HEAD")?;
         Ok(CommitAllResult {
             changed_paths,
+            commit_sha: Some(commit_sha),
+        })
+    }
+
+    /// Stage and commit only those changed files whose paths match at least one
+    /// of the `write_scope` glob patterns. Files outside the write scope are
+    /// left unstaged (they remain as working-tree changes but are not committed).
+    ///
+    /// This is the write-scope-aware alternative to [`commit_all`] and is used
+    /// by the engine's post-completion lifecycle hook to ensure only paths
+    /// within the node's declared write_scope are committed.
+    pub(super) fn commit_write_scope(
+        worktree_path: &Path,
+        message: &str,
+        write_scope: &[String],
+    ) -> WorkspaceResult<CommitAllResult> {
+        // ── 1. Discover all changed files ──────────────────────────────
+        // `git status --porcelain -z` gives machine-parseable output with
+        // NUL-separated entries:  "XY <path>\0"
+        let raw = Self::run(
+            "status porcelain",
+            worktree_path,
+            [
+                OsStr::new("status"),
+                OsStr::new("--porcelain"),
+                OsStr::new("-z"),
+            ],
+        )?;
+
+        let entries: Vec<&str> = raw.split('\0').filter(|s| !s.is_empty()).collect();
+        let mut all_changed = Vec::new();
+        let mut scope_paths = Vec::new();
+
+        for entry in &entries {
+            // Each entry looks like "XY <path>" where XY are status codes.
+            // The path starts at byte 3 (after two status chars and a space).
+            let trimmed = entry.trim();
+            if trimmed.len() < 4 {
+                continue;
+            }
+            let path_part = &trimmed[3..];
+
+            // Handle quoted paths (git may quote paths containing special chars)
+            let path = if path_part.starts_with('"') {
+                // Try a simple unescape: strip surrounding quotes
+                let unquoted = path_part.trim_matches('"');
+                // Replace common escape sequences
+                let unescaped = unquoted.replace("\\\"", "\"").replace("\\\\", "\\");
+                unescaped
+            } else {
+                path_part.to_string()
+            };
+
+            all_changed.push(path.clone());
+
+            // Check if this path matches any write_scope pattern
+            if crate::common::workspace::path_allowed(write_scope, std::path::Path::new(&path)) {
+                scope_paths.push(path);
+            }
+        }
+
+        // ── 2. Stage only write-scope paths ────────────────────────────
+        if scope_paths.is_empty() {
+            return Ok(CommitAllResult {
+                changed_paths: all_changed,
+                commit_sha: None,
+            });
+        }
+
+        let mut add_args: Vec<&OsStr> = vec![OsStr::new("add"), OsStr::new("--")];
+        for path in &scope_paths {
+            add_args.push(OsStr::new(path));
+        }
+        Self::run("add write-scope", worktree_path, add_args)?;
+
+        // ── 3. Check if anything was staged ────────────────────────────
+        let staged = Self::diff_cached_paths(worktree_path)?;
+        if staged.is_empty() {
+            return Ok(CommitAllResult {
+                changed_paths: all_changed,
+                commit_sha: None,
+            });
+        }
+
+        // ── 4. Commit ──────────────────────────────────────────────────
+        Self::run(
+            "commit",
+            worktree_path,
+            [OsStr::new("commit"), OsStr::new("-m"), OsStr::new(message)],
+        )?;
+        let commit_sha = Self::rev_parse(worktree_path, "HEAD")?;
+
+        Ok(CommitAllResult {
+            changed_paths: staged,
             commit_sha: Some(commit_sha),
         })
     }

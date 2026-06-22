@@ -204,8 +204,11 @@ fn run_cli(cli: Cli) -> i32 {
             wait_ms,
             json,
             allow_write,
+            write_scope,
         }) => {
-            let write_scope = if allow_write {
+            let effective_scope = if allow_write && !write_scope.is_empty() {
+                write_scope
+            } else if allow_write {
                 vec!["**/*".to_string()]
             } else {
                 Vec::new()
@@ -215,7 +218,7 @@ fn run_cli(cli: Cli) -> i32 {
                 wait_ms,
                 AssistantPromptWorkspace::CurrentFileSystem,
                 allow_write,
-                write_scope,
+                effective_scope,
                 json,
             ) {
                 Ok(()) => 0,
@@ -332,6 +335,11 @@ enum Command {
         /// the agent can only read files and produce analysis.
         #[arg(long)]
         allow_write: bool,
+
+        /// Coarse writable glob when --allow-write is set. Repeatable for multiple paths.
+        /// Defaults to **/* (entire workspace) when --allow-write is set without this flag.
+        #[arg(long = "write-scope")]
+        write_scope: Vec<String>,
     },
     /// Run evaluation scenarios (internal).
     #[command(hide = true)]
@@ -3563,11 +3571,8 @@ workspace:
     #[test]
     fn dogfood_scenario_files_are_valid() {
         for path in [
-            "evals/task-run/dogfood-doc-review.yaml",
-            "evals/task-run/dogfood-governance-review.yaml",
-            "evals/task-run/dogfood-next-improvement.yaml",
-            "evals/task-run/dogfood-route-only.yaml",
-            "evals/task-run/dogfood-verify-surface-smoke.yaml",
+            "evals/task-run/autonomous-iteration.yaml",
+            "evals/task-run/project-analysis.yaml",
         ] {
             let scenario_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
             let scenario = load_task_run_split_scenario_file(&scenario_path).unwrap();
