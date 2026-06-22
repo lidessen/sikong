@@ -17,7 +17,10 @@ pub use assistant::{
     AssistantTaskBoardContext, AssistantTurn, AssistantTurnError, JsonRpcError, SessionReply,
     SessionState, run_acp_stdio_server,
 };
-pub use config::{AssistantConfig, DebugConfig, SikoConfig, default_config_path};
+pub use config::{
+    AssistantConfig, DebugConfig, SikoConfig, WorkerConfig, default_config_path,
+    resolve_provider, resolve_backend,
+};
 pub use task_board::{
     AssistantTask, AssistantTaskEvent, AssistantTaskEventRecord, AssistantTaskStatus,
     FileTaskStore, MemoryTaskStore, TaskBoard, TaskBoardSnapshot, TaskEngineRunner,

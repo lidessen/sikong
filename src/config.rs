@@ -5,20 +5,67 @@ use std::path::{Path, PathBuf};
 #[serde(default, deny_unknown_fields)]
 pub struct SikoConfig {
     pub version: u32,
+    /// Global default provider (deepseek, kimi, etc.)
+    pub provider: Option<String>,
+    /// Global default backend (ai-sdk, claude-code)
+    pub backend: Option<String>,
     pub assistant: AssistantConfig,
+    pub worker: WorkerConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AssistantConfig {
+    /// Override provider for assistant (inherits from global if not set)
+    pub provider: Option<String>,
+    /// Override backend for assistant (inherits from global if not set)
+    pub backend: Option<String>,
     pub max_parallel_tasks: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WorkerConfig {
+    /// Override provider for engine/worker tasks (inherits from global if not set)
+    pub provider: Option<String>,
+    /// Override backend for engine/worker tasks (inherits from global if not set)
+    pub backend: Option<String>,
+}
+
+/// Resolve effective provider for a component.
+/// Priority: component override > global > env var > default
+pub fn resolve_provider(
+    component: &Option<String>,
+    global: &Option<String>,
+) -> String {
+    component
+        .clone()
+        .or_else(|| global.clone())
+        .or_else(|| std::env::var("SIKONG_PROVIDER").ok())
+        .unwrap_or_else(|| "deepseek".to_string())
+}
+
+/// Resolve effective backend for a component.
+/// Priority: component override > global > env var > default
+pub fn resolve_backend(
+    component: &Option<String>,
+    global: &Option<String>,
+) -> String {
+    component
+        .clone()
+        .or_else(|| global.clone())
+        .or_else(|| std::env::var("SIKONG_BACKEND").ok())
+        .unwrap_or_else(|| "ai-sdk".to_string())
 }
 
 impl Default for SikoConfig {
     fn default() -> Self {
         Self {
             version: 1,
+            provider: None,
+            backend: None,
             assistant: AssistantConfig::default(),
+            worker: WorkerConfig::default(),
         }
     }
 }
@@ -26,7 +73,18 @@ impl Default for SikoConfig {
 impl Default for AssistantConfig {
     fn default() -> Self {
         Self {
+            provider: None,
+            backend: None,
             max_parallel_tasks: 2,
+        }
+    }
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            backend: None,
         }
     }
 }
@@ -49,6 +107,22 @@ impl SikoConfig {
             );
 
         builder.build()?.try_deserialize()
+    }
+
+    pub fn assistant_provider(&self) -> String {
+        resolve_provider(&self.assistant.provider, &self.provider)
+    }
+
+    pub fn assistant_backend(&self) -> String {
+        resolve_backend(&self.assistant.backend, &self.backend)
+    }
+
+    pub fn worker_provider(&self) -> String {
+        resolve_provider(&self.worker.provider, &self.provider)
+    }
+
+    pub fn worker_backend(&self) -> String {
+        resolve_backend(&self.worker.backend, &self.backend)
     }
 }
 
@@ -321,5 +395,50 @@ mod tests {
     fn non_empty_env_returns_none_for_missing_var() {
         let env = |_: &str| -> Option<String> { None };
         assert_eq!(non_empty_env(&env, "MISSING"), None);
+    }
+
+    #[test]
+    fn config_resolves_component_inheritance() {
+        // Global only — both components inherit
+        let cfg = SikoConfig {
+            version: 1,
+            provider: Some("deepseek".to_string()),
+            backend: Some("ai-sdk".to_string()),
+            assistant: AssistantConfig::default(),
+            worker: WorkerConfig::default(),
+        };
+        assert_eq!(cfg.assistant_provider(), "deepseek");
+        assert_eq!(cfg.assistant_backend(), "ai-sdk");
+        assert_eq!(cfg.worker_provider(), "deepseek");
+        assert_eq!(cfg.worker_backend(), "ai-sdk");
+    }
+
+    #[test]
+    fn config_component_override_beats_global() {
+        // Component overrides global
+        let cfg = SikoConfig {
+            version: 1,
+            provider: Some("deepseek".to_string()),
+            backend: Some("ai-sdk".to_string()),
+            assistant: AssistantConfig {
+                provider: Some("kimi".to_string()),
+                backend: Some("claude-code".to_string()),
+                max_parallel_tasks: 2,
+            },
+            worker: WorkerConfig::default(),
+        };
+        assert_eq!(cfg.assistant_provider(), "kimi");
+        assert_eq!(cfg.assistant_backend(), "claude-code");
+        assert_eq!(cfg.worker_provider(), "deepseek"); // inherits global
+        assert_eq!(cfg.worker_backend(), "ai-sdk");     // inherits global
+    }
+
+    #[test]
+    fn config_defaults_when_none_set() {
+        let cfg = SikoConfig::default();
+        assert_eq!(cfg.assistant_provider(), "deepseek");
+        assert_eq!(cfg.assistant_backend(), "ai-sdk");
+        assert_eq!(cfg.worker_provider(), "deepseek");
+        assert_eq!(cfg.worker_backend(), "ai-sdk");
     }
 }

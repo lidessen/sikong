@@ -2826,6 +2826,8 @@ provider: {}
 backend: {}
 assistant:
   max_parallel_tasks: 2
+worker:
+  # inherits from global defaults
 "#,
         provider, backend
     );
@@ -2834,11 +2836,13 @@ assistant:
     println!("✅ Config written to {}", config_path.display());
     println!();
     println!("📋 Summary:");
-    println!("   Provider: {}", provider);
-    println!("   Backend:  {}", backend);
-    println!("   Config:   {}", config_path.display());
+    println!("   Global provider: {}", provider);
+    println!("   Global backend:  {}", backend);
+    println!("   Assistant:       inherits global (override per-component if needed)");
+    println!("   Worker:          inherits global (override per-component if needed)");
+    println!("   Config:          {}", config_path.display());
     if !has_key {
-        println!("   API key:  {} (set in env or ~/.sikong/.env)", key_var);
+        println!("   API key:         {} (set in env or ~/.sikong/.env)", key_var);
     }
     println!();
     println!("🚀 You can now use Sikong:");
