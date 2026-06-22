@@ -963,7 +963,7 @@ fn parse_node_operation(input: &str) -> Result<NodeOperation, Box<dyn std::error
         "combine" => Ok(NodeOperation::Combine),
         "verify" => Ok(NodeOperation::Verify),
         "commit" => Ok(NodeOperation::Commit),
-        other => Err(format!("unknown operation {other}").into()),
+        other => Err(format!("unknown operation '{other}'; expected one of: specify, plan, execute, combine, verify, commit").into()),
     }
 }
 
@@ -4234,4 +4234,51 @@ workspace:
         assert!(parts[1].parse::<u32>().is_ok());
         assert!(parts[2].parse::<u32>().is_ok());
     }
+    #[test]
+    fn parse_node_operation_specify() {
+        let result = parse_node_operation("specify");
+        assert_eq!(result.unwrap(), NodeOperation::Specify);
+    }
+
+    #[test]
+    fn parse_node_operation_case_insensitive() {
+        let result = parse_node_operation("EXECUTE");
+        assert_eq!(result.unwrap(), NodeOperation::Execute);
+    }
+
+    #[test]
+    fn parse_node_operation_trims_whitespace() {
+        let result = parse_node_operation("  plan  ");
+        assert_eq!(result.unwrap(), NodeOperation::Plan);
+    }
+
+    #[test]
+    fn parse_node_operation_all_variants() {
+        for (input, expected) in [
+            ("specify", NodeOperation::Specify),
+            ("plan", NodeOperation::Plan),
+            ("execute", NodeOperation::Execute),
+            ("combine", NodeOperation::Combine),
+            ("verify", NodeOperation::Verify),
+            ("commit", NodeOperation::Commit),
+        ] {
+            let result = parse_node_operation(input);
+            assert_eq!(result.unwrap(), expected, "failed for input: {input}");
+        }
+    }
+
+    #[test]
+    fn parse_node_operation_unknown_returns_error() {
+        let result = parse_node_operation("invalid_op");
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("invalid_op"), "error should mention the invalid input: {error}");
+        assert!(error.contains("specify"), "error should list valid operations: {error}");
+        assert!(error.contains("plan"), "error should list valid operations: {error}");
+        assert!(error.contains("execute"), "error should list valid operations: {error}");
+        assert!(error.contains("combine"), "error should list valid operations: {error}");
+        assert!(error.contains("verify"), "error should list valid operations: {error}");
+        assert!(error.contains("commit"), "error should list valid operations: {error}");
+    }
+
 }
