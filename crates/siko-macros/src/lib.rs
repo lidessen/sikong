@@ -48,7 +48,7 @@ pub fn toolset(args: TokenStream, input: TokenStream) -> TokenStream {
             Self::#variant => crate::AgentToolSpec {
                 name: #name.to_string(),
                 description: #description.to_string(),
-                input_schema: crate::mechanism::agent_run::schema_for::<#args_ty>(),
+                input_schema: crate::core::agent_run::schema_for::<#args_ty>(),
             }
         }
     });

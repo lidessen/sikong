@@ -1,12 +1,12 @@
-pub mod mechanism;
+pub mod base;
+pub mod core;
 pub mod harness;
-pub mod foundation;
 
-pub use foundation::config::*;
-pub use foundation::metrics::*;
-pub use foundation::workspace::*;
+pub use base::config::*;
+pub use base::metrics::*;
+pub use base::workspace::*;
 
-pub use mechanism::agent_run::{
+pub use core::agent_run::{
     AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRunScheduler,
     AgentRuntimeProfile, AgentTokenUsage, AgentToolCall, AgentToolSpec, CancellationToken,
     ProcessAgentRunScheduler, ProcessAgentRunSchedulerError,
@@ -18,12 +18,12 @@ pub use harness::assistant::{
     AssistantTaskBoardContext, AssistantTurn, AssistantTurnError, JsonRpcError, SessionReply,
     SessionState, run_acp_stdio_server,
 };
-pub use mechanism::task_board::{
+pub use core::task_board::{
     AssistantTask, AssistantTaskEvent, AssistantTaskEventRecord, AssistantTaskStatus,
     FileTaskStore, MemoryTaskStore, TaskBoard, TaskBoardSnapshot, TaskEngineRunner,
     TaskEngineRunnerFactory, TaskId, TaskStore, TaskWorkerFactory,
 };
-pub use mechanism::task_run::{
+pub use core::task_run::{
     AgentOperationContext, AgentRunDecodeError, AgentRunRecord, AgentRunResult, Artifact,
     ArtifactContentKind, ArtifactId, AttemptRecord, Budget, CapabilityProfile, Engine,
     EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,

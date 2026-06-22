@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use serde_json::Value;
 
-use crate::mechanism::agent_run::AgentTokenUsage;
-pub use crate::foundation::types::{ArtifactId, NodeId};
-use crate::foundation::workspace::WorkspaceError;
+use crate::core::agent_run::AgentTokenUsage;
+pub use crate::base::types::{ArtifactId, NodeId};
+use crate::base::workspace::WorkspaceError;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

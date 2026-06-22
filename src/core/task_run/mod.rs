@@ -5,7 +5,7 @@ mod resources;
 mod tools;
 mod types;
 
-use crate::foundation::workspace::WorkspaceSurface;
+use crate::base::workspace::WorkspaceSurface;
 
 pub use engine::Engine;
 pub use harness::{
