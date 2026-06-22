@@ -3,6 +3,8 @@ use crate::workspace::{WorkspaceChange, WorkspaceRequirement};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use std::fmt;
+
 use super::{ArtifactId, Budget, CapabilityProfile, NodeId, NodeStatus, ProblemKey};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -15,6 +17,18 @@ pub enum WorkSize {
     Medium,
     Large,
     XLarge,
+}
+
+impl fmt::Display for WorkSize {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Tiny => "tiny",
+            Self::Small => "small",
+            Self::Medium => "medium",
+            Self::Large => "large",
+            Self::XLarge => "xlarge",
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -41,6 +55,16 @@ pub enum NodePlan {
     Group(PlanGroup),
 }
 
+impl fmt::Display for NodePlan {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Execute => "Execute",
+            Self::Split => "Split",
+            Self::Group(_) => "Group",
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PlanGroup {
     pub mode: PlanGroupMode,
@@ -53,6 +77,15 @@ pub struct PlanGroup {
 pub enum PlanGroupMode {
     Stage,
     Parallel,
+}
+
+impl fmt::Display for PlanGroupMode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Stage => "stage",
+            Self::Parallel => "parallel",
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -279,5 +312,30 @@ mod tests {
         let key = ProblemKey("hello".to_string());
         assert_eq!(key.0, "hello");
         assert_eq!(format!("{:?}", key), "ProblemKey(\"hello\")");
+    }
+
+    #[test]
+    fn work_size_display_is_readable() {
+        assert_eq!(format!("{}", WorkSize::Tiny), "tiny");
+        assert_eq!(format!("{}", WorkSize::Small), "small");
+        assert_eq!(format!("{}", WorkSize::Medium), "medium");
+        assert_eq!(format!("{}", WorkSize::Large), "large");
+        assert_eq!(format!("{}", WorkSize::XLarge), "xlarge");
+    }
+
+    #[test]
+    fn node_plan_display_is_readable() {
+        assert_eq!(format!("{}", NodePlan::Execute), "Execute");
+        assert_eq!(format!("{}", NodePlan::Split), "Split");
+        assert_eq!(format!("{}", NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![],
+        })), "Group");
+    }
+
+    #[test]
+    fn plan_group_mode_display_is_readable() {
+        assert_eq!(format!("{}", PlanGroupMode::Stage), "stage");
+        assert_eq!(format!("{}", PlanGroupMode::Parallel), "parallel");
     }
 }

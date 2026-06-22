@@ -193,6 +193,12 @@ impl Default for Budget {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ProblemKey(pub String);
 
+impl fmt::Display for ProblemKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodeStatus {
     New,
@@ -425,5 +431,9 @@ mod tests {
         assert_eq!(format!("{}", FailureClass::UnsafeSideEffect), "unsafe_side_effect");
         assert_eq!(format!("{}", FailureClass::MergeConflict), "merge_conflict");
         assert_eq!(format!("{}", FailureClass::BudgetExhausted), "budget_exhausted");
+
+        // ProblemKey
+        assert_eq!(format!("{}", ProblemKey("hello".to_string())), "hello");
+        assert_eq!(format!("{}", ProblemKey("task-run-split-eval".to_string())), "task-run-split-eval");
     }
 }

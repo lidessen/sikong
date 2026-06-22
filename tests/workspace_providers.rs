@@ -470,3 +470,64 @@ mod path_allowed_tests {
         assert!(!path_allowed(patterns, Path::new("Cargo.lock")));
     }
 }
+
+    #[test]
+    fn single_star_matches_empty_prefix() {
+        // Pattern *.rs should match .rs (zero chars before the star)
+        let patterns = &["*.rs".into()];
+        assert!(path_allowed(patterns, Path::new(".rs")));
+        assert!(path_allowed(patterns, Path::new("a.rs")));
+        assert!(!path_allowed(patterns, Path::new(".RS")));
+    }
+
+    #[test]
+    fn single_star_matches_empty_suffix() {
+        // Pattern test_* should match test_ (zero chars after the star)
+        let patterns = &["test_*".into()];
+        assert!(path_allowed(patterns, Path::new("test_")));
+        assert!(path_allowed(patterns, Path::new("test_foo")));
+        assert!(!path_allowed(patterns, Path::new("test")));
+    }
+
+    #[test]
+    fn globstar_prefix_matches_top_level_files() {
+        // Pattern src/** should match src/ itself
+        let patterns = &["src/**".into()];
+        assert!(path_allowed(patterns, Path::new("src/main.rs")));
+        assert!(path_allowed(patterns, Path::new("src/deep/file.rs")));
+    }
+
+    #[test]
+    fn globstar_in_middle_with_adjacent_segments() {
+        // Pattern a/**/b/**/c should match a/b/c
+        let patterns = &["a/**/b/**/c".into()];
+        assert!(path_allowed(patterns, Path::new("a/b/c")));
+        assert!(path_allowed(patterns, Path::new("a/x/b/c")));
+        assert!(path_allowed(patterns, Path::new("a/b/x/c")));
+        assert!(path_allowed(patterns, Path::new("a/x/b/y/c")));
+        assert!(!path_allowed(patterns, Path::new("a/c")));
+        assert!(!path_allowed(patterns, Path::new("a/x/c")));
+    }
+
+    #[test]
+    fn glob_matching_is_case_sensitive() {
+        let patterns = &["*.rs".into()];
+        assert!(!path_allowed(patterns, Path::new("MAIN.RS")));
+        assert!(!path_allowed(patterns, Path::new("Main.Rs")));
+
+        let patterns = &["src/**/*.rs".into()];
+        assert!(!path_allowed(patterns, Path::new("SRC/main.rs")));
+        assert!(!path_allowed(patterns, Path::new("src/main.RS")));
+    }
+
+    #[test]
+    fn wildcard_matches_only_single_segment() {
+        // * should never cross path separator
+        let patterns = &["*.rs".into()];
+        assert!(!path_allowed(patterns, Path::new("sub/main.rs")));
+        assert!(!path_allowed(patterns, Path::new("a/b.rs")));
+
+        // ? should never cross path separator
+        let patterns = &["?.rs".into()];
+        assert!(!path_allowed(patterns, Path::new("ab/main.rs")));
+    }
