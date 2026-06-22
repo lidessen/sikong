@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -133,12 +132,12 @@ impl MetricsSnapshot {
         &self.costs
     }
 
-    /// Render the snapshot as a [] for embedding in JSON output.
+    /// Render the snapshot as a serde_json::Value for embedding in JSON output.
     ///
-    /// The structure matches [] output:
-    /// - : flat key-value map
-    /// - : keys mapped to arrays of millisecond values
-    /// - : keys mapped to arrays of cost values
+    /// The structure matches JSON output:
+    /// - `counters`: flat key-value map
+    /// - `timings`: keys mapped to arrays of millisecond values
+    /// - `costs`: keys mapped to arrays of cost values
     pub fn to_json_value(&self) -> serde_json::Value {
         let timings_ms: HashMap<String, Vec<f64>> = self
             .timings
@@ -162,14 +161,6 @@ impl MetricsSnapshot {
 // ---------------------------------------------------------------------------
 // JSON formatting
 // ---------------------------------------------------------------------------
-
-/// Serializable representation of a metrics snapshot for JSON output.
-#[derive(Serialize)]
-struct JsonMetricsOutput {
-    counters: HashMap<String, u64>,
-    timings: HashMap<String, Vec<f64>>,
-    costs: HashMap<String, Vec<f64>>,
-}
 
 /// Formats a [`MetricsSnapshot`] as a human-readable JSON string.
 ///
@@ -198,24 +189,8 @@ impl MetricsFormatter {
 /// Timings are rendered as millisecond floating-point values.
 /// The output is human-readable (pretty-printed) JSON.
 pub fn format_metrics(snapshot: &MetricsSnapshot) -> String {
-    let timings_ms: HashMap<String, Vec<f64>> = snapshot
-        .timings()
-        .iter()
-        .map(|(key, durations)| {
-            (
-                key.clone(),
-                durations.iter().map(|d| d.as_secs_f64() * 1000.0).collect(),
-            )
-        })
-        .collect();
-
-    let output = JsonMetricsOutput {
-        counters: snapshot.counters().clone(),
-        timings: timings_ms,
-        costs: snapshot.costs().clone(),
-    };
-
-    serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string())
+    serde_json::to_string_pretty(&snapshot.to_json_value())
+        .unwrap_or_else(|_| "{}".to_string())
 }
 
 #[cfg(test)]

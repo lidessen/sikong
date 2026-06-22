@@ -1,117 +1,23 @@
 id: autonomous-iteration
 max_steps: 64
 task: |
-  You are running an autonomous self-improvement cycle for the Sikong project
-  using the engine's recursive divide-and-conquer architecture (人民史观).
+  这是 Sikong 自我迭代的一轮。每一轮都是前一轮的延续——前一轮做了什么、学到了什么、还剩什么没做，都在 development-log 里。
 
-  This cycle follows a simple rhythm: look → think → change → check → note.
-  Read the current state before proposing anything. Check your work after
-  changing anything. Record what you learned for the next cycle.
+  你的工作：
+  1. 读 development-log/2026-06.md 和最近的 git log，
+     了解当前状态和上一轮做了什么
+  2. 决定这一轮做什么能让项目更好。不是"修一个 bug"，
+     是"在这一轮结束时，项目比开始的时候好了什么"
+  3. 做出来。改代码、加测试、删冗余、改文档——什么都行。
+  4. 验证。cargo build && cargo test。
+  5. 记下来。在 development-log 里追加这一轮做了什么、
+     学到了什么、下一轮可以考虑做什么。
 
-  == INVESTIGATION REQUIREMENT (before any child analysis) ==
-  Each child must start by reading the current state of its evidence surface.
-  No claim may be made without citing at least one concrete observation from
-  the current project state (a filename, a code snippet, a test output).
-  If the child cannot find evidence for a claim, it must report
-  "Not enough evidence to assess" rather than inventing a finding.
-
-  == SCOPE ASSESSMENT (Specify step) ==
-  When asked to assess the scope, report it as **Large** with this reason:
-  "The analysis requires multiple independent perspectives that must be
-  investigated in parallel: code structure, test coverage, design coherence,
-  and documentation accuracy. A single agent cannot reliably cover all
-  aspects without context overflow."
-
-  == PLAN (Plan step — produce 3-4 parallel child nodes) ==
-  Decompose the work into **3-4 parallel child nodes**, each analyzing a
-  different aspect of the Sikong project. Each child must have a bounded,
-  focused intent. Example aspects (pick which apply best):
-
-  1. **Code analysis** — Examine src/ for structural issues, dead code,
-     missing error handling, or opportunities to simplify.
-  2. **Test analysis** — Examine tests/ and the test suite for gaps,
-     flaky patterns, or untested edge cases.
-  3. **Design analysis** — Read design/*.md and assess whether the
-     implementation still matches the documented architecture.
-  4. **Documentation / config analysis** — Check README, config files,
-     examples, and any user-facing docs for accuracy and completeness.
-
-  Each child should be scoped as **Small** or **Medium** so it can be
-  executed atomically by a single agent. Each child's workspace should
-  be read-only (since this is analysis, not modification).
-
-  Assign each child a distinct key like "code-analysis", "test-analysis",
-  "design-analysis", etc.
-
-  == FIND THE MAIN PROBLEM (Plan & Combine) ==
-  During planning, identify the single biggest gap between where the project
-  is and where it should be. This is the main problem to solve. Evidence from
-  different angles might point to different problems — pick the one that, if
-  fixed, makes everything else easier. The combined proposal must fix this
-  main problem, not dance around it. An unresolved main problem means the
-  proposal is not ready.
-
-  Examples of main problems:
-  - Design doc says X but code does Y
-  - Code has a fragile pattern that has no test coverage
-  - Documentation describes a feature that no longer exists
-  - Two design documents give inconsistent guidance
-
-  == EVIDENCE REQUIREMENT (Combine & Verify) ==
-  Every child finding and every combined proposal must include:
-  - A falsifiable claim: "If we change X, then Y should improve."
-  - A specific verification command: "Run `cargo build` and check that Z compiles."
-  - Concrete observations: filenames, line numbers, error messages, test outputs.
-  Proposals without falsifiable evidence must be rejected.
-
-  == COMBINE (parent step) ==
-  After all children complete and their findings are accepted, synthesize
-  the independent findings into a coherent assessment. Identify cross-cutting
-  themes (e.g., "both code and test analysis found the same fragility in
-  module X") and the principal contradiction. Propose ONE specific, bounded
-  improvement that resolves the principal contradiction. The improvement must
-  be verifiable with `cargo build`.
-
-  == CHECK (each child + parent) ==
-  Each child's findings must be verified independently before they become
-  durable. The parent's combined proposal must also pass verification:
-  check that the proposed improvement is bounded, actionable, and testable.
-  Every claim must cite the evidence that supports it. Claims without evidence
-  are rejected.
-
-  == NOTE (after implementation) ==
-  After implementing, note:
-  - What was the main problem?
-  - What change was made?
-  - What test proves it works?
-  - What's the next thing likely to need fixing?
-
-  == EXECUTION RULES ==
-  - After Combine, select the SINGLE most impactful finding and implement
-    it: write the code change, run cargo build and cargo test, then
-    git add -A && git commit -m '...'.
-  - Do implement. Analysis without implementation is incomplete.
-  - Each child has a bounded scope — analyze one aspect independently.
-    Use the full read scope to inspect the project.
-  - The combined output is an implementation commit, not just a proposal.
-  - The final step is to RECORD the learning from this cycle.
+  引擎会自己决定怎么拆、怎么合、怎么验。
+  你只需要告诉它：这一轮要往哪个方向走。
 expectation: |
-  The engine must demonstrate the full cycle: look → think → change → check → note.
-
-  1. **Look** — Specify sees Large scope. Plan splits into 3-4 child nodes.
-  2. **Think** — Children each analyze their area independently.
-  3. **Change** — Combine selects ONE fix and implements it.
-  4. **Check** — Every claim has evidence. Build and test pass.
-  5. **Note** — Record what was done and what's next.
-
-  Passing requires evidence of all five steps in the transcript.
-
-  Specific signals:
-  - Child findings cite filenames, line numbers, or specific observations
-  - The combine identifies a cross-cutting pattern
-  - The proposed improvement is specific enough to verify with one command
-  - No claim is accepted without supporting evidence
-  - The cycle closes by recording learning
+  一轮迭代完成：项目比开始时更好了。有代码变更或文档更新，
+  验证通过，提交了，记录了。
 workspace:
   provider: current-file-system
   read_scope:
