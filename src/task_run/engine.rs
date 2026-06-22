@@ -708,12 +708,11 @@ where
             return Ok(None);
         }
 
-        self.run_agent(node_id, NodeOperation::Specify, cancellation)
-            .await?;
+        // execution-quality failure: skip Specify, route directly back to Execute
         self.record(
             node_id,
             NodeOperation::Specify,
-            format!("retry after {failure_class:?}"),
+            format!("retrying execute after {failure_class:?}"),
         );
         self.node_mut(node_id)?.candidate = None;
         self.execute(node_id, cancellation).await?;
