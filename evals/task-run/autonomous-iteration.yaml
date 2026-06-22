@@ -4,6 +4,17 @@ task: |
   You are running an autonomous self-improvement cycle for the Sikong project
   using the engine's recursive divide-and-conquer architecture (人民史观).
 
+  This cycle is governed by the practice-theory-practice principle: knowledge
+  arises from practice, returns to guide practice, and is verified by practice.
+  The cycle follows: INVESTIGATE → SYNTHESIZE → IMPLEMENT → VERIFY → RECORD.
+
+  == INVESTIGATION REQUIREMENT (before any child analysis) ==
+  Each child must start by reading the current state of its evidence surface.
+  No claim may be made without citing at least one concrete observation from
+  the current project state (a filename, a code snippet, a test output).
+  If the child cannot find evidence for a claim, it must report
+  "Not enough evidence to assess" rather than inventing a finding.
+
   == SCOPE ASSESSMENT (Specify step) ==
   When asked to assess the scope, report it as **Large** with this reason:
   "The analysis requires multiple independent perspectives that must be
@@ -32,17 +43,47 @@ task: |
   Assign each child a distinct key like "code-analysis", "test-analysis",
   "design-analysis", etc.
 
+  == CONTRADICTION RESOLUTION (Plan & Combine) ==
+  Identify at least one contradiction during planning: a place where evidence
+  from one surface contradicts evidence from another, or where design intent
+  differs from implementation reality. The combined proposal must resolve
+  this contradiction, not paper over it. An unresolved contradiction is a
+  blocker for acceptance.
+
+  Examples of contradictions:
+  - Design doc says X but code does Y
+  - Code analysis finds a fragile pattern that test analysis says is untested
+  - Documentation describes a feature that no longer exists
+  - Two design documents give inconsistent guidance
+
+  == EVIDENCE REQUIREMENT (Combine & Verify) ==
+  Every child finding and every combined proposal must include:
+  - A falsifiable claim: "If we change X, then Y should improve."
+  - A specific verification command: "Run `cargo build` and check that Z compiles."
+  - Concrete observations: filenames, line numbers, error messages, test outputs.
+  Proposals without falsifiable evidence must be rejected.
+
   == COMBINE (parent step) ==
   After all children complete and their findings are accepted, synthesize
   the independent findings into a coherent assessment. Identify cross-cutting
   themes (e.g., "both code and test analysis found the same fragility in
-  module X"). Propose ONE specific, bounded improvement that addresses the
-  most impactful finding. The improvement must be verifiable with `cargo build`.
+  module X") and the principal contradiction. Propose ONE specific, bounded
+  improvement that resolves the principal contradiction. The improvement must
+  be verifiable with `cargo build`.
 
   == VERIFY (each child + parent) ==
   Each child's findings must be verified independently before they become
   durable. The parent's combined proposal must also pass verification:
   check that the proposed improvement is bounded, actionable, and testable.
+  Every claim must cite the evidence that supports it. Claims without evidence
+  are rejected.
+
+  == RECORD (after implementation) ==
+  After implementing, record:
+  - What was the principal contradiction?
+  - What change was made?
+  - What evidence shows the contradiction is resolved?
+  - What remains as the next likely contradiction?
 
   == EXECUTION RULES ==
   - After Combine, select the SINGLE most impactful finding and implement
@@ -52,16 +93,31 @@ task: |
   - Each child has a bounded scope — analyze one aspect independently.
     Use the full read scope to inspect the project.
   - The combined output is an implementation commit, not just a proposal.
+  - The final step is to RECORD the learning from this cycle.
 expectation: |
-  The engine must demonstrate the full recursive divide-and-conquer cycle:
-  1. Specify — assess scope as Large, triggering Plan
-  2. Plan — produce a parallel group with 3-4 child nodes, each with a
-     distinct analytical focus
-  3. Each child resolves independently (Specify → Execute → Verify → Commit)
-  4. Combine — parent synthesizes child findings into a coherent assessment
-     and proposes one bounded improvement
-  5. Verify — the combined proposal passes verification before it is accepted
+  The engine must demonstrate the full recursive divide-and-conquer cycle
+  governed by the practice-theory-practice principle:
+
+  1. **Investigate** — Specify assesses scope as Large; each child reads
+     the current state before making claims.
+  2. **Synthesize** — Plan produces a parallel group with 3-4 child nodes,
+     each with a distinct analytical focus. A contradiction is identified.
+  3. **Implement** — Each child resolves independently (Specify → Execute →
+     Verify → Commit). Combine synthesizes findings and resolves the
+     principal contradiction into one bounded proposal.
+  4. **Verify** — Every claim has falsifiable evidence. The combined proposal
+     passes verification with cited evidence.
+  5. **Record** — The cycle ends by recording what was learned and what
+     contradiction remains.
+
   Passing requires evidence of all five steps in the transcript.
+
+  Specific behavioral signals:
+  - Child findings cite filenames, line numbers, or specific observations
+  - The combine identifies a cross-cutting contradiction
+  - The proposed improvement includes a falsifiable claim and verification command
+  - No claim is accepted without supporting evidence
+  - The cycle closes by recording learning
 workspace:
   provider: current-file-system
   read_scope:
