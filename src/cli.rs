@@ -207,7 +207,13 @@ fn run_cli(cli: Cli) -> i32 {
                 1
             }
         },
-        Some(Command::Dogfood { command }) => match command {
+        Some(Command::Dogfood { command }) => {
+            if std::env::var("SIKONG_DEV").as_deref() != Ok("1") {
+                error!("dogfood commands require SIKONG_DEV=1");
+                eprintln!("error: dogfood commands are internal. Set SIKONG_DEV=1 to enable.");
+                return 1;
+            }
+            match command {
             DogfoodCommand::List => {
                 for scenario in task_run_split_eval_scenarios() {
                     println!(
@@ -242,6 +248,7 @@ fn run_cli(cli: Cli) -> i32 {
                     }
                 }
             }
+        }
         },
         Some(Command::Setup) => match run_setup() {
             Ok(()) => 0,
