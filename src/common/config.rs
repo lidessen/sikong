@@ -26,7 +26,6 @@ pub struct ProviderConfig {
     pub env: std::collections::HashMap<String, String>,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct AssistantConfig {
@@ -48,10 +47,7 @@ pub struct WorkerConfig {
 
 /// Resolve effective provider for a component.
 /// Priority: component override > global > env var > default
-pub fn resolve_provider(
-    component: &Option<String>,
-    global: &Option<String>,
-) -> String {
+pub fn resolve_provider(component: &Option<String>, global: &Option<String>) -> String {
     component
         .clone()
         .or_else(|| global.clone())
@@ -61,10 +57,7 @@ pub fn resolve_provider(
 
 /// Resolve effective backend for a component.
 /// Priority: component override > global > env var > default
-pub fn resolve_backend(
-    component: &Option<String>,
-    global: &Option<String>,
-) -> String {
+pub fn resolve_backend(component: &Option<String>, global: &Option<String>) -> String {
     component
         .clone()
         .or_else(|| global.clone())
@@ -94,7 +87,6 @@ impl Default for AssistantConfig {
         }
     }
 }
-
 
 impl SikoConfig {
     pub fn load() -> Result<Self, config::ConfigError> {
@@ -445,7 +437,7 @@ mod tests {
         assert_eq!(cfg.assistant_provider(), "kimi");
         assert_eq!(cfg.assistant_backend(), "claude-code");
         assert_eq!(cfg.worker_provider(), "deepseek"); // inherits global
-        assert_eq!(cfg.worker_backend(), "ai-sdk");     // inherits global
+        assert_eq!(cfg.worker_backend(), "ai-sdk"); // inherits global
     }
 
     #[test]
@@ -487,7 +479,10 @@ mod tests {
 
     #[test]
     fn resolve_backend_component_override_beats_global() {
-        let result = resolve_backend(&Some("claude-code".to_string()), &Some("ai-sdk".to_string()));
+        let result = resolve_backend(
+            &Some("claude-code".to_string()),
+            &Some("ai-sdk".to_string()),
+        );
         assert_eq!(result, "claude-code");
     }
 

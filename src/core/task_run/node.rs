@@ -175,13 +175,17 @@ pub struct Artifact {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::workspace::WorkspaceRequirement;
-    use crate::CapabilityProfile;
     use crate::Budget;
+    use crate::CapabilityProfile;
+    use crate::common::workspace::WorkspaceRequirement;
 
     #[test]
     fn scope_assessment_new_sets_all_fields() {
-        let assessment = ScopeAssessment::new("Implement feature X", WorkSize::Medium, "Requires new module");
+        let assessment = ScopeAssessment::new(
+            "Implement feature X",
+            WorkSize::Medium,
+            "Requires new module",
+        );
         assert_eq!(assessment.next, "Implement feature X");
         assert_eq!(assessment.size, WorkSize::Medium);
         assert_eq!(assessment.reason, "Requires new module");
@@ -195,13 +199,15 @@ mod tests {
 
     #[test]
     fn scope_assessment_new_with_large_size() {
-        let assessment = ScopeAssessment::new("Big refactor", WorkSize::Large, "Multiple modules affected");
+        let assessment =
+            ScopeAssessment::new("Big refactor", WorkSize::Large, "Multiple modules affected");
         assert_eq!(assessment.size, WorkSize::Large);
     }
 
     #[test]
     fn scope_assessment_new_with_xlarge_size() {
-        let assessment = ScopeAssessment::new("Architecture change", WorkSize::XLarge, "Core redesign");
+        let assessment =
+            ScopeAssessment::new("Architecture change", WorkSize::XLarge, "Core redesign");
         assert_eq!(assessment.size, WorkSize::XLarge);
     }
 
@@ -251,14 +257,20 @@ mod tests {
     #[test]
     fn node_plan_variants_are_distinct() {
         assert_ne!(NodePlan::Execute, NodePlan::NeedsPlanning);
-        assert_ne!(NodePlan::Execute, NodePlan::Group(PlanGroup {
-            mode: PlanGroupMode::Parallel,
-            items: vec![],
-        }));
-        assert_ne!(NodePlan::NeedsPlanning, NodePlan::Group(PlanGroup {
-            mode: PlanGroupMode::Stage,
-            items: vec![],
-        }));
+        assert_ne!(
+            NodePlan::Execute,
+            NodePlan::Group(PlanGroup {
+                mode: PlanGroupMode::Parallel,
+                items: vec![],
+            })
+        );
+        assert_ne!(
+            NodePlan::NeedsPlanning,
+            NodePlan::Group(PlanGroup {
+                mode: PlanGroupMode::Stage,
+                items: vec![],
+            })
+        );
     }
 
     #[test]
@@ -296,7 +308,13 @@ mod tests {
 
     #[test]
     fn work_size_serde_roundtrip() {
-        for size in [WorkSize::Tiny, WorkSize::Small, WorkSize::Medium, WorkSize::Large, WorkSize::XLarge] {
+        for size in [
+            WorkSize::Tiny,
+            WorkSize::Small,
+            WorkSize::Medium,
+            WorkSize::Large,
+            WorkSize::XLarge,
+        ] {
             let json = serde_json::to_string(&size).unwrap();
             let deserialized: WorkSize = serde_json::from_str(&json).unwrap();
             assert_eq!(size, deserialized);
@@ -349,10 +367,16 @@ mod tests {
     fn node_plan_display_is_readable() {
         assert_eq!(format!("{}", NodePlan::Execute), "Execute");
         assert_eq!(format!("{}", NodePlan::NeedsPlanning), "NeedsPlanning");
-        assert_eq!(format!("{}", NodePlan::Group(PlanGroup {
-            mode: PlanGroupMode::Parallel,
-            items: vec![],
-        })), "Group");
+        assert_eq!(
+            format!(
+                "{}",
+                NodePlan::Group(PlanGroup {
+                    mode: PlanGroupMode::Parallel,
+                    items: vec![],
+                })
+            ),
+            "Group"
+        );
     }
 
     #[test]
@@ -366,8 +390,16 @@ mod tests {
         let sa = ScopeAssessment::new("Add tests", WorkSize::Small, "Improve coverage");
         let display = format!("{}", sa);
         assert!(display.contains("small"), "expected small in '{}'", display);
-        assert!(display.contains("Add tests"), "expected 'Add tests' in '{}'", display);
-        assert!(display.contains("Improve coverage"), "expected 'Improve coverage' in '{}'", display);
+        assert!(
+            display.contains("Add tests"),
+            "expected 'Add tests' in '{}'",
+            display
+        );
+        assert!(
+            display.contains("Improve coverage"),
+            "expected 'Improve coverage' in '{}'",
+            display
+        );
     }
 
     #[test]

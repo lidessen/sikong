@@ -246,7 +246,10 @@ mod tests {
     fn temp_path_for_handles_path_with_dot_in_directory() {
         let path = Path::new("/home/user/.config/app/data.yaml");
         let result = temp_path_for(path);
-        assert_eq!(result, PathBuf::from("/home/user/.config/app/data.yaml.tmp"));
+        assert_eq!(
+            result,
+            PathBuf::from("/home/user/.config/app/data.yaml.tmp")
+        );
     }
 
     // ── invalid_data tests ────────────────────────────────────────────────
@@ -256,7 +259,10 @@ mod tests {
         let error = invalid_data("something went wrong");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         let msg = error.to_string();
-        assert!(msg.contains("something went wrong"), "error should contain message: {msg}");
+        assert!(
+            msg.contains("something went wrong"),
+            "error should contain message: {msg}"
+        );
     }
 
     #[test]
@@ -272,6 +278,9 @@ mod tests {
         let error = invalid_data(inner);
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         let msg = error.to_string();
-        assert!(msg.contains("inner error"), "error should contain inner message: {msg}");
+        assert!(
+            msg.contains("inner error"),
+            "error should contain inner message: {msg}"
+        );
     }
 }

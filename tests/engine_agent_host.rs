@@ -407,4 +407,3 @@ async fn host_git_workspace_surface_is_written_captured_and_cleaned() {
         run.operation == NodeOperation::Execute && run.report.contains("tool calls submit_work")
     }));
 }
-

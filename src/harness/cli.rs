@@ -3,12 +3,7 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use crate::{
-    common::metrics::{MetricsCollector, MetricsFormatter},
-    non_empty_env,
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
     AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
@@ -17,8 +12,12 @@ use crate::{
     NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationHarness, PlanGroup,
     PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig, TaskStore,
     WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface, Workspaces,
-    run_acp_stdio_server,
+    common::metrics::{MetricsCollector, MetricsFormatter},
+    non_empty_env, run_acp_stdio_server,
 };
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
@@ -50,10 +49,7 @@ fn run_cli(cli: Cli) -> i32 {
     match cli.command {
         Some(Command::Assistant {
             acp: false,
-            command:
-                Some(AssistantCommand::List {
-                    json,
-                }),
+            command: Some(AssistantCommand::List { json }),
         }) => match print_assistant_list(json) {
             Ok(()) => 0,
             Err(error) => {
@@ -155,54 +151,54 @@ fn run_cli(cli: Cli) -> i32 {
                 return 1;
             }
             match command {
-            EvalCommand::TaskRunSplit {
-                task,
-                scenario,
-                scenario_file,
-                artifact_dir,
-                route_only,
-                json,
-            } => match run_task_run_split_eval(
-                task,
-                scenario,
-                scenario_file,
-                artifact_dir,
-                route_only,
-                json,
-            ) {
-                Ok(passed) => {
-                    if passed {
-                        0
-                    } else {
+                EvalCommand::TaskRunSplit {
+                    task,
+                    scenario,
+                    scenario_file,
+                    artifact_dir,
+                    route_only,
+                    json,
+                } => match run_task_run_split_eval(
+                    task,
+                    scenario,
+                    scenario_file,
+                    artifact_dir,
+                    route_only,
+                    json,
+                ) {
+                    Ok(passed) => {
+                        if passed {
+                            0
+                        } else {
+                            1
+                        }
+                    }
+                    Err(error) => {
+                        error!(%error, "failed to run eval");
+                        eprintln!("failed to run eval: {error}");
                         1
                     }
-                }
-                Err(error) => {
-                    error!(%error, "failed to run eval");
-                    eprintln!("failed to run eval: {error}");
-                    1
-                }
-            },
-            EvalCommand::TaskRunOperation {
-                operation,
-                scenario,
-                json,
-            } => match run_task_run_operation_eval(operation, scenario, json) {
-                Ok(passed) => {
-                    if passed {
-                        0
-                    } else {
+                },
+                EvalCommand::TaskRunOperation {
+                    operation,
+                    scenario,
+                    json,
+                } => match run_task_run_operation_eval(operation, scenario, json) {
+                    Ok(passed) => {
+                        if passed {
+                            0
+                        } else {
+                            1
+                        }
+                    }
+                    Err(error) => {
+                        error!(%error, "failed to run eval");
+                        eprintln!("failed to run eval: {error}");
                         1
                     }
-                }
-                Err(error) => {
-                    error!(%error, "failed to run eval");
-                    eprintln!("failed to run eval: {error}");
-                    1
-                }
-            },
+                },
+            }
         }
-        },
         Some(Command::Run {
             task,
             wait_ms,
@@ -228,42 +224,48 @@ fn run_cli(cli: Cli) -> i32 {
                 return 1;
             }
             match command {
-            DogfoodCommand::List => {
-                for scenario in task_run_split_eval_scenarios() {
-                    println!(
-                        "{}: {}",
-                        scenario.id,
-                        scenario.task.lines().next().unwrap_or("")
-                    );
+                DogfoodCommand::List => {
+                    for scenario in task_run_split_eval_scenarios() {
+                        println!(
+                            "{}: {}",
+                            scenario.id,
+                            scenario.task.lines().next().unwrap_or("")
+                        );
+                    }
+                    0
                 }
-                0
-            }
-            DogfoodCommand::Run {
-                scenario_file,
-                scenario,
-                artifact_dir,
-                route_only,
-                log,
-                json,
-            } => {
-                match run_dogfood_run(scenario_file, scenario, artifact_dir, route_only, log, json)
-                {
-                    Ok(passed) => {
-                        if passed {
-                            0
-                        } else {
+                DogfoodCommand::Run {
+                    scenario_file,
+                    scenario,
+                    artifact_dir,
+                    route_only,
+                    log,
+                    json,
+                } => {
+                    match run_dogfood_run(
+                        scenario_file,
+                        scenario,
+                        artifact_dir,
+                        route_only,
+                        log,
+                        json,
+                    ) {
+                        Ok(passed) => {
+                            if passed {
+                                0
+                            } else {
+                                1
+                            }
+                        }
+                        Err(error) => {
+                            error!(%error, "failed to run dogfood scenario");
+                            eprintln!("failed to run dogfood scenario: {error}");
                             1
                         }
-                    }
-                    Err(error) => {
-                        error!(%error, "failed to run dogfood scenario");
-                        eprintln!("failed to run dogfood scenario: {error}");
-                        1
                     }
                 }
             }
         }
-        },
         Some(Command::Setup) => match run_setup() {
             Ok(()) => 0,
             Err(error) => {
@@ -274,7 +276,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(Command::Metrics) => {
             run_metrics_command();
             0
-        },
+        }
     }
 }
 
@@ -536,7 +538,6 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
 fn run_assistant_prompt(
     message: Vec<String>,
     wait_ms: u64,
@@ -666,7 +667,9 @@ fn resolve_assistant_prompt_workspace(
     match workspace {
         AssistantPromptWorkspace::Memory => {
             if !write_scope.is_empty() {
-                return Err("--write-scope requires --workspace current-git or current-file-system".into());
+                return Err(
+                    "--write-scope requires --workspace current-git or current-file-system".into(),
+                );
             }
             Ok(WorkspaceRequirement::memory())
         }
@@ -748,9 +751,7 @@ fn print_assistant_logs(
     Ok(())
 }
 
-fn print_assistant_list(
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn print_assistant_list(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let tasks = store.list_tasks();
@@ -1066,9 +1067,7 @@ async fn run_task_run_split_eval_async(
                     passed,
                 );
             } else {
-                metrics_collector.record_agent_run(
-                    &operation, 0, 0, 0, duration_ms, passed,
-                );
+                metrics_collector.record_agent_run(&operation, 0, 0, 0, duration_ms, passed);
             }
         }
         let metrics = metrics_collector.snapshot().to_json_value();
@@ -1225,9 +1224,7 @@ async fn run_dogfood_run_async(
                     passed,
                 );
             } else {
-                metrics_collector.record_agent_run(
-                    &operation, 0, 0, 0, duration_ms, passed,
-                );
+                metrics_collector.record_agent_run(&operation, 0, 0, 0, duration_ms, passed);
             }
         }
         let metrics = metrics_collector.snapshot().to_json_value();
@@ -2753,13 +2750,10 @@ struct AgentHostLaunch {
     args: Vec<String>,
 }
 
-fn resolve_agent_loop_launch(
-    debug: &DebugConfig,
-    max_steps: usize,
-) -> AgentHostLaunch {
+fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHostLaunch {
     let mut launch = resolve_agent_host_launch(debug);
     let config = SikoConfig::load().ok();
-    
+
     let provider = std::env::var("SIKONG_AGENT_HOST_PROVIDER")
         .ok()
         .filter(|value| {
@@ -2773,10 +2767,7 @@ fn resolve_agent_loop_launch(
     let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
         .ok()
         .filter(|value| {
-            value == "ai-sdk"
-                || value == "claude-code"
-                || value == "codex"
-                || value == "cursor"
+            value == "ai-sdk" || value == "claude-code" || value == "codex" || value == "cursor"
         })
         .unwrap_or_else(|| "ai-sdk".to_string());
     let model = std::env::var("SIKONG_AGENT_HOST_MODEL")
@@ -2934,30 +2925,96 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     println!("╚══════════════════════════════════════════════╝");
     println!();
 
-    let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty()).is_some();
-    let has_kimi_key = std::env::var("KIMI_CODE_API_KEY").ok().filter(|k| !k.is_empty()).is_some();
-    let has_claude_code = std::process::Command::new("which").arg("claude").output()
-        .map(|o| o.status.success()).unwrap_or(false);
-    let has_codex = std::process::Command::new("which").arg("codex").output()
-        .map(|o| o.status.success()).unwrap_or(false);
-    let has_cursor = std::process::Command::new("which").arg("cursor").output()
-        .map(|o| o.status.success()).unwrap_or(false);
+    let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .is_some();
+    let has_kimi_key = std::env::var("KIMI_CODE_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .is_some();
+    let has_claude_code = std::process::Command::new("which")
+        .arg("claude")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let has_codex = std::process::Command::new("which")
+        .arg("codex")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let has_cursor = std::process::Command::new("which")
+        .arg("cursor")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
     println!("🔍 Auto-detection:");
-    println!("   DEEPSEEK_API_KEY       {}", if has_deepseek_key { "✅ found" } else { "⛔ not set" });
-    println!("   KIMI_CODE_API_KEY      {}", if has_kimi_key { "✅ found" } else { "⛔ not set" });
-    println!("   Claude Code CLI        {}", if has_claude_code { "✅ detected" } else { "⛔ not found" });
-    println!("   Codex CLI              {}", if has_codex { "✅ detected" } else { "⛔ not found" });
-    println!("   Cursor CLI             {}", if has_cursor { "✅ detected" } else { "⛔ not found" });
+    println!(
+        "   DEEPSEEK_API_KEY       {}",
+        if has_deepseek_key {
+            "✅ found"
+        } else {
+            "⛔ not set"
+        }
+    );
+    println!(
+        "   KIMI_CODE_API_KEY      {}",
+        if has_kimi_key {
+            "✅ found"
+        } else {
+            "⛔ not set"
+        }
+    );
+    println!(
+        "   Claude Code CLI        {}",
+        if has_claude_code {
+            "✅ detected"
+        } else {
+            "⛔ not found"
+        }
+    );
+    println!(
+        "   Codex CLI              {}",
+        if has_codex {
+            "✅ detected"
+        } else {
+            "⛔ not found"
+        }
+    );
+    println!(
+        "   Cursor CLI             {}",
+        if has_cursor {
+            "✅ detected"
+        } else {
+            "⛔ not found"
+        }
+    );
     println!();
 
     // Step 1: Select provider
     let mut provider_opts: Vec<(&str, &str)> = Vec::new();
-    if has_deepseek_key { provider_opts.push(("DeepSeek v4 Flash (needs API key)", "deepseek")); }
-    if has_kimi_key { provider_opts.push(("Kimi (needs API key)", "kimi")); }
-    if has_claude_code { provider_opts.push(("Claude Code (uses your subscription, no API key needed)", "claude")); }
-    if has_codex { provider_opts.push(("Codex (uses your subscription, no API key needed)", "codex")); }
-    if has_cursor { provider_opts.push(("Cursor (uses your subscription, no API key needed)", "cursor")); }
+    if has_deepseek_key {
+        provider_opts.push(("DeepSeek v4 Flash (needs API key)", "deepseek"));
+    }
+    if has_kimi_key {
+        provider_opts.push(("Kimi (needs API key)", "kimi"));
+    }
+    if has_claude_code {
+        provider_opts.push((
+            "Claude Code (uses your subscription, no API key needed)",
+            "claude",
+        ));
+    }
+    if has_codex {
+        provider_opts.push(("Codex (uses your subscription, no API key needed)", "codex"));
+    }
+    if has_cursor {
+        provider_opts.push((
+            "Cursor (uses your subscription, no API key needed)",
+            "cursor",
+        ));
+    }
     if provider_opts.is_empty() {
         provider_opts.push(("No API keys or tools detected — configure later", "none"));
     }
@@ -2965,22 +3022,28 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     let prov_idx = Select::with_theme(&theme)
         .with_prompt("Select LLM provider")
         .default(0)
-        .items(&provider_opts.iter().map(|(l,_)| *l).collect::<Vec<_>>())
+        .items(&provider_opts.iter().map(|(l, _)| *l).collect::<Vec<_>>())
         .interact()?;
     let provider = provider_opts[prov_idx].1;
 
     // Step 2: Determine backend (some providers have fixed backends)
     let (backend, needs_api_key) = match provider {
         "claude" => {
-            println!("   ℹ️  Claude Code backend — uses the `claude` CLI with your existing subscription.");
+            println!(
+                "   ℹ️  Claude Code backend — uses the `claude` CLI with your existing subscription."
+            );
             ("claude-code".to_string(), false)
         }
         "codex" => {
-            println!("   ℹ️  Codex backend — uses the `codex` CLI with your existing subscription.");
+            println!(
+                "   ℹ️  Codex backend — uses the `codex` CLI with your existing subscription."
+            );
             ("codex".to_string(), false)
         }
         "cursor" => {
-            println!("   ℹ️  Cursor backend — uses the `cursor` CLI with your existing subscription.");
+            println!(
+                "   ℹ️  Cursor backend — uses the `cursor` CLI with your existing subscription."
+            );
             ("cursor".to_string(), false)
         }
         "kimi" => {
@@ -2988,7 +3051,9 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   ℹ️  Kimi requires Claude Code runtime.");
                 ("claude-code".to_string(), true)
             } else {
-                println!("⚠️  Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code");
+                println!(
+                    "⚠️  Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code"
+                );
                 return Ok(());
             }
         }
@@ -3002,7 +3067,7 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
             let b_idx = Select::with_theme(&theme)
                 .with_prompt("Select execution backend")
                 .default(0)
-                .items(&backend_opts.iter().map(|(l,_)| *l).collect::<Vec<_>>())
+                .items(&backend_opts.iter().map(|(l, _)| *l).collect::<Vec<_>>())
                 .interact()?;
             (backend_opts[b_idx].1.to_string(), true)
         }
@@ -3039,7 +3104,10 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
             "kimi" => "KIMI_CODE_API_KEY",
             _ => "DEEPSEEK_API_KEY",
         };
-        let has_key = std::env::var(key_var).ok().filter(|k| !k.is_empty()).is_some();
+        let has_key = std::env::var(key_var)
+            .ok()
+            .filter(|k| !k.is_empty())
+            .is_some();
         if !has_key {
             println!();
             println!("🔑 {} is not set.", key_var);
@@ -3049,8 +3117,15 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
                 .interact_text()?;
             if !api_key.is_empty() {
                 env_entries.push((key_var.to_string(), api_key.clone()));
-                let masked = if api_key.len() > 4 { format!("{}...", &api_key[..4]) } else { String::new() };
-                println!("   ℹ️  Saved to config. Also add to shell: export {}={}", key_var, masked);
+                let masked = if api_key.len() > 4 {
+                    format!("{}...", &api_key[..4])
+                } else {
+                    String::new()
+                };
+                println!(
+                    "   ℹ️  Saved to config. Also add to shell: export {}={}",
+                    key_var, masked
+                );
             }
         }
     }
@@ -3090,13 +3165,29 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 Summary:");
     println!("   Provider:   {}", provider);
     println!("   Backend:    {}", backend);
-    println!("   Worker:     {}", if use_real_agent { "agent-loop (real agents)" } else { "mock (default)" });
+    println!(
+        "   Worker:     {}",
+        if use_real_agent {
+            "agent-loop (real agents)"
+        } else {
+            "mock (default)"
+        }
+    );
     println!();
     println!("🚀 Quick start:");
     println!("   siko run \"analyze this\"     # Run a task");
     println!("   siko assistant --acp       # ACP server for external tools");
     println!("   siko dogfood run           # Self-iteration loop");
-    if needs_api_key && std::env::var(match provider {"deepseek"=>"DEEPSEEK_API_KEY","kimi"=>"KIMI_CODE_API_KEY",_=>""}).ok().filter(|k|!k.is_empty()).is_none() {
+    if needs_api_key
+        && std::env::var(match provider {
+            "deepseek" => "DEEPSEEK_API_KEY",
+            "kimi" => "KIMI_CODE_API_KEY",
+            _ => "",
+        })
+        .ok()
+        .filter(|k| !k.is_empty())
+        .is_none()
+    {
         println!();
         println!("⚠️  No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...");
     }
@@ -4277,8 +4368,7 @@ workspace:
     #[test]
     fn assistant_agent_events_returns_empty_when_no_report() {
         let task = AssistantTask::new("task_empty".to_string(), "no report yet".to_string());
-        let filter =
-            AgentEventFilter::try_new(None, None, None, None, None).unwrap();
+        let filter = AgentEventFilter::try_new(None, None, None, None, None).unwrap();
         let entries = assistant_agent_events(&task, &filter);
         assert!(entries.is_empty());
     }
@@ -4364,15 +4454,33 @@ workspace:
         let result = parse_node_operation("invalid_op");
         assert!(result.is_err());
         let error = result.unwrap_err().to_string();
-        assert!(error.contains("invalid_op"), "error should mention the invalid input: {error}");
-        assert!(error.contains("specify"), "error should list valid operations: {error}");
-        assert!(error.contains("plan"), "error should list valid operations: {error}");
-        assert!(error.contains("execute"), "error should list valid operations: {error}");
-        assert!(error.contains("combine"), "error should list valid operations: {error}");
-        assert!(error.contains("verify"), "error should list valid operations: {error}");
-        assert!(error.contains("commit"), "error should list valid operations: {error}");
+        assert!(
+            error.contains("invalid_op"),
+            "error should mention the invalid input: {error}"
+        );
+        assert!(
+            error.contains("specify"),
+            "error should list valid operations: {error}"
+        );
+        assert!(
+            error.contains("plan"),
+            "error should list valid operations: {error}"
+        );
+        assert!(
+            error.contains("execute"),
+            "error should list valid operations: {error}"
+        );
+        assert!(
+            error.contains("combine"),
+            "error should list valid operations: {error}"
+        );
+        assert!(
+            error.contains("verify"),
+            "error should list valid operations: {error}"
+        );
+        assert!(
+            error.contains("commit"),
+            "error should list valid operations: {error}"
+        );
     }
-
 }
-
-

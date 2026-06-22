@@ -57,8 +57,6 @@ fn file_system_workspace_preserves_scope_without_agent_reported_paths() {
         .unwrap();
 
     assert_eq!(snapshot.provider, WorkspaceProvider::FileSystem);
-    // scope was constructed from read_scope + write_scope (removed as dead code)
-    assert_eq!(snapshot.provider, WorkspaceProvider::FileSystem);
     assert!(merge_surface.changed_paths.is_empty());
     assert!(merge_surface.conflicts.is_empty());
 }
@@ -368,14 +366,26 @@ mod path_allowed_tests {
     #[test]
     fn globstar_prefix_with_extension() {
         let patterns = &["packages/agent-host/src/**/*.ts".into()];
-        assert!(path_allowed(patterns, Path::new("packages/agent-host/src/index.ts")));
-        assert!(path_allowed(patterns, Path::new("packages/agent-host/src/runtime-host.ts")));
+        assert!(path_allowed(
+            patterns,
+            Path::new("packages/agent-host/src/index.ts")
+        ));
+        assert!(path_allowed(
+            patterns,
+            Path::new("packages/agent-host/src/runtime-host.ts")
+        ));
         assert!(path_allowed(
             patterns,
             Path::new("packages/agent-host/src/deep/nested/util.ts")
         ));
-        assert!(!path_allowed(patterns, Path::new("packages/agent-host/src/index.js")));
-        assert!(!path_allowed(patterns, Path::new("packages/agent-host/README.md")));
+        assert!(!path_allowed(
+            patterns,
+            Path::new("packages/agent-host/src/index.js")
+        ));
+        assert!(!path_allowed(
+            patterns,
+            Path::new("packages/agent-host/README.md")
+        ));
     }
 
     #[test]
@@ -404,63 +414,63 @@ mod path_allowed_tests {
     }
 }
 
-    #[test]
-    fn single_star_matches_empty_prefix() {
-        // Pattern *.rs should match .rs (zero chars before the star)
-        let patterns = &["*.rs".into()];
-        assert!(path_allowed(patterns, Path::new(".rs")));
-        assert!(path_allowed(patterns, Path::new("a.rs")));
-        assert!(!path_allowed(patterns, Path::new(".RS")));
-    }
+#[test]
+fn single_star_matches_empty_prefix() {
+    // Pattern *.rs should match .rs (zero chars before the star)
+    let patterns = &["*.rs".into()];
+    assert!(path_allowed(patterns, Path::new(".rs")));
+    assert!(path_allowed(patterns, Path::new("a.rs")));
+    assert!(!path_allowed(patterns, Path::new(".RS")));
+}
 
-    #[test]
-    fn single_star_matches_empty_suffix() {
-        // Pattern test_* should match test_ (zero chars after the star)
-        let patterns = &["test_*".into()];
-        assert!(path_allowed(patterns, Path::new("test_")));
-        assert!(path_allowed(patterns, Path::new("test_foo")));
-        assert!(!path_allowed(patterns, Path::new("test")));
-    }
+#[test]
+fn single_star_matches_empty_suffix() {
+    // Pattern test_* should match test_ (zero chars after the star)
+    let patterns = &["test_*".into()];
+    assert!(path_allowed(patterns, Path::new("test_")));
+    assert!(path_allowed(patterns, Path::new("test_foo")));
+    assert!(!path_allowed(patterns, Path::new("test")));
+}
 
-    #[test]
-    fn globstar_prefix_matches_top_level_files() {
-        // Pattern src/** should match src/ itself
-        let patterns = &["src/**".into()];
-        assert!(path_allowed(patterns, Path::new("src/main.rs")));
-        assert!(path_allowed(patterns, Path::new("src/deep/file.rs")));
-    }
+#[test]
+fn globstar_prefix_matches_top_level_files() {
+    // Pattern src/** should match src/ itself
+    let patterns = &["src/**".into()];
+    assert!(path_allowed(patterns, Path::new("src/main.rs")));
+    assert!(path_allowed(patterns, Path::new("src/deep/file.rs")));
+}
 
-    #[test]
-    fn globstar_in_middle_with_adjacent_segments() {
-        // Pattern a/**/b/**/c should match a/b/c
-        let patterns = &["a/**/b/**/c".into()];
-        assert!(path_allowed(patterns, Path::new("a/b/c")));
-        assert!(path_allowed(patterns, Path::new("a/x/b/c")));
-        assert!(path_allowed(patterns, Path::new("a/b/x/c")));
-        assert!(path_allowed(patterns, Path::new("a/x/b/y/c")));
-        assert!(!path_allowed(patterns, Path::new("a/c")));
-        assert!(!path_allowed(patterns, Path::new("a/x/c")));
-    }
+#[test]
+fn globstar_in_middle_with_adjacent_segments() {
+    // Pattern a/**/b/**/c should match a/b/c
+    let patterns = &["a/**/b/**/c".into()];
+    assert!(path_allowed(patterns, Path::new("a/b/c")));
+    assert!(path_allowed(patterns, Path::new("a/x/b/c")));
+    assert!(path_allowed(patterns, Path::new("a/b/x/c")));
+    assert!(path_allowed(patterns, Path::new("a/x/b/y/c")));
+    assert!(!path_allowed(patterns, Path::new("a/c")));
+    assert!(!path_allowed(patterns, Path::new("a/x/c")));
+}
 
-    #[test]
-    fn glob_matching_is_case_sensitive() {
-        let patterns = &["*.rs".into()];
-        assert!(!path_allowed(patterns, Path::new("MAIN.RS")));
-        assert!(!path_allowed(patterns, Path::new("Main.Rs")));
+#[test]
+fn glob_matching_is_case_sensitive() {
+    let patterns = &["*.rs".into()];
+    assert!(!path_allowed(patterns, Path::new("MAIN.RS")));
+    assert!(!path_allowed(patterns, Path::new("Main.Rs")));
 
-        let patterns = &["src/**/*.rs".into()];
-        assert!(!path_allowed(patterns, Path::new("SRC/main.rs")));
-        assert!(!path_allowed(patterns, Path::new("src/main.RS")));
-    }
+    let patterns = &["src/**/*.rs".into()];
+    assert!(!path_allowed(patterns, Path::new("SRC/main.rs")));
+    assert!(!path_allowed(patterns, Path::new("src/main.RS")));
+}
 
-    #[test]
-    fn wildcard_matches_only_single_segment() {
-        // * should never cross path separator
-        let patterns = &["*.rs".into()];
-        assert!(!path_allowed(patterns, Path::new("sub/main.rs")));
-        assert!(!path_allowed(patterns, Path::new("a/b.rs")));
+#[test]
+fn wildcard_matches_only_single_segment() {
+    // * should never cross path separator
+    let patterns = &["*.rs".into()];
+    assert!(!path_allowed(patterns, Path::new("sub/main.rs")));
+    assert!(!path_allowed(patterns, Path::new("a/b.rs")));
 
-        // ? should never cross path separator
-        let patterns = &["?.rs".into()];
-        assert!(!path_allowed(patterns, Path::new("ab/main.rs")));
-    }
+    // ? should never cross path separator
+    let patterns = &["?.rs".into()];
+    assert!(!path_allowed(patterns, Path::new("ab/main.rs")));
+}

@@ -525,27 +525,15 @@ mod tests {
 
     #[test]
     fn agent_run_request_with_runtime_profile_chains() {
-        let req = AgentRunRequest::new(
-            "test".to_string(),
-            vec![],
-            json!({}),
-            vec![],
-            vec![],
-        )
-        .with_runtime_profile(AgentRuntimeProfile::Code);
+        let req = AgentRunRequest::new("test".to_string(), vec![], json!({}), vec![], vec![])
+            .with_runtime_profile(AgentRuntimeProfile::Code);
         assert_eq!(req.runtime_profile, AgentRuntimeProfile::Code);
     }
 
     #[test]
     fn agent_run_request_with_effort_chains() {
-        let req = AgentRunRequest::new(
-            "test".to_string(),
-            vec![],
-            json!({}),
-            vec![],
-            vec![],
-        )
-        .with_effort(AgentEffort::High);
+        let req = AgentRunRequest::new("test".to_string(), vec![], json!({}), vec![], vec![])
+            .with_effort(AgentEffort::High);
         assert_eq!(req.effort, Some(AgentEffort::High));
     }
 
@@ -580,15 +568,12 @@ mod tests {
 
     #[test]
     fn agent_run_request_serialize_skips_effort_when_none() {
-        let req = AgentRunRequest::new(
-            "test".to_string(),
-            vec![],
-            json!({}),
-            vec![],
-            vec![],
-        );
+        let req = AgentRunRequest::new("test".to_string(), vec![], json!({}), vec![], vec![]);
         let json = serde_json::to_value(&req).unwrap();
-        assert!(json.get("effort").is_none(), "effort should be skipped when None");
+        assert!(
+            json.get("effort").is_none(),
+            "effort should be skipped when None"
+        );
     }
 
     // ── AgentRunResponse ───────────────────────────────────────────────
@@ -646,7 +631,10 @@ mod tests {
     #[test]
     fn schema_for_returns_valid_json_schema() {
         let schema = schema_for::<String>();
-        assert!(schema.get("type").is_some(), "schema should have a type field");
+        assert!(
+            schema.get("type").is_some(),
+            "schema should have a type field"
+        );
         assert_eq!(schema["type"], "string");
     }
 }

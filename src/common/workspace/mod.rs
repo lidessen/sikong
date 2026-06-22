@@ -323,7 +323,9 @@ pub fn path_allowed(patterns: &[String], path: &std::path::Path) -> bool {
         return false;
     }
     let path_str = path.to_string_lossy();
-    patterns.iter().any(|pattern| glob_matches(pattern, &path_str))
+    patterns
+        .iter()
+        .any(|pattern| glob_matches(pattern, &path_str))
 }
 
 fn glob_matches(pattern: &str, path: &str) -> bool {
@@ -467,7 +469,8 @@ mod tests {
 
     #[test]
     fn workspace_requirement_git_repo_constructor_with_fetch_remote() {
-        let mut req = WorkspaceRequirement::git_repo("/repo", "/worktrees", "main", Vec::<String>::new());
+        let mut req =
+            WorkspaceRequirement::git_repo("/repo", "/worktrees", "main", Vec::<String>::new());
         req.git.as_mut().unwrap().fetch_remote = Some("origin".to_string());
         let git = req.git.expect("git requirement");
         assert_eq!(git.fetch_remote.as_deref(), Some("origin"));
@@ -555,11 +558,26 @@ mod tests {
 
     #[test]
     fn path_allowed_double_star_in_middle() {
-        assert!(path_allowed(&["src/**/*.rs".into()], Path::new("src/main.rs")));
-        assert!(path_allowed(&["src/**/*.rs".into()], Path::new("src/cli/mod.rs")));
-        assert!(path_allowed(&["src/**/*.rs".into()], Path::new("src/a/b/c/lib.rs")));
-        assert!(!path_allowed(&["src/**/*.rs".into()], Path::new("tests/test.rs")));
-        assert!(!path_allowed(&["src/**/*.rs".into()], Path::new("src/main.c")));
+        assert!(path_allowed(
+            &["src/**/*.rs".into()],
+            Path::new("src/main.rs")
+        ));
+        assert!(path_allowed(
+            &["src/**/*.rs".into()],
+            Path::new("src/cli/mod.rs")
+        ));
+        assert!(path_allowed(
+            &["src/**/*.rs".into()],
+            Path::new("src/a/b/c/lib.rs")
+        ));
+        assert!(!path_allowed(
+            &["src/**/*.rs".into()],
+            Path::new("tests/test.rs")
+        ));
+        assert!(!path_allowed(
+            &["src/**/*.rs".into()],
+            Path::new("src/main.c")
+        ));
     }
 
     #[test]
@@ -583,22 +601,37 @@ mod tests {
         assert!(path_allowed(&["src/*.rs".into()], Path::new("src/main.rs")));
         assert!(!path_allowed(&["src/*.rs".into()], Path::new("src/main.c")));
         // single * does NOT cross directory boundaries
-        assert!(!path_allowed(&["src/*.rs".into()], Path::new("src/cli/mod.rs")));
+        assert!(!path_allowed(
+            &["src/*.rs".into()],
+            Path::new("src/cli/mod.rs")
+        ));
     }
 
     #[test]
     fn path_allowed_question_matches_exactly_one_char() {
         assert!(path_allowed(&["src/??.rs".into()], Path::new("src/cl.rs")));
         assert!(path_allowed(&["src/??.rs".into()], Path::new("src/ab.rs")));
-        assert!(!path_allowed(&["src/??.rs".into()], Path::new("src/abc.rs")));
+        assert!(!path_allowed(
+            &["src/??.rs".into()],
+            Path::new("src/abc.rs")
+        ));
         assert!(!path_allowed(&["src/??.rs".into()], Path::new("src/a.rs")));
     }
 
     #[test]
     fn path_allowed_exact_path_match() {
-        assert!(path_allowed(&["src/main.rs".into()], Path::new("src/main.rs")));
-        assert!(!path_allowed(&["src/main.rs".into()], Path::new("src/lib.rs")));
-        assert!(!path_allowed(&["src/main.rs".into()], Path::new("other/src/main.rs")));
+        assert!(path_allowed(
+            &["src/main.rs".into()],
+            Path::new("src/main.rs")
+        ));
+        assert!(!path_allowed(
+            &["src/main.rs".into()],
+            Path::new("src/lib.rs")
+        ));
+        assert!(!path_allowed(
+            &["src/main.rs".into()],
+            Path::new("other/src/main.rs")
+        ));
     }
 
     #[test]
@@ -611,10 +644,22 @@ mod tests {
 
     #[test]
     fn path_allowed_double_star_matches_zero_segments() {
-        assert!(path_allowed(&["src/**/lib.rs".into()], Path::new("src/lib.rs")));
-        assert!(path_allowed(&["src/**/lib.rs".into()], Path::new("src/sub/lib.rs")));
-        assert!(path_allowed(&["src/**/lib.rs".into()], Path::new("src/a/b/lib.rs")));
-        assert!(!path_allowed(&["src/**/lib.rs".into()], Path::new("src/main.rs")));
+        assert!(path_allowed(
+            &["src/**/lib.rs".into()],
+            Path::new("src/lib.rs")
+        ));
+        assert!(path_allowed(
+            &["src/**/lib.rs".into()],
+            Path::new("src/sub/lib.rs")
+        ));
+        assert!(path_allowed(
+            &["src/**/lib.rs".into()],
+            Path::new("src/a/b/lib.rs")
+        ));
+        assert!(!path_allowed(
+            &["src/**/lib.rs".into()],
+            Path::new("src/main.rs")
+        ));
     }
 
     #[test]
@@ -651,15 +696,40 @@ mod tests {
 
     #[test]
     fn segments_match_exact_all_segments() {
-        assert!(segments_match(&["src", "main.rs"], &["src", "main.rs"], 0, 0));
-        assert!(!segments_match(&["src", "main.rs"], &["src", "lib.rs"], 0, 0));
+        assert!(segments_match(
+            &["src", "main.rs"],
+            &["src", "main.rs"],
+            0,
+            0
+        ));
+        assert!(!segments_match(
+            &["src", "main.rs"],
+            &["src", "lib.rs"],
+            0,
+            0
+        ));
     }
 
     #[test]
     fn segments_match_double_star_matches_multiple() {
-        assert!(segments_match(&["src", "**", "lib.rs"], &["src", "a", "b", "lib.rs"], 0, 0));
-        assert!(segments_match(&["src", "**", "lib.rs"], &["src", "lib.rs"], 0, 0));
-        assert!(!segments_match(&["src", "**", "lib.rs"], &["src", "main.rs"], 0, 0));
+        assert!(segments_match(
+            &["src", "**", "lib.rs"],
+            &["src", "a", "b", "lib.rs"],
+            0,
+            0
+        ));
+        assert!(segments_match(
+            &["src", "**", "lib.rs"],
+            &["src", "lib.rs"],
+            0,
+            0
+        ));
+        assert!(!segments_match(
+            &["src", "**", "lib.rs"],
+            &["src", "main.rs"],
+            0,
+            0
+        ));
     }
 
     #[test]
@@ -727,9 +797,24 @@ mod tests {
 
     #[test]
     fn segment_chars_match_star_matches_multiple_chars() {
-        assert!(segment_chars_match(&['a', '*', 'c'], &['a', 'b', 'c'], 0, 0));
-        assert!(segment_chars_match(&['a', '*', 'c'], &['a', 'b', 'b', 'c'], 0, 0));
-        assert!(!segment_chars_match(&['a', '*', 'c'], &['a', 'b', 'd'], 0, 0));
+        assert!(segment_chars_match(
+            &['a', '*', 'c'],
+            &['a', 'b', 'c'],
+            0,
+            0
+        ));
+        assert!(segment_chars_match(
+            &['a', '*', 'c'],
+            &['a', 'b', 'b', 'c'],
+            0,
+            0
+        ));
+        assert!(!segment_chars_match(
+            &['a', '*', 'c'],
+            &['a', 'b', 'd'],
+            0,
+            0
+        ));
     }
 
     #[test]
@@ -741,14 +826,34 @@ mod tests {
 
     #[test]
     fn segment_chars_match_exact_chars() {
-        assert!(segment_chars_match(&['a', 'b', 'c'], &['a', 'b', 'c'], 0, 0));
-        assert!(!segment_chars_match(&['a', 'b', 'c'], &['a', 'b', 'd'], 0, 0));
+        assert!(segment_chars_match(
+            &['a', 'b', 'c'],
+            &['a', 'b', 'c'],
+            0,
+            0
+        ));
+        assert!(!segment_chars_match(
+            &['a', 'b', 'c'],
+            &['a', 'b', 'd'],
+            0,
+            0
+        ));
         assert!(!segment_chars_match(&['a', 'b', 'c'], &['a', 'b'], 0, 0));
     }
 
     #[test]
     fn segment_chars_match_star_at_start() {
-        assert!(segment_chars_match(&['*', '.', 'r', 's'], &['m', 'a', 'i', 'n', '.', 'r', 's'], 0, 0));
-        assert!(!segment_chars_match(&['*', '.', 'r', 's'], &['m', 'a', 'i', 'n', '.', 'c'], 0, 0));
+        assert!(segment_chars_match(
+            &['*', '.', 'r', 's'],
+            &['m', 'a', 'i', 'n', '.', 'r', 's'],
+            0,
+            0
+        ));
+        assert!(!segment_chars_match(
+            &['*', '.', 'r', 's'],
+            &['m', 'a', 'i', 'n', '.', 'c'],
+            0,
+            0
+        ));
     }
 }

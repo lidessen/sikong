@@ -32,8 +32,10 @@ fn path_buf_from_env_var() -> std::path::PathBuf {
 fn test_metrics_command_produces_valid_json() {
     let (stdout, stderr, code) = run_siko(&["metrics"]);
 
-    assert!(stderr.is_empty() || stderr.contains("warning:"),
-        "stderr should be empty or only contain warnings; got: {stderr}");
+    assert!(
+        stderr.is_empty() || stderr.contains("warning:"),
+        "stderr should be empty or only contain warnings; got: {stderr}"
+    );
     assert_eq!(code, 0, "siko metrics should exit with code 0");
 
     // Must be valid JSON
@@ -42,15 +44,24 @@ fn test_metrics_command_produces_valid_json() {
 
     // Must contain expected top-level keys from MetricsFormatter
     assert!(
-        parsed.as_object().map(|obj| obj.contains_key("counters")).unwrap_or(false),
+        parsed
+            .as_object()
+            .map(|obj| obj.contains_key("counters"))
+            .unwrap_or(false),
         "output must contain 'counters' key"
     );
     assert!(
-        parsed.as_object().map(|obj| obj.contains_key("timings")).unwrap_or(false),
+        parsed
+            .as_object()
+            .map(|obj| obj.contains_key("timings"))
+            .unwrap_or(false),
         "output must contain 'timings' key"
     );
     assert!(
-        parsed.as_object().map(|obj| obj.contains_key("costs")).unwrap_or(false),
+        parsed
+            .as_object()
+            .map(|obj| obj.contains_key("costs"))
+            .unwrap_or(false),
         "output must contain 'costs' key"
     );
 

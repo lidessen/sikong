@@ -89,7 +89,10 @@ mod tests {
         }
     }
 
-    fn resource_with_refs(id: WorkspaceResourceId, refs: Vec<WorkspaceResourceRef>) -> WorkspaceResource {
+    fn resource_with_refs(
+        id: WorkspaceResourceId,
+        refs: Vec<WorkspaceResourceRef>,
+    ) -> WorkspaceResource {
         WorkspaceResource {
             id,
             provider: WorkspaceProvider::Memory,
@@ -178,7 +181,13 @@ mod tests {
         let mut reg = WorkspaceResourceRegistry::default();
         reg.track_all([
             resource_with_refs(1, vec![WorkspaceResourceRef::RunningNode(1)]),
-            resource_with_refs(2, vec![WorkspaceResourceRef::RunningNode(2), WorkspaceResourceRef::DebugRetain]),
+            resource_with_refs(
+                2,
+                vec![
+                    WorkspaceResourceRef::RunningNode(2),
+                    WorkspaceResourceRef::DebugRetain,
+                ],
+            ),
         ]);
         reg.release_all_refs();
         assert!(reg.resource(1).unwrap().refs.is_empty());
@@ -188,7 +197,10 @@ mod tests {
     #[test]
     fn releasable_ids_returns_empty_when_all_have_refs() {
         let mut reg = WorkspaceResourceRegistry::default();
-        reg.track_all([resource_with_refs(1, vec![WorkspaceResourceRef::RunningNode(1)])]);
+        reg.track_all([resource_with_refs(
+            1,
+            vec![WorkspaceResourceRef::RunningNode(1)],
+        )]);
         assert!(reg.releasable_ids().is_empty());
     }
 
@@ -284,7 +296,10 @@ mod tests {
         assert_eq!(reg.releasable_ids(), vec![1]);
         reg.mark_released(1);
         assert!(reg.releasable_ids().is_empty());
-        assert_eq!(reg.resource(1).unwrap().state, WorkspaceResourceState::Released);
+        assert_eq!(
+            reg.resource(1).unwrap().state,
+            WorkspaceResourceState::Released
+        );
     }
 
     #[test]

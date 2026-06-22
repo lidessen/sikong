@@ -1,12 +1,11 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use serde_json::Value;
+use std::fmt;
 
-use crate::core::agent_run::AgentTokenUsage;
 pub use crate::common::types::{ArtifactId, NodeId};
 use crate::common::workspace::WorkspaceError;
-
+use crate::core::agent_run::AgentTokenUsage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodeOperation {
@@ -95,10 +94,16 @@ impl fmt::Display for VerificationVerdict {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Accept => f.write_str("Accept"),
-            Self::Reject { failure_class, reason } => {
+            Self::Reject {
+                failure_class,
+                reason,
+            } => {
                 write!(f, "Reject({}): {}", failure_class, reason)
             }
-            Self::Uncertain { missing_info, reason } => {
+            Self::Uncertain {
+                missing_info,
+                reason,
+            } => {
                 write!(f, "Uncertain(missing: {}): {}", missing_info, reason)
             }
         }
@@ -364,7 +369,12 @@ mod tests {
                 gate,
                 id
             );
-            assert!(!desc.is_empty(), "gate {:?} id={} has empty description", gate, id);
+            assert!(
+                !desc.is_empty(),
+                "gate {:?} id={} has empty description",
+                gate,
+                id
+            );
             assert!(
                 desc.len() > 10,
                 "gate {:?} id={} description too short: '{}'",
@@ -416,10 +426,22 @@ mod tests {
         // GovernanceGate
         assert_eq!(format!("{}", GovernanceGate::ArchEscape), "G-ARCH-ESCAPE");
         assert_eq!(format!("{}", GovernanceGate::ScopeWiden), "G-SCOPE-WIDEN");
-        assert_eq!(format!("{}", GovernanceGate::ParallelDependency), "G-PARALLEL-DEPENDENCY");
-        assert_eq!(format!("{}", GovernanceGate::SynthesisChild), "G-SYNTHESIS-CHILD");
-        assert_eq!(format!("{}", GovernanceGate::UnsupportedFact), "G-UNSUPPORTED-FACT");
-        assert_eq!(format!("{}", GovernanceGate::PassWithHardViolation), "G-PASS-WITH-HARD-VIOLATION");
+        assert_eq!(
+            format!("{}", GovernanceGate::ParallelDependency),
+            "G-PARALLEL-DEPENDENCY"
+        );
+        assert_eq!(
+            format!("{}", GovernanceGate::SynthesisChild),
+            "G-SYNTHESIS-CHILD"
+        );
+        assert_eq!(
+            format!("{}", GovernanceGate::UnsupportedFact),
+            "G-UNSUPPORTED-FACT"
+        );
+        assert_eq!(
+            format!("{}", GovernanceGate::PassWithHardViolation),
+            "G-PASS-WITH-HARD-VIOLATION"
+        );
         assert_eq!(format!("{}", GovernanceGate::Protocol), "G-PROTOCOL");
         assert_eq!(format!("{}", GovernanceGate::CheckFail), "G-CHECK-FAIL");
 
@@ -439,30 +461,48 @@ mod tests {
         // FailureClass
         assert_eq!(format!("{}", FailureClass::MissingInfo), "missing_info");
         assert_eq!(format!("{}", FailureClass::SpecAmbiguity), "spec_ambiguity");
-        assert_eq!(format!("{}", FailureClass::IncompleteOutput), "incomplete_output");
+        assert_eq!(
+            format!("{}", FailureClass::IncompleteOutput),
+            "incomplete_output"
+        );
         assert_eq!(format!("{}", FailureClass::BadOutput), "bad_output");
-        assert_eq!(format!("{}", FailureClass::UnsafeSideEffect), "unsafe_side_effect");
+        assert_eq!(
+            format!("{}", FailureClass::UnsafeSideEffect),
+            "unsafe_side_effect"
+        );
         assert_eq!(format!("{}", FailureClass::MergeConflict), "merge_conflict");
-        assert_eq!(format!("{}", FailureClass::BudgetExhausted), "budget_exhausted");
+        assert_eq!(
+            format!("{}", FailureClass::BudgetExhausted),
+            "budget_exhausted"
+        );
 
         // ProblemKey
         assert_eq!(format!("{}", ProblemKey("hello".to_string())), "hello");
-        assert_eq!(format!("{}", ProblemKey("task-run-split-eval".to_string())), "task-run-split-eval");
+        assert_eq!(
+            format!("{}", ProblemKey("task-run-split-eval".to_string())),
+            "task-run-split-eval"
+        );
 
         // VerificationVerdict
         assert_eq!(format!("{}", VerificationVerdict::Accept), "Accept");
         assert_eq!(
-            format!("{}", VerificationVerdict::Reject {
-                failure_class: FailureClass::BadOutput,
-                reason: "wrong format".to_string(),
-            }),
+            format!(
+                "{}",
+                VerificationVerdict::Reject {
+                    failure_class: FailureClass::BadOutput,
+                    reason: "wrong format".to_string(),
+                }
+            ),
             "Reject(bad_output): wrong format"
         );
         assert_eq!(
-            format!("{}", VerificationVerdict::Uncertain {
-                missing_info: "schema version".to_string(),
-                reason: "need more data".to_string(),
-            }),
+            format!(
+                "{}",
+                VerificationVerdict::Uncertain {
+                    missing_info: "schema version".to_string(),
+                    reason: "need more data".to_string(),
+                }
+            ),
             "Uncertain(missing: schema version): need more data"
         );
     }
@@ -488,5 +528,4 @@ mod tests {
         let budget = Budget::default();
         assert_eq!(budget.max_attempts, 2);
     }
-
 }

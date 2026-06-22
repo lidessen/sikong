@@ -371,25 +371,70 @@ mod tests {
 
     #[test]
     fn parses_current_failure_class_names() {
-        assert_eq!(parse_failure_class("missing_info"), Some(FailureClass::MissingInfo));
-        assert_eq!(parse_failure_class("spec_ambiguity"), Some(FailureClass::SpecAmbiguity));
-        assert_eq!(parse_failure_class("incomplete_output"), Some(FailureClass::IncompleteOutput));
-        assert_eq!(parse_failure_class("bad_output"), Some(FailureClass::BadOutput));
-        assert_eq!(parse_failure_class("unsafe_side_effect"), Some(FailureClass::UnsafeSideEffect));
-        assert_eq!(parse_failure_class("merge_conflict"), Some(FailureClass::MergeConflict));
-        assert_eq!(parse_failure_class("budget_exhausted"), Some(FailureClass::BudgetExhausted));
+        assert_eq!(
+            parse_failure_class("missing_info"),
+            Some(FailureClass::MissingInfo)
+        );
+        assert_eq!(
+            parse_failure_class("spec_ambiguity"),
+            Some(FailureClass::SpecAmbiguity)
+        );
+        assert_eq!(
+            parse_failure_class("incomplete_output"),
+            Some(FailureClass::IncompleteOutput)
+        );
+        assert_eq!(
+            parse_failure_class("bad_output"),
+            Some(FailureClass::BadOutput)
+        );
+        assert_eq!(
+            parse_failure_class("unsafe_side_effect"),
+            Some(FailureClass::UnsafeSideEffect)
+        );
+        assert_eq!(
+            parse_failure_class("merge_conflict"),
+            Some(FailureClass::MergeConflict)
+        );
+        assert_eq!(
+            parse_failure_class("budget_exhausted"),
+            Some(FailureClass::BudgetExhausted)
+        );
     }
 
     #[test]
     fn parses_legacy_failure_class_names() {
-        assert_eq!(parse_failure_class("MissingInfo"), Some(FailureClass::MissingInfo));
-        assert_eq!(parse_failure_class("SpecAmbiguity"), Some(FailureClass::SpecAmbiguity));
-        assert_eq!(parse_failure_class("incomplete_assessment"), Some(FailureClass::IncompleteOutput));
-        assert_eq!(parse_failure_class("IncompleteOutput"), Some(FailureClass::IncompleteOutput));
-        assert_eq!(parse_failure_class("BadOutput"), Some(FailureClass::BadOutput));
-        assert_eq!(parse_failure_class("UnsafeSideEffect"), Some(FailureClass::UnsafeSideEffect));
-        assert_eq!(parse_failure_class("MergeConflict"), Some(FailureClass::MergeConflict));
-        assert_eq!(parse_failure_class("BudgetExhausted"), Some(FailureClass::BudgetExhausted));
+        assert_eq!(
+            parse_failure_class("MissingInfo"),
+            Some(FailureClass::MissingInfo)
+        );
+        assert_eq!(
+            parse_failure_class("SpecAmbiguity"),
+            Some(FailureClass::SpecAmbiguity)
+        );
+        assert_eq!(
+            parse_failure_class("incomplete_assessment"),
+            Some(FailureClass::IncompleteOutput)
+        );
+        assert_eq!(
+            parse_failure_class("IncompleteOutput"),
+            Some(FailureClass::IncompleteOutput)
+        );
+        assert_eq!(
+            parse_failure_class("BadOutput"),
+            Some(FailureClass::BadOutput)
+        );
+        assert_eq!(
+            parse_failure_class("UnsafeSideEffect"),
+            Some(FailureClass::UnsafeSideEffect)
+        );
+        assert_eq!(
+            parse_failure_class("MergeConflict"),
+            Some(FailureClass::MergeConflict)
+        );
+        assert_eq!(
+            parse_failure_class("BudgetExhausted"),
+            Some(FailureClass::BudgetExhausted)
+        );
     }
 
     #[test]

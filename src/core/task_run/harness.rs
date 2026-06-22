@@ -2,10 +2,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::AgentToolSpec;
+use crate::common::workspace::WorkspaceProvider;
 use crate::core::agent_run::{
     AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRuntimeProfile,
 };
-use crate::common::workspace::WorkspaceProvider;
 
 use super::tools::{EngineTool, EngineTools};
 use super::{
@@ -145,9 +145,7 @@ fn render_context_json(value: &Value) -> String {
     }
 }
 
-fn operation_prompt_sections(
-    context: &AgentOperationContext,
-) -> Vec<AgentPromptSection> {
+fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPromptSection> {
     match context.operation {
         NodeOperation::Specify => with_operation_context(
             context,

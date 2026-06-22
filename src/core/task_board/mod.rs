@@ -182,8 +182,10 @@ newlines";
 
     #[test]
     fn title_from_request_only_whitespace_returns_empty() {
-        let title = title_from_request("   	
-   ");
+        let title = title_from_request(
+            "   	
+   ",
+        );
         assert_eq!(title, "");
     }
 

@@ -28,7 +28,10 @@ impl MetricsCollector {
 
     /// Record a timing measurement by name.
     pub fn record_timing(&mut self, name: &str, duration: Duration) {
-        self.timings.entry(name.to_string()).or_default().push(duration);
+        self.timings
+            .entry(name.to_string())
+            .or_default()
+            .push(duration);
     }
 
     /// Record a cost measurement by name.
@@ -189,14 +192,12 @@ impl MetricsFormatter {
 /// Timings are rendered as millisecond floating-point values.
 /// The output is human-readable (pretty-printed) JSON.
 pub fn format_metrics(snapshot: &MetricsSnapshot) -> String {
-    serde_json::to_string_pretty(&snapshot.to_json_value())
-        .unwrap_or_else(|_| "{}".to_string())
+    serde_json::to_string_pretty(&snapshot.to_json_value()).unwrap_or_else(|_| "{}".to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
     #[test]
     fn test_new_collector_is_empty() {
@@ -221,17 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn test_record_timing_via_instant() {
+    fn test_record_timing() {
         let mut collector = MetricsCollector::new();
-        let start = Instant::now();
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let duration = start.elapsed();
-        collector.record_timing("api_call", duration);
+        collector.record_timing("api_call", Duration::from_millis(5));
 
         let snapshot = collector.snapshot();
         let timings = snapshot.timings().get("api_call").unwrap();
-        assert!(!timings.is_empty());
-        assert!(timings[0] >= Duration::from_millis(2));
+        assert_eq!(timings.len(), 1);
+        assert_eq!(timings[0], Duration::from_millis(5));
     }
 
     #[test]
@@ -270,10 +268,8 @@ mod tests {
         collector.increment_counter("api_calls", 10);
         collector.increment_counter("errors", 2);
 
-        // Measure timing via Instant
-        let start = Instant::now();
-        std::thread::sleep(std::time::Duration::from_millis(1));
-        collector.record_timing("latency", start.elapsed());
+        // Record a timing measurement
+        collector.record_timing("latency", Duration::from_millis(3));
 
         // Record cost
         collector.record_cost("compute_hours", 3.5);
@@ -413,7 +409,13 @@ mod tests {
         let json = format_metrics(&snapshot);
 
         // Pretty-printed JSON should contain newlines and indentation
-        assert!(json.contains('\n'), "expected pretty-printed JSON with newlines");
-        assert!(json.contains("  "), "expected pretty-printed JSON with indentation");
+        assert!(
+            json.contains('\n'),
+            "expected pretty-printed JSON with newlines"
+        );
+        assert!(
+            json.contains("  "),
+            "expected pretty-printed JSON with indentation"
+        );
     }
 }

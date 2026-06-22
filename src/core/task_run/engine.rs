@@ -4,11 +4,11 @@ use async_recursion::async_recursion;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
-use crate::core::agent_run::{AgentRunScheduler, CancellationToken};
 use crate::common::workspace::{
     GitWorkspaceSurface, Workspace, WorkspaceChange, WorkspaceProvider, WorkspaceResource,
     WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceSurface,
 };
+use crate::core::agent_run::{AgentRunScheduler, CancellationToken};
 
 use super::node::{
     Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroupMode, ProblemNode,
@@ -684,10 +684,12 @@ where
         }
 
         if node.capabilities.allow_write {
-            let out_of_scope = change
-                .changed_paths
-                .iter()
-                .any(|path| !crate::common::workspace::path_allowed(&node.workspace.write_scope, std::path::Path::new(path.as_str())));
+            let out_of_scope = change.changed_paths.iter().any(|path| {
+                !crate::common::workspace::path_allowed(
+                    &node.workspace.write_scope,
+                    std::path::Path::new(path.as_str()),
+                )
+            });
             if out_of_scope {
                 return Ok(Some(VerificationVerdict::Reject {
                     failure_class: FailureClass::UnsafeSideEffect,
@@ -1101,14 +1103,19 @@ where
         depth: usize,
         cancellation: &CancellationToken,
     ) -> Result<Option<ArtifactId>, EngineError> {
-        let engine = self.engine.as_mut().expect("BranchEngineGuard engine consumed");
+        let engine = self
+            .engine
+            .as_mut()
+            .expect("BranchEngineGuard engine consumed");
         engine.resolve(child_id, depth, cancellation).await
     }
 
     /// Consume the guard, returning the inner Engine without cleanup.
     /// The caller takes responsibility for the Engine's resources.
     fn into_engine(mut self) -> Engine<W, A> {
-        self.engine.take().expect("BranchEngineGuard engine already consumed")
+        self.engine
+            .take()
+            .expect("BranchEngineGuard engine already consumed")
     }
 }
 
@@ -1309,7 +1316,10 @@ fn scope_allowed_by_parent(child_scope: &str, parent_scopes: &[String]) -> bool 
 fn parent_scope_allows_child(parent_scope: &str, child_scope: &str) -> bool {
     parent_scope == "**/*"
         || parent_scope == child_scope
-        || crate::common::workspace::path_allowed(&[parent_scope.to_string()], std::path::Path::new(child_scope))
+        || crate::common::workspace::path_allowed(
+            &[parent_scope.to_string()],
+            std::path::Path::new(child_scope),
+        )
 }
 
 fn check_cancelled(cancellation: &CancellationToken) -> Result<(), EngineError> {
@@ -1341,8 +1351,14 @@ mod tests {
 
     #[test]
     fn parent_scope_allows_narrower_directory_child() {
-        assert!(parent_scope_allows_child("src/**/*", "src/task_run/engine.rs"));
-        assert!(parent_scope_allows_child("packages/**/*.ts", "packages/agent-host/src/protocol.ts"));
+        assert!(parent_scope_allows_child(
+            "src/**/*",
+            "src/task_run/engine.rs"
+        ));
+        assert!(parent_scope_allows_child(
+            "packages/**/*.ts",
+            "packages/agent-host/src/protocol.ts"
+        ));
     }
 
     #[test]
@@ -1455,5 +1471,4 @@ mod tests {
         let plan = plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning);
         assert_eq!(plan, NodePlan::Execute);
     }
-
 }
