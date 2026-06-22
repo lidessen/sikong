@@ -7,6 +7,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use siko::{
+    metrics::{MetricsCollector, MetricsFormatter},
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
     AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
@@ -249,6 +250,10 @@ fn run_cli(cli: Cli) -> i32 {
                 1
             }
         },
+        Some(Command::Metrics) => {
+            run_metrics_command();
+            0
+        },
     }
 }
 
@@ -304,6 +309,8 @@ enum Command {
     },
     /// Interactive first-time setup: configure provider, backend, and API keys.
     Setup,
+    /// Collect and display current metrics snapshot.
+    Metrics,
 }
 
 #[derive(Debug, Subcommand)]
@@ -4281,4 +4288,26 @@ workspace:
         assert!(error.contains("commit"), "error should list valid operations: {error}");
     }
 
+}
+
+
+fn run_metrics_command() {
+    // TODO: Integrate with a global/live MetricsCollector instance once one is
+    //       established by the engine or session lifecycle. For now, this
+    //       creates a fresh collector and populates it with basic process-level
+    //       metrics as a demonstration of the pipeline.
+    let mut collector = MetricsCollector::new();
+
+    // Record some basic process-level metrics
+    let uptime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    collector.increment_counter("uptime_seconds", uptime.as_secs());
+    collector.record_timing("uptime", uptime);
+    collector.record_cost("version_cost", 0.1);
+
+    let snapshot = collector.snapshot();
+    let formatter = MetricsFormatter;
+    let output = formatter.format(&snapshot);
+    println!("{output}");
 }

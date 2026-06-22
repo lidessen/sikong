@@ -1,6 +1,7 @@
 mod agent_run;
 mod assistant;
 mod config;
+pub mod metrics;
 mod task_board;
 mod task_run;
 mod workspace;
