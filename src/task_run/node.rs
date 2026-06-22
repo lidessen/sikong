@@ -138,6 +138,10 @@ pub struct ProblemNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtifactContentKind {
     Text,
+    Json,
+    Yaml,
+    Markdown,
+    Patch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
