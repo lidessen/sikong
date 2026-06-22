@@ -26,7 +26,7 @@ fn plan_from_scope_assessment(assessment: &ScopeAssessment, current_plan: &NodeP
         WorkSize::Tiny | WorkSize::Small | WorkSize::Medium => NodePlan::Execute,
         WorkSize::Large | WorkSize::XLarge => match current_plan {
             NodePlan::Group(_) => current_plan.clone(),
-            _ => NodePlan::Split,
+            _ => NodePlan::NeedsPlanning,
         },
     }
 }
@@ -228,7 +228,7 @@ where
     fn should_plan(&self, node_id: NodeId) -> Result<bool, EngineError> {
         Ok(matches!(
             self.node(node_id)?.plan,
-            NodePlan::Split | NodePlan::Group(_)
+            NodePlan::NeedsPlanning | NodePlan::Group(_)
         ) && self.node(node_id)?.children.is_empty())
     }
 

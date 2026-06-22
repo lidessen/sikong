@@ -458,7 +458,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
-    let worker_launch = resolve_agent_loop_launch(&debug, 12);
+    let worker_launch = resolve_agent_loop_launch(&debug, 32);
     let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
@@ -480,6 +480,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     run_acp_stdio_server(server, BufReader::new(io::stdin()), io::stdout()).await?;
     Ok(())
 }
+
 
 fn run_assistant_prompt(
     message: Vec<String>,
@@ -525,7 +526,7 @@ async fn run_assistant_prompt_async(
     };
     let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
-    let worker_launch = resolve_agent_loop_launch(&debug, 12);
+    let worker_launch = resolve_agent_loop_launch(&debug, 32);
     let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
@@ -2003,7 +2004,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
                     1,
                     "plan-stage",
                     "Make a CLI preview reliable: first define scope, then implement the command, then document and smoke test it.",
-                    NodePlan::Split,
+                    NodePlan::NeedsPlanning,
                 ),
                 None,
                 Vec::new(),
@@ -2020,7 +2021,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
                     1,
                     "plan-parallel",
                     "Review the Rust CLI, the agent-host package, and the agent-loop package for naming consistency.",
-                    NodePlan::Split,
+                    NodePlan::NeedsPlanning,
                 ),
                 None,
                 Vec::new(),
@@ -2050,7 +2051,7 @@ fn operation_eval_scenarios() -> Vec<OperationEvalScenario> {
                         1,
                         "plan-git-parallel-scoped",
                         "Plan a read-only redundancy audit across five independent evidence surfaces: src/task_run, src/agent_run, packages/agent-host, packages/agent-loop, and design docs. Each child should inspect its own surface and produce evidence for the parent cleanup proposal.",
-                        NodePlan::Split,
+                        NodePlan::NeedsPlanning,
                     )
                 },
                 None,

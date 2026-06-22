@@ -614,7 +614,7 @@ fn engine_harness_decodes_information_gathering_as_next_work() {
 #[tokio::test]
 async fn engine_harness_decodes_agent_friendly_plan_items() {
     let context = AgentOperationContext {
-        node: problem_node(NodePlan::Split),
+        node: problem_node(NodePlan::NeedsPlanning),
         operation: NodeOperation::Plan,
         candidate: None,
         child_artifacts: Vec::new(),
@@ -684,7 +684,7 @@ async fn engine_harness_decodes_agent_friendly_plan_items() {
 #[tokio::test]
 async fn engine_harness_rejects_dependent_parallel_plan_items() {
     let context = AgentOperationContext {
-        node: problem_node(NodePlan::Split),
+        node: problem_node(NodePlan::NeedsPlanning),
         operation: NodeOperation::Plan,
         candidate: None,
         child_artifacts: Vec::new(),

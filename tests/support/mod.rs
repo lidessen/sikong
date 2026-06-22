@@ -90,7 +90,7 @@ fn mock_terminal_arguments(input: &AgentRunRequest, tool_name: &str) -> Value {
 
 fn mock_specification_args(intent: &str, plan: Option<&NodePlan>) -> Value {
     match plan {
-        Some(NodePlan::Group(_)) | Some(NodePlan::Split) => json!({
+        Some(NodePlan::Group(_)) | Some(NodePlan::NeedsPlanning) => json!({
             "next": intent,
             "size": "large",
             "reason": "This is closest to Large because the fixture already contains multiple child work items."

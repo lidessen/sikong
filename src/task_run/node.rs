@@ -51,7 +51,7 @@ impl ScopeAssessment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodePlan {
     Execute,
-    Split,
+    NeedsPlanning,
     Group(PlanGroup),
 }
 
@@ -59,7 +59,7 @@ impl fmt::Display for NodePlan {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self {
             Self::Execute => "Execute",
-            Self::Split => "Split",
+            Self::NeedsPlanning => "NeedsPlanning",
             Self::Group(_) => "Group",
         })
     }
@@ -228,12 +228,12 @@ mod tests {
 
     #[test]
     fn node_plan_variants_are_distinct() {
-        assert_ne!(NodePlan::Execute, NodePlan::Split);
+        assert_ne!(NodePlan::Execute, NodePlan::NeedsPlanning);
         assert_ne!(NodePlan::Execute, NodePlan::Group(PlanGroup {
             mode: PlanGroupMode::Parallel,
             items: vec![],
         }));
-        assert_ne!(NodePlan::Split, NodePlan::Group(PlanGroup {
+        assert_ne!(NodePlan::NeedsPlanning, NodePlan::Group(PlanGroup {
             mode: PlanGroupMode::Stage,
             items: vec![],
         }));
@@ -294,7 +294,7 @@ mod tests {
     fn node_plan_serde_roundtrip() {
         let plans = vec![
             NodePlan::Execute,
-            NodePlan::Split,
+            NodePlan::NeedsPlanning,
             NodePlan::Group(PlanGroup {
                 mode: PlanGroupMode::Parallel,
                 items: vec![NodeTemplate::memory_leaf("k", "v")],
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn node_plan_display_is_readable() {
         assert_eq!(format!("{}", NodePlan::Execute), "Execute");
-        assert_eq!(format!("{}", NodePlan::Split), "Split");
+        assert_eq!(format!("{}", NodePlan::NeedsPlanning), "NeedsPlanning");
         assert_eq!(format!("{}", NodePlan::Group(PlanGroup {
             mode: PlanGroupMode::Parallel,
             items: vec![],

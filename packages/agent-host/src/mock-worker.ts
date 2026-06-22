@@ -229,7 +229,7 @@ function mockSpecificationArgs(
     };
   }
 
-  if ("Group" in record || "Split" in record) {
+  if ("Group" in record || "NeedsPlanning" in record || "Split" in record) {
     return {
       next: intent,
       size: "large",
@@ -311,7 +311,7 @@ function taskBoardTasks(input: Record<string, unknown>): Record<string, unknown>
 
 function mockPlanGroupArgs(plan: unknown): Record<string, unknown> {
   const record = toRecord(plan);
-  if (plan === "Split" || "Split" in record) {
+  if (plan === "NeedsPlanning" || plan === "Split" || "NeedsPlanning" in record || "Split" in record) {
     return {
       mode: "parallel",
       items: [
