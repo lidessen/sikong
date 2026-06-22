@@ -2680,7 +2680,12 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
         .unwrap_or_else(|| "deepseek".to_string());
     let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
         .ok()
-        .filter(|value| value == "ai-sdk" || value == "claude-code")
+        .filter(|value| {
+            value == "ai-sdk"
+                || value == "claude-code"
+                || value == "codex"
+                || value == "cursor"
+        })
         .unwrap_or_else(|| "ai-sdk".to_string());
     launch.args.extend(
         [
@@ -2871,11 +2876,19 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         .interact()?;
     let provider = provider_opts[prov_idx].1;
 
-    // Step 2: Determine backend
+    // Step 2: Determine backend (some providers have fixed backends)
     let (backend, needs_api_key) = match provider {
-        "claude" | "codex" | "cursor" => {
-            println!("   ℹ️  {} uses Claude Code runtime with your existing subscription.", provider);
+        "claude" => {
+            println!("   ℹ️  Claude Code backend — uses the `claude` CLI with your existing subscription.");
             ("claude-code".to_string(), false)
+        }
+        "codex" => {
+            println!("   ℹ️  Codex backend — uses the `codex` CLI with your existing subscription.");
+            ("codex".to_string(), false)
+        }
+        "cursor" => {
+            println!("   ℹ️  Cursor backend — uses the `cursor` CLI with your existing subscription.");
+            ("cursor".to_string(), false)
         }
         "kimi" => {
             if has_claude_code {

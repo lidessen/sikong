@@ -16,8 +16,8 @@ import {
 import type { AgentRunRequest, AgentRunResponse, AgentToolCall, JsonValue } from "./protocol";
 
 export interface AgentLoopWorkerOptions {
-  provider?: "deepseek" | "kimi" | "claude" | "codex";
-  runtime?: "ai-sdk" | "claude-code";
+  provider?: "deepseek" | "kimi" | "claude" | "codex" | "cursor";
+  runtime?: "ai-sdk" | "claude-code" | "codex" | "cursor";
   model?: string;
   maxSteps?: number;
   effort?: EffortLevel;
@@ -278,7 +278,7 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
   }
 }
 
-function resolveRuntime(options: AgentLoopWorkerOptions): "ai-sdk" | "claude-code" {
+function resolveRuntime(options: AgentLoopWorkerOptions): "ai-sdk" | "claude-code" | "codex" | "cursor" {
   return options.runtime ?? "ai-sdk";
 }
 
@@ -300,7 +300,7 @@ function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
 
 export function runtimeOptionsForWorker(
   request: AgentRunRequest,
-  runtime: "ai-sdk" | "claude-code",
+  runtime: "ai-sdk" | "claude-code" | "codex" | "cursor",
 ): Record<string, unknown> | undefined {
   if (runtime !== "claude-code") {
     return undefined;
