@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use crate::agent_run::{AgentRunScheduler, CancellationToken};
 use crate::workspace::{
     GitWorkspaceSurface, Workspace, WorkspaceChange, WorkspaceProvider, WorkspaceResource,
-    WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceSurface,
+    WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceSurface,
 };
 
 use super::node::{
@@ -335,6 +335,10 @@ where
         Ok(())
     }
 
+    /// Resolve child nodes in parallel. Each branch runs in a separate tokio task
+    /// with its own Engine clone. A [`BranchWorkspaceGuard`] wraps each branch Engine
+    /// inside the spawned task so that workspace resources are deterministically
+    /// cleaned up even if the branch panics or errors.
     async fn resolve_parallel_children(
         &mut self,
         child_ids: Vec<NodeId>,
@@ -350,12 +354,25 @@ where
             let agent = self.agent.clone();
             let cancellation = cancellation.clone();
             branches.spawn(async move {
-                let mut branch = Engine::new(workspace, agent);
+                // Build the branch engine inside a RAII guard so that if
+                // resolve panics or errors, the guard's Drop cleans up any
+                // workspace resources the branch created.
+                let mut branch = Engine::new(workspace.clone(), agent);
                 branch.stop_after_route_depth = stop_after_route_depth;
                 branch.next_node_id = child.id;
                 branch.nodes.insert(child.id, child);
-                branch.resolve(child_id, depth, &cancellation).await?;
-                Ok::<_, EngineError>((child_id, branch))
+
+                // Wrap the Engine in the guard. The guard will clean up
+                // workspace resources on drop unless consumed by into_engine().
+                let mut guard = BranchEngineGuard::new(branch, workspace);
+
+                // Resolve the child node inside the guard scope.
+                // On success, consume the guard and return the engine.
+                // On error/panic, the guard's Drop cleans up resources.
+                guard.resolve(child_id, depth, &cancellation).await?;
+
+                let engine = guard.into_engine();
+                Ok::<_, EngineError>((child_id, engine))
             });
         }
 
@@ -365,6 +382,7 @@ where
             self.merge_parallel_branch(child_id, branch)?;
             self.cleanup_releasable_resources()?;
         }
+        self.cleanup_releasable_resources()?;
 
         Ok(())
     }
@@ -1029,6 +1047,102 @@ where
     }
 }
 
+// =========================================================================
+// RAII guard that wraps a parallel branch Engine
+// =========================================================================
+
+/// RAII guard that owns a parallel branch's [`Engine`] and a workspace clone.
+///
+/// Ensures deterministic cleanup of workspace resources when the guard is
+/// dropped without being consumed (i.e., on error or panic paths inside a
+/// spawned parallel task).
+///
+/// # Usage
+///
+/// Inside a spawned parallel task, wrap the branch Engine in this guard:
+///
+/// ```ignore
+/// let mut guard = BranchEngineGuard::new(engine, workspace);
+/// guard.resolve(child_id, depth, &cancellation).await?;
+/// let engine = guard.into_engine();  // consume guard, transfer ownership
+/// Ok((child_id, engine))
+/// ```
+///
+/// If the task panics or returns an error before `into_engine()` is called,
+/// the guard's [`Drop`] implementation cleans up any active workspace resources
+/// via [`Workspace::cleanup`].
+struct BranchEngineGuard<W, A>
+where
+    W: Workspace + Send + 'static,
+    A: AgentRunScheduler + Send + 'static,
+{
+    engine: Option<Engine<W, A>>,
+    workspace: Option<W>,
+}
+
+impl<W, A> BranchEngineGuard<W, A>
+where
+    W: Workspace + Clone + Send + 'static,
+    A: AgentRunScheduler + Clone + Send + 'static,
+{
+    /// Create a new guard that takes ownership of the branch Engine and a
+    /// workspace clone used for cleanup.
+    fn new(engine: Engine<W, A>, workspace: W) -> Self {
+        Self {
+            engine: Some(engine),
+            workspace: Some(workspace),
+        }
+    }
+
+    /// Resolve the child node through the wrapped Engine.
+    async fn resolve(
+        &mut self,
+        child_id: NodeId,
+        depth: usize,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<ArtifactId>, EngineError> {
+        let engine = self.engine.as_mut().expect("BranchEngineGuard engine consumed");
+        engine.resolve(child_id, depth, cancellation).await
+    }
+
+    /// Consume the guard, returning the inner Engine without cleanup.
+    /// The caller takes responsibility for the Engine's resources.
+    fn into_engine(mut self) -> Engine<W, A> {
+        self.engine.take().expect("BranchEngineGuard engine already consumed")
+    }
+}
+
+impl<W, A> Drop for BranchEngineGuard<W, A>
+where
+    W: Workspace + Send + 'static,
+    A: AgentRunScheduler + Send + 'static,
+{
+    fn drop(&mut self) {
+        // Only clean up if the Engine was not consumed via into_engine().
+        // This covers the error and panic paths.
+        if let Some(mut engine) = self.engine.take() {
+            if let Some(ref mut workspace) = self.workspace {
+                let resources = engine.workspace_resources.drain_all();
+                for resource in &resources {
+                    if resource.state == WorkspaceResourceState::Active {
+                        if let Err(error) = workspace.cleanup(resource) {
+                            warn!(
+                                resource_id = resource.id,
+                                error = %error,
+                                "BranchEngineGuard: failed to clean up resource on drop"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// =========================================================================
+// Free helper functions
+// =========================================================================
+
 fn remap_node(
     mut node: ProblemNode,
     node_map: &HashMap<NodeId, NodeId>,
@@ -1210,6 +1324,8 @@ fn check_cancelled(cancellation: &CancellationToken) -> Result<(), EngineError> 
 mod tests {
     use super::*;
 
+    // --- parent_scope_allows_child tests ---
+
     #[test]
     fn parent_scope_allows_doublestar_wildcard() {
         assert!(parent_scope_allows_child("**/*", "anything"));
@@ -1225,9 +1341,7 @@ mod tests {
 
     #[test]
     fn parent_scope_allows_narrower_directory_child() {
-        // Parent allows everything under src/, child narrows to src/task_run/
         assert!(parent_scope_allows_child("src/**/*", "src/task_run/engine.rs"));
-        // Parent allows everything under packages/, child narrows to packages/agent-host/
         assert!(parent_scope_allows_child("packages/**/*.ts", "packages/agent-host/src/protocol.ts"));
     }
 
