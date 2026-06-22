@@ -467,4 +467,27 @@ mod tests {
             "Uncertain(missing: schema version): need more data"
         );
     }
+
+    // ── CapabilityProfile tests ──────────────────────────────────────────
+
+    #[test]
+    fn capability_profile_read_only_does_not_allow_write() {
+        let profile = CapabilityProfile::read_only();
+        assert!(!profile.allow_write);
+    }
+
+    #[test]
+    fn capability_profile_writable_allows_write() {
+        let profile = CapabilityProfile::writable();
+        assert!(profile.allow_write);
+    }
+
+    // ── Budget tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn budget_default_max_attempts_is_two() {
+        let budget = Budget::default();
+        assert_eq!(budget.max_attempts, 2);
+    }
+
 }
