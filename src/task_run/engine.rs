@@ -1120,19 +1120,19 @@ where
     fn drop(&mut self) {
         // Only clean up if the Engine was not consumed via into_engine().
         // This covers the error and panic paths.
-        if let Some(mut engine) = self.engine.take() {
-            if let Some(ref mut workspace) = self.workspace {
-                let resources = engine.workspace_resources.drain_all();
-                for resource in &resources {
-                    if resource.state == WorkspaceResourceState::Active {
-                        if let Err(error) = workspace.cleanup(resource) {
-                            warn!(
-                                resource_id = resource.id,
-                                error = %error,
-                                "BranchEngineGuard: failed to clean up resource on drop"
-                            );
-                        }
-                    }
+        if let Some(mut engine) = self.engine.take()
+            && let Some(ref mut workspace) = self.workspace
+        {
+            let resources = engine.workspace_resources.drain_all();
+            for resource in &resources {
+                if resource.state == WorkspaceResourceState::Active
+                    && let Err(error) = workspace.cleanup(resource)
+                {
+                    warn!(
+                        resource_id = resource.id,
+                        error = %error,
+                        "BranchEngineGuard: failed to clean up resource on drop"
+                    );
                 }
             }
         }

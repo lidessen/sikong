@@ -3025,7 +3025,7 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     println!("   siko run \"analyze this\"     # Run a task");
     println!("   siko assistant --acp       # ACP server for external tools");
     println!("   siko dogfood run           # Self-iteration loop");
-    if needs_api_key && !std::env::var(match provider {"deepseek"=>"DEEPSEEK_API_KEY","kimi"=>"KIMI_CODE_API_KEY",_=>""}).ok().filter(|k|!k.is_empty()).is_some() {
+    if needs_api_key && std::env::var(match provider {"deepseek"=>"DEEPSEEK_API_KEY","kimi"=>"KIMI_CODE_API_KEY",_=>""}).ok().filter(|k|!k.is_empty()).is_none() {
         println!();
         println!("⚠️  No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...");
     }

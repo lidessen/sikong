@@ -16,7 +16,7 @@ pub struct SikoConfig {
     pub providers: std::collections::HashMap<String, ProviderConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(default)]
 pub struct ProviderConfig {
     /// Model for this provider
@@ -26,14 +26,6 @@ pub struct ProviderConfig {
     pub env: std::collections::HashMap<String, String>,
 }
 
-impl Default for ProviderConfig {
-    fn default() -> Self {
-        Self {
-            model: None,
-            env: std::collections::HashMap::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -45,7 +37,7 @@ pub struct AssistantConfig {
     pub max_parallel_tasks: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorkerConfig {
     /// Override provider for engine/worker tasks (inherits from global if not set)
@@ -103,14 +95,6 @@ impl Default for AssistantConfig {
     }
 }
 
-impl Default for WorkerConfig {
-    fn default() -> Self {
-        Self {
-            provider: None,
-            backend: None,
-        }
-    }
-}
 
 impl SikoConfig {
     pub fn load() -> Result<Self, config::ConfigError> {
@@ -134,12 +118,12 @@ impl SikoConfig {
 
     /// Apply env overrides from the current provider's config.
     pub fn apply_env(&self) {
-        if let Some(active) = &self.provider {
-            if let Some(pc) = self.providers.get(active) {
-                for (key, value) in &pc.env {
-                    if std::env::var(key).is_err() {
-                        unsafe { std::env::set_var(key, value) };
-                    }
+        if let Some(active) = &self.provider
+            && let Some(pc) = self.providers.get(active)
+        {
+            for (key, value) in &pc.env {
+                if std::env::var(key).is_err() {
+                    unsafe { std::env::set_var(key, value) };
                 }
             }
         }
