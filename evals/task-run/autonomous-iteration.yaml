@@ -1,44 +1,67 @@
 id: autonomous-iteration
 max_steps: 64
 task: |
-  Run one complete autonomous self-iteration cycle for the Sikong project.
-  You have full access to read and write all files. You can run any shell command.
-  You can use git. You are in full control.
+  You are running an autonomous self-improvement cycle for the Sikong project
+  using the engine's recursive divide-and-conquer architecture (人民史观).
 
-  Your mission:
-  1. Read design/README.md and the current state of the project to understand
-     what exists and what needs improvement.
-  2. Pick exactly ONE improvement to make. Choose the most impactful thing
-     that can be completed in a single cycle.
-  3. Implement the change — write files, modify code, whatever is needed.
-  4. Verify: run `cargo build` and `cargo test`.
-     If tests fail, fix them. Repeat until tests pass.
-  5. Commit: `git add -A && git commit -m '...'` with a descriptive message.
-  6. Record: append a summary of what was done to development-log/2026-06.md.
-  7. Report what you accomplished.
+  == SCOPE ASSESSMENT (Specify step) ==
+  When asked to assess the scope, report it as **Large** with this reason:
+  "The analysis requires multiple independent perspectives that must be
+  investigated in parallel: code structure, test coverage, design coherence,
+  and documentation accuracy. A single agent cannot reliably cover all
+  aspects without context overflow."
 
-  IMPORTANT: You must do ALL of these steps. Do not stop after implementation.
-  You must verify, commit, and record. The cycle is not complete until all
-  steps are done.
+  == PLAN (Plan step — produce 3-4 parallel child nodes) ==
+  Decompose the work into **3-4 parallel child nodes**, each analyzing a
+  different aspect of the Sikong project. Each child must have a bounded,
+  focused intent. Example aspects (pick which apply best):
 
-  Choose your improvement wisely. It should be:
-  - Bounded enough to complete in this cycle
-  - Impactful enough to be worth doing
-  - Something you can verify with cargo test
+  1. **Code analysis** — Examine src/ for structural issues, dead code,
+     missing error handling, or opportunities to simplify.
+  2. **Test analysis** — Examine tests/ and the test suite for gaps,
+     flaky patterns, or untested edge cases.
+  3. **Design analysis** — Read design/*.md and assess whether the
+     implementation still matches the documented architecture.
+  4. **Documentation / config analysis** — Check README, config files,
+     examples, and any user-facing docs for accuracy and completeness.
 
-  Good candidates (pick one):
-  - Simplify or remove the read_scope/write_scope system if it's not enforced
-  - Add a test for something that's untested
-  - Fix a bug or paper-cut in the codebase
-  - Improve error messages or logging
-  - Refactor a small area that's messy
+  Each child should be scoped as **Small** or **Medium** so it can be
+  executed atomically by a single agent. Each child's workspace should
+  be read-only (since this is analysis, not modification).
 
-  Do NOT pick something that requires multiple cycles or deep architectural changes.
-  One bounded improvement, fully implemented, verified, committed, and recorded.
+  Assign each child a distinct key like "code-analysis", "test-analysis",
+  "design-analysis", etc.
+
+  == COMBINE (parent step) ==
+  After all children complete and their findings are accepted, synthesize
+  the independent findings into a coherent assessment. Identify cross-cutting
+  themes (e.g., "both code and test analysis found the same fragility in
+  module X"). Propose ONE specific, bounded improvement that addresses the
+  most impactful finding. The improvement must be verifiable with `cargo build`.
+
+  == VERIFY (each child + parent) ==
+  Each child's findings must be verified independently before they become
+  durable. The parent's combined proposal must also pass verification:
+  check that the proposed improvement is bounded, actionable, and testable.
+
+  == EXECUTION RULES ==
+  - Do NOT modify any engine code (src/task_run/engine.rs) or CLI code
+    (src/cli.rs). Only analysis and a one-bounded-improvement proposal.
+  - The combined output is a proposal, not an implementation. The proposal
+    should describe what to change and why, with enough detail that a
+    developer (or a future agent run) could implement it.
+  - Focus on analysis and evidence-gathering. Use the full read scope
+    to inspect the project.
 expectation: |
-  The engine must complete a full iteration cycle autonomously:
-  analysis → decision → implementation → verification → commit → record.
-  Passing requires ALL steps to complete, including git commit and dev-log update.
+  The engine must demonstrate the full recursive divide-and-conquer cycle:
+  1. Specify — assess scope as Large, triggering Plan
+  2. Plan — produce a parallel group with 3-4 child nodes, each with a
+     distinct analytical focus
+  3. Each child resolves independently (Specify → Execute → Verify → Commit)
+  4. Combine — parent synthesizes child findings into a coherent assessment
+     and proposes one bounded improvement
+  5. Verify — the combined proposal passes verification before it is accepted
+  Passing requires evidence of all five steps in the transcript.
 workspace:
   provider: current-file-system
   read_scope:

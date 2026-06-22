@@ -1,0 +1,62 @@
+id: improve-dogfood-with-people-history
+task: |
+  Read design/product-vision.md, especially section "2½. 人民史观 — People's History View".
+  Also read the current dogfood loop in src/cli.rs (run_dogfood_run, run_dogfood_run_async)
+  and the autonomous-iteration scenario (evals/task-run/autonomous-iteration.yaml).
+
+  The current dogfood loop uses a single agent per cycle:
+  Specify: one agent assesses the project → Execute: one agent implements →
+  Verify: one agent checks. This is a "super-agent" model — one agent per
+  operation, trying to do everything.
+
+  人民史观 says: many ordinary agents working together within a sound architecture
+  will surpass one super-agent. The dogfood loop should reflect this.
+
+  Your job: redesign the dogfood loop to be a multi-agent society.
+
+  What to do:
+
+  1. Read the current dogfood flow:
+     - The autonomous-iteration scenario (evals/task-run/autonomous-iteration.yaml)
+     - run_dogfood_run_async in src/cli.rs
+     - The engine resolve loop in src/task_run/engine.rs
+
+  2. Redesign the default dogfood scenario (autonomous-iteration.yaml) to:
+     - NOT be a single atomic node
+     - Instead, split into multiple bounded agents working in parallel
+     - Each sub-agent has a narrower scope and more focused tool set
+     - The engine Plan phase should create parallel children for different
+       aspects of improvement (e.g., code analysis, test analysis, design
+       analysis)
+     - The Combine phase should synthesize independent findings into a
+       coherent improvement plan
+     - The Verify phase should check each agent's work independently
+
+  3. The scenario task description should tell the engine to:
+     - Plan the work as a parallel group with 3-4 child nodes
+     - Each child analyzes a different aspect of the codebase
+     - The parent combines results
+     - This tests the engine's ability to coordinate multiple ordinary agents
+
+  4. Do NOT modify the engine or CLI code. Only change the scenario YAML.
+     The engine already supports Plan/Combine/Verify — the scenario just
+     needs to trigger those paths.
+
+  5. After writing the scenario, run cargo build to verify nothing is broken.
+
+  The key principle: the result should be better than what one single agent
+  could produce, because:
+  - Each child agent focuses on a narrower evidence surface
+  - Independent verification catches errors before Combine
+  - The synthesized result from Combine is richer than any single agent's output
+expectation: |
+  The dogfood scenario should trigger parallel decomposition. The engine
+  should plan, execute children in parallel, combine results, and verify.
+  Only the scenario YAML changes — no source code modifications.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - evals/task-run/
+  allow_write: true
