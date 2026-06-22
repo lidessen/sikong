@@ -39,6 +39,7 @@ within the boundaries set by current (✓) documents.
 |--------|----------|---------|---------------|
 | ✓ | `cli-architecture.md` | `src/main.rs`, `src/cli.rs`, `src/config.rs`, `src/agent_run/run_scheduler.rs` | 2026-06-22 |
 | ✓ | `eval-framework.md` | `src/cli.rs` eval commands, `evals/task-run/*.yaml`, `design/recursive-agent-engine.md` §Live Eval Mode | 2026-06-22 |
+| ✓ | `assistant-agent-protocol.md` | `src/assistant/acp.rs`, external agent integrations | 2026-06-22 |
 | ◐ | `command-surface.md` | `src/cli.rs` CLI parsing and dispatch | 2026-06-21 |
 | ◐ | `cli.md` | `src/cli.rs` external contracts | 2026-06-21 |
 | ◐ | `daemon-runtime.md` | `cmd/sikongd/*`, legacy Go daemon | 2026-06-21 |

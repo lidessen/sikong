@@ -404,7 +404,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let config = SikoConfig::load()?;
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let launch = resolve_agent_host_launch(&debug);
+    let launch = resolve_agent_loop_launch(&debug, 12);
     let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
@@ -470,7 +470,7 @@ async fn run_assistant_prompt_async(
         CapabilityProfile::read_only()
     };
     let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let launch = resolve_agent_host_launch(&debug);
+    let launch = resolve_agent_loop_launch(&debug, 12);
     let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
