@@ -456,4 +456,64 @@ mod tests {
         assert_eq!(cfg.worker_provider(), "deepseek");
         assert_eq!(cfg.worker_backend(), "ai-sdk");
     }
+
+    // ── resolve_provider tests ──────────────────────────────────────────
+
+    #[test]
+    fn resolve_provider_component_override_beats_global() {
+        let result = resolve_provider(&Some("claude".to_string()), &Some("deepseek".to_string()));
+        assert_eq!(result, "claude");
+    }
+
+    #[test]
+    fn resolve_provider_global_used_when_component_none() {
+        let result = resolve_provider(&None, &Some("deepseek".to_string()));
+        assert_eq!(result, "deepseek");
+    }
+
+    #[test]
+    fn resolve_provider_default_when_both_none() {
+        let result = resolve_provider(&None, &None);
+        assert_eq!(result, "deepseek");
+    }
+
+    #[test]
+    fn resolve_provider_component_none_with_empty_global_returns_default() {
+        let result = resolve_provider(&None, &None);
+        assert_eq!(result, "deepseek");
+    }
+
+    // ── resolve_backend tests ──────────────────────────────────────────
+
+    #[test]
+    fn resolve_backend_component_override_beats_global() {
+        let result = resolve_backend(&Some("claude-code".to_string()), &Some("ai-sdk".to_string()));
+        assert_eq!(result, "claude-code");
+    }
+
+    #[test]
+    fn resolve_backend_global_used_when_component_none() {
+        let result = resolve_backend(&None, &Some("ai-sdk".to_string()));
+        assert_eq!(result, "ai-sdk");
+    }
+
+    #[test]
+    fn resolve_backend_default_when_both_none() {
+        let result = resolve_backend(&None, &None);
+        assert_eq!(result, "ai-sdk");
+    }
+
+    #[test]
+    fn resolve_backend_component_none_with_empty_global_returns_default() {
+        let result = resolve_backend(&None, &None);
+        assert_eq!(result, "ai-sdk");
+    }
+
+    #[test]
+    fn resolve_provider_and_backend_are_independent() {
+        let provider = resolve_provider(&Some("claude".to_string()), &Some("deepseek".to_string()));
+        let backend = resolve_backend(&None, &Some("ai-sdk".to_string()));
+        assert_eq!(provider, "claude");
+        assert_eq!(backend, "ai-sdk");
+    }
 }

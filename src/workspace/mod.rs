@@ -403,7 +403,7 @@ fn segment_chars_match(pattern: &[char], segment: &[char], pi: usize, si: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn workspace_requirement_memory_constructor() {
@@ -543,5 +543,212 @@ mod tests {
         ];
         assert_eq!(variants.len(), 5);
         assert!(format!("{:?}", variants).contains("RunningNode(1)"));
+    }
+    // ── path_allowed tests ────────────────────────────────────────────────
+
+    #[test]
+    fn path_allowed_double_star_matches_any_depth() {
+        assert!(path_allowed(&["**/*.rs".into()], Path::new("src/main.rs")));
+        assert!(path_allowed(&["**/*.rs".into()], Path::new("a/b/c/lib.rs")));
+        assert!(!path_allowed(&["**/*.rs".into()], Path::new("readme.md")));
+    }
+
+    #[test]
+    fn path_allowed_double_star_in_middle() {
+        assert!(path_allowed(&["src/**/*.rs".into()], Path::new("src/main.rs")));
+        assert!(path_allowed(&["src/**/*.rs".into()], Path::new("src/cli/mod.rs")));
+        assert!(path_allowed(&["src/**/*.rs".into()], Path::new("src/a/b/c/lib.rs")));
+        assert!(!path_allowed(&["src/**/*.rs".into()], Path::new("tests/test.rs")));
+        assert!(!path_allowed(&["src/**/*.rs".into()], Path::new("src/main.c")));
+    }
+
+    #[test]
+    fn path_allowed_multiple_patterns() {
+        let patterns = &["src/**/*.rs".into(), "design/**/*.md".into()];
+        assert!(path_allowed(patterns, Path::new("src/cli.rs")));
+        assert!(path_allowed(patterns, Path::new("design/README.md")));
+        assert!(!path_allowed(patterns, Path::new("tests/test.rs")));
+        assert!(!path_allowed(patterns, Path::new("Cargo.toml")));
+    }
+
+    #[test]
+    fn path_allowed_empty_scope_allows_nothing() {
+        assert!(!path_allowed(&[], Path::new("anything.txt")));
+        assert!(!path_allowed(&[], Path::new("")));
+        assert!(!path_allowed(&[], Path::new("/")));
+    }
+
+    #[test]
+    fn path_allowed_single_star_within_segment() {
+        assert!(path_allowed(&["src/*.rs".into()], Path::new("src/main.rs")));
+        assert!(!path_allowed(&["src/*.rs".into()], Path::new("src/main.c")));
+        // single * does NOT cross directory boundaries
+        assert!(!path_allowed(&["src/*.rs".into()], Path::new("src/cli/mod.rs")));
+    }
+
+    #[test]
+    fn path_allowed_question_matches_exactly_one_char() {
+        assert!(path_allowed(&["src/??.rs".into()], Path::new("src/cl.rs")));
+        assert!(path_allowed(&["src/??.rs".into()], Path::new("src/ab.rs")));
+        assert!(!path_allowed(&["src/??.rs".into()], Path::new("src/abc.rs")));
+        assert!(!path_allowed(&["src/??.rs".into()], Path::new("src/a.rs")));
+    }
+
+    #[test]
+    fn path_allowed_exact_path_match() {
+        assert!(path_allowed(&["src/main.rs".into()], Path::new("src/main.rs")));
+        assert!(!path_allowed(&["src/main.rs".into()], Path::new("src/lib.rs")));
+        assert!(!path_allowed(&["src/main.rs".into()], Path::new("other/src/main.rs")));
+    }
+
+    #[test]
+    fn path_allowed_double_star_at_end() {
+        assert!(path_allowed(&["src/**".into()], Path::new("src/main.rs")));
+        assert!(path_allowed(&["src/**".into()], Path::new("src/a/b/c")));
+        assert!(path_allowed(&["src/**".into()], Path::new("src/")));
+        assert!(!path_allowed(&["src/**".into()], Path::new("lib/main.rs")));
+    }
+
+    #[test]
+    fn path_allowed_double_star_matches_zero_segments() {
+        assert!(path_allowed(&["src/**/lib.rs".into()], Path::new("src/lib.rs")));
+        assert!(path_allowed(&["src/**/lib.rs".into()], Path::new("src/sub/lib.rs")));
+        assert!(path_allowed(&["src/**/lib.rs".into()], Path::new("src/a/b/lib.rs")));
+        assert!(!path_allowed(&["src/**/lib.rs".into()], Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn path_allowed_root_pattern_no_directory() {
+        assert!(path_allowed(&["*.rs".into()], Path::new("main.rs")));
+        assert!(path_allowed(&["*.rs".into()], Path::new("lib.rs")));
+        assert!(!path_allowed(&["*.rs".into()], Path::new("src/main.rs")));
+    }
+
+    // ── glob_matches tests ────────────────────────────────────────────────
+
+    #[test]
+    fn glob_matches_exact_string() {
+        assert!(glob_matches("src/main.rs", "src/main.rs"));
+        assert!(!glob_matches("src/main.rs", "src/lib.rs"));
+    }
+
+    #[test]
+    fn glob_matches_wildcard() {
+        assert!(glob_matches("*.rs", "main.rs"));
+        assert!(glob_matches("*.rs", "lib.rs"));
+        assert!(!glob_matches("*.rs", "main.c"));
+    }
+
+    #[test]
+    fn glob_matches_double_star() {
+        assert!(glob_matches("**/*.rs", "main.rs"));
+        assert!(glob_matches("**/*.rs", "src/main.rs"));
+        assert!(glob_matches("**/*.rs", "a/b/c/main.rs"));
+        assert!(!glob_matches("**/*.rs", "main.txt"));
+    }
+
+    // ── segments_match tests ──────────────────────────────────────────────
+
+    #[test]
+    fn segments_match_exact_all_segments() {
+        assert!(segments_match(&["src", "main.rs"], &["src", "main.rs"], 0, 0));
+        assert!(!segments_match(&["src", "main.rs"], &["src", "lib.rs"], 0, 0));
+    }
+
+    #[test]
+    fn segments_match_double_star_matches_multiple() {
+        assert!(segments_match(&["src", "**", "lib.rs"], &["src", "a", "b", "lib.rs"], 0, 0));
+        assert!(segments_match(&["src", "**", "lib.rs"], &["src", "lib.rs"], 0, 0));
+        assert!(!segments_match(&["src", "**", "lib.rs"], &["src", "main.rs"], 0, 0));
+    }
+
+    #[test]
+    fn segments_match_only_double_star_remaining_when_path_exhausted() {
+        // Path exhausted but pattern has ** remaining = match
+        assert!(segments_match(&["a", "**"], &["a"], 0, 0));
+        assert!(segments_match(&["a", "**", "**"], &["a"], 0, 0));
+        // Path exhausted but pattern has non-** = no match
+        assert!(!segments_match(&["a", "b"], &["a"], 0, 0));
+    }
+
+    #[test]
+    fn segments_match_pattern_exhausted_before_path() {
+        assert!(!segments_match(&["a"], &["a", "b"], 0, 0));
+        assert!(segments_match(&["a", "**"], &["a", "b", "c"], 0, 0));
+    }
+
+    // ── segment_match tests ───────────────────────────────────────────────
+
+    #[test]
+    fn segment_match_exact() {
+        assert!(segment_match("main.rs", "main.rs"));
+        assert!(!segment_match("main.rs", "lib.rs"));
+    }
+
+    #[test]
+    fn segment_match_single_star() {
+        assert!(segment_match("*.rs", "main.rs"));
+        assert!(segment_match("*.rs", "lib.rs"));
+        assert!(!segment_match("*.rs", "main.c"));
+        assert!(segment_match("main.*", "main.rs"));
+    }
+
+    #[test]
+    fn segment_match_question_mark() {
+        assert!(segment_match("??.rs", "ab.rs"));
+        assert!(segment_match("??.rs", "cl.rs"));
+        assert!(!segment_match("??.rs", "abc.rs"));
+        assert!(!segment_match("??.rs", "a.rs"));
+    }
+
+    #[test]
+    fn segment_match_star_with_question() {
+        assert!(segment_match("?at.*", "cat.rs"));
+        assert!(segment_match("?at.*", "bat.txt"));
+        assert!(!segment_match("?at.*", "at.rs"));
+        assert!(!segment_match("?at.*", "chat.rs"));
+    }
+
+    // ── segment_chars_match tests ────────────────────────────────────────
+
+    #[test]
+    fn segment_chars_match_empty() {
+        let empty: Vec<char> = vec![];
+        assert!(segment_chars_match(&empty, &empty, 0, 0));
+        assert!(!segment_chars_match(&['a'], &empty, 0, 0));
+        assert!(!segment_chars_match(&empty, &['a'], 0, 0));
+    }
+
+    #[test]
+    fn segment_chars_match_star_matches_zero_chars() {
+        assert!(segment_chars_match(&['*'], &[], 0, 0));
+        assert!(segment_chars_match(&['*'], &['a'], 0, 0));
+    }
+
+    #[test]
+    fn segment_chars_match_star_matches_multiple_chars() {
+        assert!(segment_chars_match(&['a', '*', 'c'], &['a', 'b', 'c'], 0, 0));
+        assert!(segment_chars_match(&['a', '*', 'c'], &['a', 'b', 'b', 'c'], 0, 0));
+        assert!(!segment_chars_match(&['a', '*', 'c'], &['a', 'b', 'd'], 0, 0));
+    }
+
+    #[test]
+    fn segment_chars_match_question_matches_exactly_one() {
+        assert!(segment_chars_match(&['?'], &['a'], 0, 0));
+        assert!(!segment_chars_match(&['?'], &[], 0, 0));
+        assert!(!segment_chars_match(&['?'], &['a', 'b'], 0, 0));
+    }
+
+    #[test]
+    fn segment_chars_match_exact_chars() {
+        assert!(segment_chars_match(&['a', 'b', 'c'], &['a', 'b', 'c'], 0, 0));
+        assert!(!segment_chars_match(&['a', 'b', 'c'], &['a', 'b', 'd'], 0, 0));
+        assert!(!segment_chars_match(&['a', 'b', 'c'], &['a', 'b'], 0, 0));
+    }
+
+    #[test]
+    fn segment_chars_match_star_at_start() {
+        assert!(segment_chars_match(&['*', '.', 'r', 's'], &['m', 'a', 'i', 'n', '.', 'r', 's'], 0, 0));
+        assert!(!segment_chars_match(&['*', '.', 'r', 's'], &['m', 'a', 'i', 'n', '.', 'c'], 0, 0));
     }
 }
