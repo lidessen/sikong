@@ -175,7 +175,7 @@ fn run_cli(cli: Cli) -> i32 {
         }) => match run_assistant_prompt(
             task,
             wait_ms,
-            AssistantPromptWorkspace::CurrentGit,
+            AssistantPromptWorkspace::CurrentFileSystem,
             false,
             Vec::new(),
             json,
@@ -393,7 +393,11 @@ enum AssistantCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum AssistantPromptWorkspace {
+    /// In-memory workspace (no file access).
     Memory,
+    /// Current file system (read files directly, no git worktree).
+    CurrentFileSystem,
+    /// Git worktree workspace (isolated, writable).
     CurrentGit,
 }
 
@@ -604,10 +608,16 @@ fn resolve_assistant_prompt_workspace(
     match workspace {
         AssistantPromptWorkspace::Memory => {
             if !write_scope.is_empty() {
-                return Err("--write-scope requires --workspace current-git".into());
+                return Err("--write-scope requires --workspace current-git or current-file-system".into());
             }
             Ok(WorkspaceRequirement::memory())
         }
+        AssistantPromptWorkspace::CurrentFileSystem => Ok(WorkspaceRequirement {
+            provider: siko::WorkspaceProvider::FileSystem,
+            read_scope: vec!["**/*".to_string()],
+            write_scope: write_scope.to_vec(),
+            git: None,
+        }),
         AssistantPromptWorkspace::CurrentGit => {
             let repo_root = current_git_root()?;
             let worktree_root = debug.data_dir().join("worktrees").join("assistant");

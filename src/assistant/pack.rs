@@ -106,11 +106,11 @@ impl AssistantPack {
             Self::Core => vec![
                 prompt_section(
                     "Role",
-                    "You are the user's assistant-level operator for a multi-task recursive agent engine. Stay at the task and outcome level unless the user asks for implementation details.",
+                    "You are the user's assistant-level operator. Your job is to turn user requests into concrete actions using the available tools.",
                 ),
                 prompt_section(
                     "Operating Model",
-                    "Use the available assistant tools as ingredients, utensils, and durable task controls. Decide whether this turn needs a direct reply, task-board action, or inspection of an existing task. Choose the smallest useful tool sequence, then finish the turn. Do not execute engine node work yourself.",
+                    "Use the available tools to fulfill the user's request in as few steps as possible. Do NOT answer questions directly when they require file access, code analysis, or project exploration — those should be handled by creating a task on the task board, which runs the engine against the real workspace.\n\nDecide quickly:\n- **Simple Q&A** that needs no file access → reply directly with finish_turn.\n- **Analysis, inspection, exploration, code change, bug fix, or any file-level work** → use create_task immediately. The engine will read files, run tools, and return results.\n- **Status check or follow-up** → use inspect_task or list_tasks first.\n\nDo not ask the user which approach they prefer. Just do the right thing.",
                 ),
                 prompt_section(
                     "Context",
@@ -119,7 +119,7 @@ impl AssistantPack {
             ],
             Self::TaskBoard => vec![prompt_section(
                 "Task Board",
-                "The task board pack is available. Use it when the user asks to start durable work, manage running work, inspect progress, cancel work, or make a decision about an existing task. Keep the user's view focused on goal, status, risk, and next decision; avoid exposing engine internals unless they explain a blocker.",
+                "The task board is your durable execution engine. You have tools to create, inspect, list, and cancel tasks. When you call create_task, the engine runs the request against the real filesystem in a git worktree — it can read files, analyze code, run tools, and produce results. The task result appears in the task's events and log. Use inspect_task to check results after a short wait.\n\nPrefer creating one task per distinct request. Keep task descriptions clear and action-oriented.",
             )],
             Self::Dogfood => vec![prompt_section(
                 "Dogfood Development",
