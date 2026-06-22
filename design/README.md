@@ -19,45 +19,45 @@ within the boundaries set by current (✓) documents.
 
 | Status | Document | Governs | Last Reviewed |
 |--------|----------|---------|---------------|
-| ✓ | `development-philosophy.md` | All layers — core philosophy, attention method, drift signals | 2026-06-21 (Agent As Intelligent Node added) |
-| ✓ | `governance-model.md` | All layers — Arch/Plan/Execute/Verify authority, gates | 2026-06-21 |
-| ✓ | `prompt-guidance.md` | All layers — attention boundary, context projection | 2026-06-21 |
-| ✓ | `dogfood.md` | Self-development loop — doc-first, live eval gates | 2026-06-21 |
+| ✓ | `philosophy/development-philosophy.md` | All layers — core philosophy, attention method, drift signals | 2026-06-21 (Agent As Intelligent Node added) |
+| ✓ | `philosophy/governance-model.md` | All layers — Arch/Plan/Execute/Verify authority, gates | 2026-06-21 |
+| ✓ | `philosophy/prompt-guidance.md` | All layers — attention boundary, context projection | 2026-06-21 |
+| ✓ | `philosophy/dogfood.md` | Self-development loop — doc-first, live eval gates | 2026-06-21 |
+| ✓ | `philosophy/development-theory.md` | All layers — development method, debt management, iteration cadence | 2026-06-22 |
+| ✓ | `philosophy/product-vision.md` | All layers — strategic direction, roadmap, iteration decisions | 2026-06-22 |
+| — | `philosophy/down-to-earth.md` | Practical methodology — plain-language principles | — |
+| — | `philosophy/practice-theory-unity.md` | Dogfood cycle principles — practical unity of theory and practice | — |
 
 ### Layer L2: Engine & Runtime (semi-stable)
 
 | Status | Document | Governs | Last Reviewed |
 |--------|----------|---------|---------------|
-| ✓ | `recursive-agent-engine.md` | `src/task_run/*`, `src/agent_run/*` | 2026-06-21 |
-| ✓ | `workspace-management.md` | `src/workspace/*` | 2026-06-21 |
-| ◐ | `coordination-engine.md` | `packages/agent-host/*`, `packages/agent-loop/*` | 2026-06-21 |
-| ◐ | `assistant-agent-loop.md` | `src/assistant/*`, `packages/agent-host/*` | 2026-06-21 |
+| ✓ | `engine/recursive-agent-engine.md` | `src/task_run/*`, `src/agent_run/*` | 2026-06-21 |
+| ✓ | `engine/workspace-management.md` | `src/workspace/*` | 2026-06-21 |
+| ◐ | `engine/assistant-agent-loop.md` | `src/assistant/*`, `packages/agent-host/*` | 2026-06-21 |
 
 ### Layer L1: Command & Interface (evolving)
 
 | Status | Document | Governs | Last Reviewed |
 |--------|----------|---------|---------------|
-| ✓ | `cli-architecture.md` | `src/main.rs`, `src/cli.rs`, `src/config.rs`, `src/agent_run/run_scheduler.rs` | 2026-06-22 |
-| ✓ | `eval-framework.md` | `src/cli.rs` eval commands, `evals/task-run/*.yaml`, `design/recursive-agent-engine.md` §Live Eval Mode | 2026-06-22 |
-| ✓ | `assistant-agent-protocol.md` | `src/assistant/acp.rs`, external agent integrations | 2026-06-22 |
-| ◐ | `command-surface.md` | `src/cli.rs` CLI parsing and dispatch | 2026-06-21 |
-| ◐ | `cli.md` | `src/cli.rs` external contracts | 2026-06-21 |
-| ◐ | `daemon-runtime.md` | `cmd/sikongd/*`, legacy Go daemon | 2026-06-21 |
+| ✓ | `interface/cli-architecture.md` | `src/main.rs`, `src/cli.rs`, `src/config.rs`, `src/agent_run/run_scheduler.rs` | 2026-06-22 |
+| ✓ | `interface/eval-framework.md` | `src/cli.rs` eval commands, `evals/task-run/*.yaml`, `design/engine/recursive-agent-engine.md` §Live Eval Mode | 2026-06-22 |
+| ✓ | `interface/assistant-agent-protocol.md` | `src/assistant/acp.rs`, external agent integrations | 2026-06-22 |
+| ◐ | `interface/command-surface.md` | `src/cli.rs` CLI parsing and dispatch | 2026-06-21 |
+| ◐ | `interface/cli.md` | `src/cli.rs` external contracts | 2026-06-21 |
+| + | `interface/evaluation-framework.md` | `src/task_run/*` metrics collection, `src/cli.rs` eval/metrics commands, `evals/benchmarks/*.yaml` | 2026-06-22 |
 
-### Layer L0: Client & UI (fast-moving)
-
-| Status | Document | Governs | Last Reviewed |
-|--------|----------|---------|---------------|
-| ✗ | `client-agent.md` | `packages/client/*`, legacy UI | pre-cleanup |
-| ✗ | `client-ui-user-stories.md` | `packages/client/*`, legacy UI | pre-cleanup |
-| ✗ | `console-ui-generation.md` | `packages/client/*`, legacy UI | pre-cleanup |
-
-### Cross-Cutting
+### Legacy (Go/Bun Era — Superseded)
 
 | Status | Document | Governs | Last Reviewed |
 |--------|----------|---------|---------------|
-| ◐ | `project-shape.md` | Repository layout and migration stance | 2026-06-21 |
-| ◐ | `implementation-plan.md` | Current phased implementation sequence | 2026-06-21 |
+| ✗ | `legacy/daemon-runtime.md` | `cmd/sikongd/*`, legacy Go daemon | 2026-06-21 |
+| ✗ | `legacy/client-agent.md` | `packages/client/*`, legacy UI | pre-cleanup |
+| ✗ | `legacy/client-ui-user-stories.md` | `packages/client/*`, legacy UI | pre-cleanup |
+| ✗ | `legacy/console-ui-generation.md` | `packages/client/*`, legacy UI | pre-cleanup |
+| ✗ | `legacy/coordination-engine.md` | `packages/agent-host/*`, `packages/agent-loop/*` | 2026-06-21 |
+| ✗ | `legacy/implementation-plan.md` | Go/Bun/TypeScript implementation sequence | 2026-06-21 |
+| — | `legacy/project-shape.md` | Go/Bun/TypeScript repository layout and migration stance | — |
 
 ## Design Discipline
 
