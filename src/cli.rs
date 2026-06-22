@@ -1026,6 +1026,30 @@ async fn run_task_run_split_eval_async(
             .run(root)
             .await
             .map_err(|error| format!("task run failed for scenario {}: {error:?}", scenario.id))?;
+
+        // Collect per-agent-run metrics
+        let mut metrics_collector = siko::metrics::MetricsCollector::new();
+        for agent_run in &report.agent_runs {
+            let operation = agent_run.operation.to_string();
+            let duration_ms = agent_run.duration_ms;
+            let passed = agent_run.terminal_tool.is_some();
+            if let Some(usage) = &agent_run.usage {
+                metrics_collector.record_agent_run(
+                    &operation,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    duration_ms,
+                    passed,
+                );
+            } else {
+                metrics_collector.record_agent_run(
+                    &operation, 0, 0, 0, duration_ms, passed,
+                );
+            }
+        }
+        let metrics = metrics_collector.snapshot().to_json_value();
+
         let transcript = TaskRunSplitTranscript::from_engine(&scenario, root, &engine, &report);
         let artifact_files =
             write_task_run_artifacts(artifact_dir, &scenario, root, &engine, &report)?;
@@ -1051,6 +1075,7 @@ async fn run_task_run_split_eval_async(
             judgement,
             artifact_files,
             transcript,
+            metrics,
         });
     }
 
@@ -1160,6 +1185,30 @@ async fn run_dogfood_run_async(
             .run(root)
             .await
             .map_err(|error| format!("scenario {} failed: {error:?}", scenario.id))?;
+
+        // Collect per-agent-run metrics
+        let mut metrics_collector = siko::metrics::MetricsCollector::new();
+        for agent_run in &report.agent_runs {
+            let operation = agent_run.operation.to_string();
+            let duration_ms = agent_run.duration_ms;
+            let passed = agent_run.terminal_tool.is_some();
+            if let Some(usage) = &agent_run.usage {
+                metrics_collector.record_agent_run(
+                    &operation,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens,
+                    duration_ms,
+                    passed,
+                );
+            } else {
+                metrics_collector.record_agent_run(
+                    &operation, 0, 0, 0, duration_ms, passed,
+                );
+            }
+        }
+        let metrics = metrics_collector.snapshot().to_json_value();
+
         let transcript = TaskRunSplitTranscript::from_engine(&scenario, root, &engine, &report);
         let artifact_files =
             write_task_run_artifacts(artifact_dir, &scenario, root, &engine, &report)?;
@@ -1188,6 +1237,7 @@ async fn run_dogfood_run_async(
                 "status": report.status,
                 "artifact_files": artifact_files,
                 "agent_runs": report.agent_runs.len(),
+                "metrics": metrics,
             });
             serde_json::to_writer_pretty(std::io::stdout(), &output)?;
             println!();
@@ -1828,6 +1878,8 @@ struct TaskRunSplitEvalResult {
     judgement: TaskRunSplitJudgement,
     artifact_files: Vec<TaskRunArtifactFile>,
     transcript: TaskRunSplitTranscript,
+    /// Per-operation metrics collected from agent runs.
+    metrics: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

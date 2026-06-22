@@ -37,6 +37,63 @@ impl MetricsCollector {
         self.costs.entry(name.to_string()).or_default().push(amount);
     }
 
+    /// Record an agent run's usage data by operation type.
+    ///
+    /// Tracks per-operation statistics (counts, sums, averages, ratios).
+    /// No subjective scoring, rating, or quality analysis is performed.
+    ///
+    /// # Parameters
+    ///
+    /// *  - The operation name, e.g. "Specify", "Execute", "Plan", "Verify", "Combine", "Commit".
+    /// *  - Number of input tokens consumed.
+    /// *  - Number of output tokens generated.
+    /// *  - Number of cache read tokens.
+    /// *  - Duration of the run in milliseconds.
+    /// *  - Whether the run completed successfully.
+    pub fn record_agent_run(
+        &mut self,
+        operation: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        duration_ms: u128,
+        passed: bool,
+    ) {
+        let op_key = operation.to_lowercase();
+
+        // Per-operation counters
+        self.increment_counter(&format!("{op_key}.count"), 1);
+        self.increment_counter(&format!("{op_key}.input_tokens"), input_tokens);
+        self.increment_counter(&format!("{op_key}.output_tokens"), output_tokens);
+        self.increment_counter(&format!("{op_key}.cache_read_tokens"), cache_read_tokens);
+        if passed {
+            self.increment_counter(&format!("{op_key}.passed"), 1);
+        } else {
+            self.increment_counter(&format!("{op_key}.failed"), 1);
+        }
+
+        // Per-operation timings (ms)
+        self.record_timing(
+            &format!("{op_key}.duration_ms"),
+            Duration::from_millis(duration_ms as u64),
+        );
+
+        // Aggregate totals
+        self.increment_counter("total.runs", 1);
+        self.increment_counter("total.input_tokens", input_tokens);
+        self.increment_counter("total.output_tokens", output_tokens);
+        self.increment_counter("total.cache_read_tokens", cache_read_tokens);
+        if passed {
+            self.increment_counter("total.passed", 1);
+        } else {
+            self.increment_counter("total.failed", 1);
+        }
+        self.record_timing(
+            "total.duration_ms",
+            Duration::from_millis(duration_ms as u64),
+        );
+    }
+
     /// Retrieve all collected data as an immutable snapshot.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -74,6 +131,31 @@ impl MetricsSnapshot {
     /// Access the collected costs.
     pub fn costs(&self) -> &HashMap<String, Vec<f64>> {
         &self.costs
+    }
+
+    /// Render the snapshot as a [] for embedding in JSON output.
+    ///
+    /// The structure matches [] output:
+    /// - : flat key-value map
+    /// - : keys mapped to arrays of millisecond values
+    /// - : keys mapped to arrays of cost values
+    pub fn to_json_value(&self) -> serde_json::Value {
+        let timings_ms: HashMap<String, Vec<f64>> = self
+            .timings
+            .iter()
+            .map(|(key, durations)| {
+                (
+                    key.clone(),
+                    durations.iter().map(|d| d.as_secs_f64() * 1000.0).collect(),
+                )
+            })
+            .collect();
+
+        serde_json::json!({
+            "counters": self.counters,
+            "timings": timings_ms,
+            "costs": self.costs,
+        })
     }
 }
 
