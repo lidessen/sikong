@@ -8,8 +8,10 @@
   "scripts": {
     "build": "bun run build:go",
     "build:agent-host": "bun --filter @sikong/agent-host build:runtime-host",
+    "build:rust": "cargo build --release --bin siko && bash scripts/build-release-rust.sh",
     "build:go": "go build -o dist/sikong ./cmd/sikong && go build -o dist/sikongd ./cmd/sikongd",
     "release:darwin-arm64": "bash scripts/build-release-darwin-arm64.sh",
+    "release:rust": "bash scripts/build-release-rust.sh",
     "check": "bun run check:go && bun run typecheck && bun run lint && bun run fmt:check && bun run check:js",
     "check:go": "go test ./...",
     "check:js": "SIKONG_ORCHESTRATION_RUNNER_COMMAND= bun --filter agent-loop test; al_exit=$?; bun --filter @sikong/agent-host test; ah_exit=$?; SIKONG_ORCHESTRATION_RUNNER_COMMAND= bun --filter @sikong/workspace test; ws_exit=$?; bun --filter @sikong/client test; cl_exit=$?; bun --filter @sikong/client build; build_exit=$?; exit $((al_exit + ah_exit + ws_exit + cl_exit + build_exit))",

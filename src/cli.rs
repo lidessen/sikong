@@ -210,6 +210,12 @@ fn run_cli(cli: Cli) -> i32 {
 #[derive(Debug, Parser)]
 #[command(name = "siko")]
 #[command(about = "Recursive agent engine prototype")]
+#[command(version = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("CARGO_PKG_NAME"),
+    ")"
+))]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
