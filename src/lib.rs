@@ -19,7 +19,7 @@ pub use assistant::{
 };
 pub use config::{
     AssistantConfig, DebugConfig, SikoConfig, WorkerConfig, default_config_path,
-    resolve_provider, resolve_backend,
+    resolve_provider, resolve_backend, non_empty_env,
 };
 pub use task_board::{
     AssistantTask, AssistantTaskEvent, AssistantTaskEventRecord, AssistantTaskStatus,

@@ -32,6 +32,11 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
 }
 
 fn run_cli(cli: Cli) -> i32 {
+    // Load config and apply env overrides
+    if let Ok(config) = SikoConfig::load() {
+        config.apply_env();
+    }
+
     match cli.command {
         Some(Command::Assistant {
             acp: false,
@@ -2687,6 +2692,9 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
                 || value == "cursor"
         })
         .unwrap_or_else(|| "ai-sdk".to_string());
+    let model = std::env::var("SIKONG_AGENT_HOST_MODEL")
+        .ok()
+        .filter(|v| !v.is_empty());
     launch.args.extend(
         [
             "--worker",
@@ -2695,11 +2703,15 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
             provider.as_str(),
             "--runtime",
             runtime.as_str(),
-            "--max-steps",
         ]
         .into_iter()
         .map(str::to_string),
     );
+    if let Some(m) = &model {
+        launch.args.push("--model".to_string());
+        launch.args.push(m.clone());
+    }
+    launch.args.push("--max-steps".to_string());
     launch.args.push(max_steps.to_string());
     launch
 }
@@ -2915,7 +2927,31 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Step 3: API key prompt if needed
+    // Step 3: Model selection (if provider has choices)
+    let model = match provider {
+        "deepseek" => {
+            let models = vec!["deepseek-v4-flash", "deepseek-v4", "deepseek-r1"];
+            let m_idx = Select::with_theme(&theme)
+                .with_prompt("Select model")
+                .default(0)
+                .items(&models)
+                .interact()?;
+            models[m_idx].to_string()
+        }
+        "claude" => {
+            let models = vec!["claude-sonnet-4-20250514", "claude-4-20250514"];
+            let m_idx = Select::with_theme(&theme)
+                .with_prompt("Select model")
+                .default(0)
+                .items(&models)
+                .interact()?;
+            models[m_idx].to_string()
+        }
+        _ => String::new(),
+    };
+
+    // Step 4: API key prompt if needed
+    let mut env_entries: Vec<(String, String)> = Vec::new();
     if needs_api_key {
         let key_var = match provider {
             "deepseek" => "DEEPSEEK_API_KEY",
@@ -2931,28 +2967,33 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
                 .allow_empty(true)
                 .interact_text()?;
             if !api_key.is_empty() {
-                std::fs::create_dir_all(&config_dir)?;
-                let env_path = config_dir.join(".env");
-                let mut env_content = String::new();
-                if env_path.exists() { env_content = std::fs::read_to_string(&env_path)?; }
-                if !env_content.contains(key_var) {
-                    writeln!(&mut env_content, "{}={}", key_var, api_key)?;
-                    std::fs::write(&env_path, env_content)?;
-                    println!("   ✅ Saved to {}", env_path.display());
-                }
+                env_entries.push((key_var.to_string(), api_key.clone()));
                 let masked = if api_key.len() > 4 { format!("{}...", &api_key[..4]) } else { String::new() };
-                println!("   ℹ️  Also add to shell: export {}={}", key_var, masked);
+                println!("   ℹ️  Saved to config. Also add to shell: export {}={}", key_var, masked);
             }
         }
     }
 
-    // Step 4: Write config
+    // Step 5: Write config
     let use_real_agent = has_claude_code || has_codex || backend == "claude-code";
     std::fs::create_dir_all(&config_dir)?;
-    let config_content = format!(
-        "version: 1\nprovider: {}\nbackend: {}\nassistant:\n  max_parallel_tasks: 2\n",
-        provider, backend,
-    );
+    let mut config_lines = vec![
+        "version: 1".to_string(),
+        format!("provider: {}", provider),
+        format!("backend: {}", backend),
+    ];
+    if !model.is_empty() {
+        config_lines.push(format!("model: {}", model));
+    }
+    if !env_entries.is_empty() {
+        config_lines.push("env:".to_string());
+        for (k, v) in &env_entries {
+            config_lines.push(format!("  {}: \"{}\"", k, v));
+        }
+    }
+    config_lines.push("assistant:".to_string());
+    config_lines.push("  max_parallel_tasks: 2".to_string());
+    let config_content = config_lines.join("\n") + "\n";
     std::fs::write(&config_path, config_content)?;
 
     println!();

@@ -9,6 +9,11 @@ pub struct SikoConfig {
     pub provider: Option<String>,
     /// Global default backend (ai-sdk, claude-code)
     pub backend: Option<String>,
+    /// Model override (e.g. "claude-sonnet-4-20250514", "deepseek-v4-flash")
+    pub model: Option<String>,
+    /// Environment variable overrides (merged into process env at startup)
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
     pub assistant: AssistantConfig,
     pub worker: WorkerConfig,
 }
@@ -64,6 +69,8 @@ impl Default for SikoConfig {
             version: 1,
             provider: None,
             backend: None,
+            model: None,
+            env: std::collections::HashMap::new(),
             assistant: AssistantConfig::default(),
             worker: WorkerConfig::default(),
         }
@@ -107,6 +114,22 @@ impl SikoConfig {
             );
 
         builder.build()?.try_deserialize()
+    }
+
+    /// Apply env overrides from config to process environment.
+    /// Returns warnings for any failures (non-fatal).
+    pub fn apply_env(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for (key, value) in &self.env {
+            if std::env::var(key).is_err()
+                || std::env::var("SIKONG_ENV_OVERRIDE").as_deref() == Ok("1")
+            {
+                // Safety: this is called early in main before any other threads.
+                // The env vars override is intentional and user-configured.
+                unsafe { std::env::set_var(key, value) };
+            }
+        }
+        warnings
     }
 
     pub fn assistant_provider(&self) -> String {
@@ -197,7 +220,7 @@ fn expand_home(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn non_empty_env(env: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+pub fn non_empty_env(env: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
     env(name).and_then(|value| {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -389,6 +412,8 @@ mod tests {
             version: 1,
             provider: Some("deepseek".to_string()),
             backend: Some("ai-sdk".to_string()),
+            model: None,
+            env: std::collections::HashMap::new(),
             assistant: AssistantConfig::default(),
             worker: WorkerConfig::default(),
         };
@@ -405,6 +430,8 @@ mod tests {
             version: 1,
             provider: Some("deepseek".to_string()),
             backend: Some("ai-sdk".to_string()),
+            model: None,
+            env: std::collections::HashMap::new(),
             assistant: AssistantConfig {
                 provider: Some("kimi".to_string()),
                 backend: Some("claude-code".to_string()),
