@@ -1,0 +1,69 @@
+id: development-theory
+task: |
+  The Sikong project has been iterating autonomously for many cycles,
+  but the improvements have been scattered: unused imports one round,
+  tests another, clippy fixes another, a metrics framework, etc.
+  There is no overarching theory that connects each iteration to the
+  next, no framework that ensures each improvement builds on the
+  previous one, and no principled way to decide WHAT to improve next.
+
+  Read the following:
+  - design/development-philosophy.md (especially "Agent As Intelligent
+    Node" and "Shared Direction")
+  - design/governance-model.md (Arch/Plan/Execute/Verify layers)
+  - design/evaluation-framework.md (metrics and measurement)
+  - The recent development-log/2026-06.md (what was actually done)
+  - The project's current source structure (src/, design/, packages/)
+
+  Then produce a document design/development-theory.md that:
+
+  1. Identifies the problem: why scattered improvements are harmful
+     even when each individual improvement is valid.
+
+  2. Proposes a theory of iterative development that ensures:
+     - Each cycle has a clear "layer" or "dimension" it targets
+       (e.g., stability, capability, performance, polish, ecosystem)
+     - Improvements within a layer compound rather than scatter
+     - The theory is grounded in the project's existing design
+       principles (attention layering, governance model)
+     - It provides concrete guidance for what to do when you don't
+       know what to do next
+
+  3. Defines 3-5 "development dimensions" that map to the project's
+     existing layer model (Arch/L3, Engine/L2, Interface/L1, Client/L0)
+     and adds a "meta" dimension for the iteration process itself.
+
+  4. For each dimension, defines:
+     - What kinds of improvements belong here
+     - What signal indicates this dimension needs attention
+     - How improvements in this dimension compound
+
+  5. Proposes a "rhythm" or "cadence" pattern:
+     - How to rotate through dimensions
+     - How deep to go in one dimension before switching
+     - How to decide when a dimension is "done enough" to move on
+
+  6. Introduces the concept of "debt budget" — not all improvements
+     need to be made now. Some can be deferred. The theory should
+     explain how to decide what to defer and what to do now.
+
+  7. The document should be practical and actionable, not purely
+     philosophical. Someone reading it should know what to do next.
+
+  Do NOT modify any source code. Only write the design document.
+  Use clear, direct language. Include diagrams in text form where
+  helpful. The document should be 1000-3000 words.
+
+  After writing, run cargo build to confirm nothing is broken (it
+  shouldn't be — you're only writing a .md file).
+expectation: |
+  A design document that provides a coherent theory for iterative
+  development. Must be grounded in existing design principles.
+  Must provide actionable guidance. Must not modify any source code.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - design/
+  allow_write: true
