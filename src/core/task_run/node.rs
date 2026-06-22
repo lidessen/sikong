@@ -31,6 +31,35 @@ impl fmt::Display for WorkSize {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum NodePolicy {
+    /// Investigation, research, or evidence gathering.
+    #[default]
+    Explore,
+    /// Code or artifact implementation and construction.
+    Implement,
+    /// Review, audit, or inspection of existing work.
+    Review,
+    /// Verification, testing, or acceptance checking.
+    Verify,
+    /// Decomposition, planning, or routing to sub-problems.
+    Decompose,
+}
+
+impl fmt::Display for NodePolicy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Explore => "explore",
+            Self::Implement => "implement",
+            Self::Review => "review",
+            Self::Verify => "verify",
+            Self::Decompose => "decompose",
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ScopeAssessment {
     pub next: String,
@@ -103,6 +132,7 @@ pub struct NodeTemplate {
     pub workspace: WorkspaceRequirement,
     pub capabilities: CapabilityProfile,
     pub budget: Budget,
+    pub policy: NodePolicy,
     pub plan: NodePlan,
 }
 
@@ -116,6 +146,7 @@ impl NodeTemplate {
             workspace: WorkspaceRequirement::memory(),
             capabilities: CapabilityProfile::read_only(),
             budget: Budget::default(),
+            policy: NodePolicy::Explore,
             plan: NodePlan::Execute,
         }
     }
@@ -132,6 +163,7 @@ pub struct ProblemNode {
     pub workspace: WorkspaceRequirement,
     pub capabilities: CapabilityProfile,
     pub budget: Budget,
+    pub policy: NodePolicy,
     pub children: Vec<NodeId>,
     pub status: NodeStatus,
     pub plan: NodePlan,

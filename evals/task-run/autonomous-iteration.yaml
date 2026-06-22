@@ -18,8 +18,9 @@ task: |
   引擎应该自己决定怎么拆、怎么合。你可以并行分析 common/、core/、
   harness/ 的不同文件，然后综合实现。
 
-  最后验证：cargo build && cargo test。
-  然后记到 development-log：做了什么、离 M5 还差什么。
+  最后必须完成：git add -A && git commit -m '描述性消息'
+  然后验证：cargo build && cargo test。
+  最后记到 development-log：做了什么、离 M5 还差什么。
 expectation: |
   项目朝 M5 前进了实质性的一步。改动涉及多个层，不是单文件修补。
 workspace:

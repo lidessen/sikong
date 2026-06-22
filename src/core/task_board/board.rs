@@ -12,7 +12,7 @@ use tracing::{Level, error, info};
 use crate::{
     AgentRunRequest, AgentRunResponse, AgentRunScheduler, AssistantTaskEventRecord,
     AssistantTaskStatus, Budget, CancellationToken, CapabilityProfile, Engine, EngineError,
-    EngineReport, NodeId, NodePlan, NodeTemplate, ProblemKey, TaskId, TaskStore, WorkSize,
+    EngineReport, NodeId, NodePlan, NodePolicy, NodeTemplate, ProblemKey, TaskId, TaskStore, WorkSize,
     Workspaces,
 };
 
@@ -582,6 +582,7 @@ fn task_request_to_root(
     capabilities: CapabilityProfile,
 ) -> NodeTemplate {
     NodeTemplate {
+    policy: NodePolicy::Explore,
         key: ProblemKey(task_id.to_string()),
         intent: request.to_string(),
         size: WorkSize::Small,

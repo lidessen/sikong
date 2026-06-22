@@ -11,7 +11,7 @@ use crate::common::workspace::{
 use crate::core::agent_run::{AgentRunScheduler, CancellationToken};
 
 use super::node::{
-    Artifact, ArtifactContentKind, NodePlan, NodeTemplate, PlanGroupMode, ProblemNode,
+    Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroupMode, ProblemNode,
     ScopeAssessment, WorkSize,
 };
 use super::resources::WorkspaceResourceRegistry;
@@ -768,6 +768,7 @@ where
                 workspace: template.workspace,
                 capabilities: template.capabilities,
                 budget: template.budget,
+                policy: template.policy,
                 children: Vec::new(),
                 status: NodeStatus::New,
                 plan: template.plan,
@@ -1368,6 +1369,9 @@ fn inherit_child_defaults(
     }
     template.capabilities = parent.capabilities.clone();
     template.budget = parent.budget.clone();
+    if template.policy == NodePolicy::Explore {
+        template.policy = parent.policy;
+    }
     Ok(template)
 }
 

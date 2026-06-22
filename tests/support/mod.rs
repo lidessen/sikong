@@ -281,6 +281,7 @@ pub fn skip_without_bun(test_name: &str) -> bool {
 /// Create a leaf `NodeTemplate` with a git workspace scoped to the given path.
 pub fn scoped_git_leaf(key: &str, output: &str, path: &str) -> NodeTemplate {
     NodeTemplate {
+        policy: NodePolicy::Explore,
         key: ProblemKey(key.to_string()),
         intent: output.to_string(),
         size: WorkSize::Small,

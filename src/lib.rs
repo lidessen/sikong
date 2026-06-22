@@ -23,7 +23,7 @@ pub use core::task_run::{
     EngineAgentGovernanceGatePacket, EngineAgentGovernancePacket, EngineAgentNodePacket,
     EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, EngineError,
     EngineReport, FailureClass, GovernanceGate, GovernanceLayer, NodeId, NodeOperation,
-    NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationEvent, OperationHarness,
+    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationEvent, OperationHarness,
     PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment, VerificationVerdict,
     WorkSize,
 };

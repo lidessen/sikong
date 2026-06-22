@@ -10,7 +10,7 @@ use crate::core::agent_run::{
 use super::tools::{EngineTool, EngineTools};
 use super::{
     AgentOperationContext, AgentRunDecodeError, AgentRunResult, Artifact, GovernanceGate,
-    GovernanceLayer, NodeOperation, NodePlan, ScopeAssessment, WorkSize,
+    GovernanceLayer, NodeOperation, NodePlan, NodePolicy, ScopeAssessment, WorkSize,
 };
 
 macro_rules! operation_prompt {
@@ -83,6 +83,7 @@ pub struct EngineAgentNodePacket {
     pub budget_max_attempts: u32,
     pub execution_attempts: u32,
     pub verification_attempts: u32,
+    pub policy: NodePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -574,6 +575,7 @@ fn node_packet(context: &AgentOperationContext) -> EngineAgentNodePacket {
         budget_max_attempts: node.budget.max_attempts,
         execution_attempts: node.execution_attempts,
         verification_attempts: node.verification_attempts,
+        policy: node.policy,
     }
 }
 

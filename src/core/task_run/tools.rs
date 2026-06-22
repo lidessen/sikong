@@ -3,8 +3,8 @@ use serde::Deserialize;
 
 use super::{
     Budget, CapabilityProfile, FailureClass, GovernanceGate, NodeOperationOutput, NodePlan,
-    NodeTemplate, PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, VerificationVerdict,
-    WorkSize,
+    NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment,
+    VerificationVerdict, WorkSize,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -141,6 +141,7 @@ impl PlanItemInput {
         });
 
         NodeTemplate {
+        policy: NodePolicy::Explore,
             key: ProblemKey(key),
             intent,
             size,

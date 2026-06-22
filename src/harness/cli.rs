@@ -9,7 +9,7 @@ use crate::{
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
     AssistantTask, AssistantTaskEvent, AssistantTaskStatus, Budget, CancellationToken,
     CapabilityProfile, DebugConfig, Engine, FileTaskStore, NodeId, NodeOperation,
-    NodeOperationOutput, NodePlan, NodeStatus, NodeTemplate, OperationHarness, PlanGroup,
+    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness, PlanGroup,
     PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig, TaskStore,
     WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface, Workspaces,
     common::metrics::{MetricsCollector, MetricsFormatter},
@@ -331,9 +331,9 @@ enum Command {
         #[arg(long)]
         json: bool,
 
-        /// Allow the agent to modify files in the workspace. Without this flag,
-        /// the agent can only read files and produce analysis.
-        #[arg(long)]
+        /// Allow the agent to modify files in the workspace (default: true).
+        /// Set --no-allow-write to make the agent read-only.
+        #[arg(long, default_value_t = true)]
         allow_write: bool,
 
         /// Coarse writable glob when --allow-write is set. Repeatable for multiple paths.
@@ -1755,6 +1755,7 @@ fn eval_task_root_template(
     allow_write: bool,
 ) -> NodeTemplate {
     NodeTemplate {
+        policy: NodePolicy::Explore,
         key: ProblemKey("task-run-split-eval".to_string()),
         intent: task.to_string(),
         size: WorkSize::Small,
@@ -2381,6 +2382,7 @@ fn problem_node(id: NodeId, key: &str, intent: &str, plan: NodePlan) -> ProblemN
         accepted_artifact: None,
         execution_attempts: 0,
         verification_attempts: 0,
+        policy: NodePolicy::Explore,
     }
 }
 
