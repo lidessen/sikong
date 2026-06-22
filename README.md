@@ -1,84 +1,93 @@
 # sikong
 
-Sikong is initialized as a Go CLI and daemon project with a Bun workspace monorepo.
+Sikong is a **Rust-based** recursive agent engine for self-improving autonomous task execution. The Rust implementation in `src/` is the active mainline; an older Go/Bun workspace/client track remains in the repository as pre-cleanup reference material.
 
-## Layout
+## Rust Mainline
+
+The Rust crate (`Cargo.toml` → `src/`) provides:
+
+- **`siko` binary** — recursive task engine with plan/resolve/specify/execute/verify/commit cycle
+- **Workspace providers** — `FileSystem`, `GitFileSystem`, `Memory` for sandboxed task execution
+- **Assistant loop** — LLM-driven agent with tool-calling and ACP JSON-RPC protocol
+- **CLI** — `siko assistant`, `siko run`, `siko eval`, `siko dogfood`, `siko setup`, `siko metrics`
+
+### Development
+
+```bash
+# Build the Rust binary
+cargo build
+
+# Run tests
+cargo test
+
+# Run the CLI
+cargo run -- run "analyze this project"
+
+# Run the assistant
+cargo run -- assistant
+```
+
+Release builds:
+
+```bash
+cargo build --release --bin siko
+```
+
+## Legacy Go/Bun Track (Reference Only)
+
+The Go CLI (`cmd/sikong`, `cmd/sikongd`) and Bun workspace packages (`packages/agent-loop`, `packages/client`, `packages/workspace`) are preserved as reference material from an earlier implementation track. They are not actively maintained.
+
+```bash
+# Legacy development commands (Go/Bun)
+bun run dev:cli
+bun run dev:daemon
+```
+
+## Design
+
+Start with [design/README.md](design/README.md).
+
+## Project Structure
 
 ```text
 .
-├── cmd/
-│   ├── sikong/   # CLI binary
-│   └── sikongd/  # daemon binary
-├── internal/     # private Go packages shared by commands
-└── packages/     # Bun workspaces
-    ├── agent-loop/   # LLM runtime abstraction
-    ├── client/       # React Web UI + Bun API server
-    └── workspace/    # coordination engine, orchestration, Client Agent
+├── src/                # Rust mainline (active)
+│   ├── core/           # Engine, task run, agent run, board
+│   ├── harness/        # CLI, assistant, tools, packs
+│   └── common/         # Workspace providers, config, types, metrics
+├── tests/              # Rust integration tests
+├── design/             # Architecture & design documentation
+├── cmd/                # Legacy Go CLI (reference only)
+├── internal/           # Legacy Go packages (reference only)
+└── packages/           # Legacy Bun workspaces (reference only)
+    ├── agent-loop/
+    ├── agent-host/
+    ├── client/
+    └── workspace/
 ```
 
-## Setup
+## Setup (Rust)
 
 ```bash
-bun install
+# Install Rust toolchain (if needed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Build and run
+cargo build --release
+./target/release/siko --help
 ```
-
-## Beta Install
-
-```bash
-curl -fsSL https://sikong.dev/install.sh | sh
-sikong start
-```
-
-The beta installer currently supports macOS arm64. `sikong start` launches the
-local daemon and web UI by default; `sikong stop` stops them.
-
-If the UI reports a network error, collect the local daemon/UI logs with:
-
-```bash
-sikong logs --lines 200
-sikong logs --ui --follow
-sikong logs --raw --lines 200
-```
-
-## Development
-
-```bash
-bun run dev:cli
-bun run dev:daemon
-bun --filter agent-loop test
-```
-
-Client UI shadcn components live under `packages/client/src/components/ui`.
-Add shadcn components with the official CLI from the client workspace:
-
-```bash
-cd packages/client
-bunx --bun shadcn@latest info --json
-bunx --bun shadcn@latest add dialog
-```
-
-Use `--dry-run` or `--diff` before replacing an existing component.
 
 ## Checks
 
 ```bash
+# Rust checks
+cargo check
+cargo clippy
+cargo fmt --check
+
+# Legacy Go/Bun checks
 bun run check
 bun run typecheck
 bun run lint
 bun run fmt:check
 ```
-
-## Build
-
-```bash
-bun run build
-bun run release:darwin-arm64
-```
-
-## Design
-
-Start with [design/README.md](design/README.md). The current rewrite treats old
-`sikong-old/packages/sikong` code as source material, not as a package to copy
-back wholesale.
-
-This project was initialized with `go mod init sikong` and `bun init -y`, then configured as a Bun workspaces monorepo.
