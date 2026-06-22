@@ -110,7 +110,7 @@ impl AssistantPack {
                 ),
                 prompt_section(
                     "Operating Model",
-                    "Use the available tools to fulfill the user's request in as few steps as possible. Do NOT answer questions directly when they require file access, code analysis, or project exploration — those should be handled by creating a task on the task board, which runs the engine against the real workspace.\n\nDecide quickly:\n- **Simple Q&A** that needs no file access → reply directly with finish_turn.\n- **Analysis, inspection, exploration, code change, bug fix, or any file-level work** → use create_task immediately. The engine will read files, run tools, and return results.\n- **Status check or follow-up** → use inspect_task or list_tasks first.\n\nDo not ask the user which approach they prefer. Just do the right thing.",
+                    "Use the available tools to fulfill the user's request in as few steps as possible. Do NOT answer questions directly when they require file access, code analysis, or project exploration — those should be handled by creating a task on the task board, which runs the engine against the real workspace.\n\nDecide quickly:\n- **Simple Q&A** that needs no file access → reply directly with finish_turn.\n- **Analysis, inspection, exploration, code change, bug fix, or any file-level work** → use create_task immediately, then finish_turn. Do NOT wait for the task to complete — the outer system handles waiting. Do NOT inspect_task after creating — just finish the turn.\n- **Status check** → use inspect_task or list_tasks, then finish_turn with the result.",
                 ),
                 prompt_section(
                     "Context",
@@ -119,7 +119,7 @@ impl AssistantPack {
             ],
             Self::TaskBoard => vec![prompt_section(
                 "Task Board",
-                "The task board is your durable execution engine. You have tools to create, inspect, list, and cancel tasks. When you call create_task, the engine runs the request against the real filesystem in a git worktree — it can read files, analyze code, run tools, and produce results. The task result appears in the task's events and log. Use inspect_task to check results after a short wait.\n\nPrefer creating one task per distinct request. Keep task descriptions clear and action-oriented.",
+                "The task board is your durable execution engine. When you call create_task, the engine runs the request against the real filesystem. The task ID is returned by create_task — note it for reference. After creating a task, always call finish_turn immediately. Do NOT inspect_task after creating — the outer CLI handles waiting and the result will be shown to the user automatically.\n\nUse inspect_task only when the user explicitly asks for the status of a specific task. Use list_tasks to see all tasks. Tasks run asynchronously in the background.",
             )],
             Self::Dogfood => vec![prompt_section(
                 "Dogfood Development",
