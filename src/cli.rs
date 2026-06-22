@@ -2853,24 +2853,43 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Provider selection
-    let providers = vec![
-        "DeepSeek v4 Flash",
-        "DeepSeek v4 Flash + Claude Code runtime",
-        "Kimi (Claude Code runtime only)",
-    ];
-    let default_idx = if has_deepseek_key { 0usize } else if has_kimi_key { 2 } else { 0 };
+    // Build available options based on what's actually detected
+    let mut options: Vec<(String, &str, &str)> = Vec::new();
+    let mut default_idx = 0usize;
+
+    if has_deepseek_key {
+        let idx = options.len();
+        options.push(("DeepSeek v4 Flash (ai-sdk)".to_string(), "deepseek", "ai-sdk"));
+        if default_idx == 0 && idx == 0 { default_idx = idx; }
+    }
+
+    if has_deepseek_key && has_claude_code {
+        let idx = options.len();
+        options.push(("DeepSeek v4 Flash + Claude Code runtime".to_string(), "deepseek", "claude-code"));
+        if default_idx == 0 { default_idx = idx; }
+    }
+
+    if has_kimi_key && has_claude_code {
+        let idx = options.len();
+        options.push(("Kimi + Claude Code runtime".to_string(), "kimi", "claude-code"));
+        if default_idx == 0 { default_idx = idx; }
+    }
+
+    // Fallback: if nothing is detected, offer a generic option
+    if options.is_empty() {
+        options.push(("No API keys or tools detected — configure manually".to_string(), "deepseek", "ai-sdk"));
+    }
+
+    let labels: Vec<&str> = options.iter().map(|(l, _, _)| l.as_str()).collect();
     let provider_idx = Select::with_theme(&theme)
-        .with_prompt("Select provider + backend")
+        .with_prompt("Select configuration")
         .default(default_idx)
-        .items(&providers)
+        .items(&labels)
         .interact()?;
 
-    let (provider, backend, worker_type) = match provider_idx {
-        0 => ("deepseek", "ai-sdk", "agent-loop"),
-        1 => ("deepseek", "claude-code", "agent-loop"),
-        2 => ("kimi", "claude-code", "agent-loop"),
-        _ => ("deepseek", "ai-sdk", "agent-loop"),
-    };
+    let (_label, provider, backend) = &options[provider_idx];
+    let provider = *provider;
+    let backend = *backend;
 
     // API key prompt if missing
     let key_var = match provider {
@@ -2910,8 +2929,8 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Auto-configure agent-loop if claude or codex is available
-    let use_real_agent = has_claude_code || has_codex || worker_type == "agent-loop";
+    // Auto-configure agent-loop if claude or codex is available, or if claude-code backend selected
+    let use_real_agent = has_claude_code || has_codex || backend == "claude-code";
 
     // Write config
     std::fs::create_dir_all(&config_dir)?;
