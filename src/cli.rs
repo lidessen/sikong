@@ -32,6 +32,14 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     }
 }
 
+fn require_dev() -> Result<(), ()> {
+    if std::env::var("SIKONG_DEV").as_deref() == Ok("1") {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
 fn run_cli(cli: Cli) -> i32 {
     // Load config and apply env overrides
     if let Ok(config) = SikoConfig::load() {
@@ -141,9 +149,8 @@ fn run_cli(cli: Cli) -> i32 {
             0
         }
         Some(Command::Eval { command }) => {
-            if std::env::var("SIKONG_DEV").as_deref() != Ok("1") {
-                error!("eval commands require SIKONG_DEV=1");
-                eprintln!("error: eval commands are internal. Set SIKONG_DEV=1 to enable.");
+            if require_dev().is_err() {
+                eprintln!("error: eval is an internal command. Set SIKONG_DEV=1 to enable.");
                 return 1;
             }
             match command {
@@ -215,9 +222,8 @@ fn run_cli(cli: Cli) -> i32 {
             }
         },
         Some(Command::Dogfood { command }) => {
-            if std::env::var("SIKONG_DEV").as_deref() != Ok("1") {
-                error!("dogfood commands require SIKONG_DEV=1");
-                eprintln!("error: dogfood commands are internal. Set SIKONG_DEV=1 to enable.");
+            if require_dev().is_err() {
+                eprintln!("error: dogfood is an internal command. Set SIKONG_DEV=1 to enable.");
                 return 1;
             }
             match command {
