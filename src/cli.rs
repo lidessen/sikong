@@ -204,6 +204,13 @@ fn run_cli(cli: Cli) -> i32 {
                 }
             }
         },
+        Some(Command::Setup) => match run_setup() {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("setup failed: {error}");
+                1
+            }
+        },
     }
 }
 
@@ -242,6 +249,8 @@ enum Command {
         #[command(subcommand)]
         command: DogfoodCommand,
     },
+    /// Interactive first-time setup: configure provider, backend, and API keys.
+    Setup,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2714,6 +2723,132 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .try_init();
+}
+
+fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{self, BufRead, Write};
+
+    let config_dir = std::env::var("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".sikong"))
+        .unwrap_or_else(|_| PathBuf::from(".sikong"));
+    let config_path = config_dir.join("config.yaml");
+
+    println!("╔══════════════════════════════════════════════════╗");
+    println!("║         Sikong Setup                             ║");
+    println!("╚══════════════════════════════════════════════════╝");
+    println!();
+
+    // Step 1: Detect available API keys
+    let _deepseek_key = std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty());
+    let _kimi_key = std::env::var("KIMI_CODE_API_KEY").ok().filter(|k| !k.is_empty());
+    let _anthropic_key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty());
+    let _openai_key = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty());
+
+    println!("🔍 Detecting API keys in environment...");
+    for (name, found) in [
+        ("DEEPSEEK_API_KEY", std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
+        ("KIMI_CODE_API_KEY", std::env::var("KIMI_CODE_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
+        ("ANTHROPIC_API_KEY", std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
+        ("OPENAI_API_KEY", std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty()).is_some()),
+    ] {
+        println!("   {} {}", name, if found { "✅ found" } else { "⛔ not set" });
+    }
+
+    // Step 2: Show available provider + backend combos
+    println!();
+    println!("📦 Available provider + backend combinations:");
+    println!();
+    let combos: Vec<(&str, &str, &str, &str)> = vec![
+        ("1", "DeepSeek v4 Flash", "ai-sdk", "Fast, cost-effective. Default runtime."),
+        ("2", "DeepSeek v4 Flash", "claude-code", "DeepSeek model via Claude Code runtime."),
+        ("3", "Kimi", "claude-code", "Kimi provider via Claude Code runtime."),
+    ];
+    for (key, provider, backend, note) in &combos {
+        println!("   {}. {} + {} — {}", key, provider, backend, note);
+    }
+
+    // Step 3: Let user pick
+    println!();
+    print!("👉 Select combination (default 1): ");
+    io::stdout().flush()?;
+    let mut choice = String::new();
+    io::stdin().lock().read_line(&mut choice)?;
+    let choice = choice.trim();
+
+    let (provider, backend) = match choice {
+        "2" => ("deepseek", "claude-code"),
+        "3" => ("kimi", "claude-code"),
+        _ => ("deepseek", "ai-sdk"),
+    };
+
+    // Step 4: Prompt for API key if missing
+    println!();
+    let key_var = match provider {
+        "deepseek" => "DEEPSEEK_API_KEY",
+        "kimi" => "KIMI_CODE_API_KEY",
+        _ => "DEEPSEEK_API_KEY",
+    };
+    let has_key = std::env::var(key_var).ok().filter(|k| !k.is_empty()).is_some();
+
+    if !has_key {
+        println!("🔑 {} is not set.", key_var);
+        print!("   Enter your API key (or press Enter to skip): ");
+        io::stdout().flush()?;
+        let mut api_key = String::new();
+        io::stdin().lock().read_line(&mut api_key)?;
+        let api_key = api_key.trim().to_string();
+        if !api_key.is_empty() {
+            println!();
+            println!("   ℹ️  Add this to your shell profile (~/.zshrc, ~/.bashrc):");
+            println!("      export {}={}", key_var, api_key);
+            // Write to .env file in config dir
+            std::fs::create_dir_all(&config_dir)?;
+            let env_path = config_dir.join(".env");
+            let mut env_content = String::new();
+            if env_path.exists() {
+                env_content = std::fs::read_to_string(&env_path)?;
+            }
+            if !env_content.contains(key_var) {
+                use std::fmt::Write;
+                writeln!(&mut env_content, "export {}={}", key_var, api_key)?;
+                std::fs::write(&env_path, env_content)?;
+                println!("   ✅ Saved to {}", env_path.display());
+            }
+        }
+    }
+
+    // Step 5: Write config
+    std::fs::create_dir_all(&config_dir)?;
+    let config_content = format!(
+        r#"version: 1
+provider: {}
+backend: {}
+assistant:
+  max_parallel_tasks: 2
+"#,
+        provider, backend
+    );
+    std::fs::write(&config_path, config_content)?;
+    println!();
+    println!("✅ Config written to {}", config_path.display());
+    println!();
+    println!("📋 Summary:");
+    println!("   Provider: {}", provider);
+    println!("   Backend:  {}", backend);
+    println!("   Config:   {}", config_path.display());
+    if !has_key {
+        println!("   API key:  {} (set in env or ~/.sikong/.env)", key_var);
+    }
+    println!();
+    println!("🚀 You can now use Sikong:");
+    println!("   siko assistant --acp");
+    println!("   siko dogfood run");
+    println!();
+    println!("💡 Set SIKONG_AGENT_HOST_WORKER=agent-loop to use real agents");
+    println!("   (currently defaults to mock for quick testing)");
+
+    Ok(())
 }
 
 #[cfg(test)]
