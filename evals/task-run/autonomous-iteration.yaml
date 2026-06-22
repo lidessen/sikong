@@ -4,9 +4,9 @@ task: |
   You are running an autonomous self-improvement cycle for the Sikong project
   using the engine's recursive divide-and-conquer architecture (人民史观).
 
-  This cycle is governed by the practice-theory-practice principle: knowledge
-  arises from practice, returns to guide practice, and is verified by practice.
-  The cycle follows: INVESTIGATE → SYNTHESIZE → IMPLEMENT → VERIFY → RECORD.
+  This cycle follows a simple rhythm: look → think → change → check → note.
+  Read the current state before proposing anything. Check your work after
+  changing anything. Record what you learned for the next cycle.
 
   == INVESTIGATION REQUIREMENT (before any child analysis) ==
   Each child must start by reading the current state of its evidence surface.
@@ -43,16 +43,17 @@ task: |
   Assign each child a distinct key like "code-analysis", "test-analysis",
   "design-analysis", etc.
 
-  == CONTRADICTION RESOLUTION (Plan & Combine) ==
-  Identify at least one contradiction during planning: a place where evidence
-  from one surface contradicts evidence from another, or where design intent
-  differs from implementation reality. The combined proposal must resolve
-  this contradiction, not paper over it. An unresolved contradiction is a
-  blocker for acceptance.
+  == FIND THE MAIN PROBLEM (Plan & Combine) ==
+  During planning, identify the single biggest gap between where the project
+  is and where it should be. This is the main problem to solve. Evidence from
+  different angles might point to different problems — pick the one that, if
+  fixed, makes everything else easier. The combined proposal must fix this
+  main problem, not dance around it. An unresolved main problem means the
+  proposal is not ready.
 
-  Examples of contradictions:
+  Examples of main problems:
   - Design doc says X but code does Y
-  - Code analysis finds a fragile pattern that test analysis says is untested
+  - Code has a fragile pattern that has no test coverage
   - Documentation describes a feature that no longer exists
   - Two design documents give inconsistent guidance
 
@@ -71,19 +72,19 @@ task: |
   improvement that resolves the principal contradiction. The improvement must
   be verifiable with `cargo build`.
 
-  == VERIFY (each child + parent) ==
+  == CHECK (each child + parent) ==
   Each child's findings must be verified independently before they become
   durable. The parent's combined proposal must also pass verification:
   check that the proposed improvement is bounded, actionable, and testable.
   Every claim must cite the evidence that supports it. Claims without evidence
   are rejected.
 
-  == RECORD (after implementation) ==
-  After implementing, record:
-  - What was the principal contradiction?
+  == NOTE (after implementation) ==
+  After implementing, note:
+  - What was the main problem?
   - What change was made?
-  - What evidence shows the contradiction is resolved?
-  - What remains as the next likely contradiction?
+  - What test proves it works?
+  - What's the next thing likely to need fixing?
 
   == EXECUTION RULES ==
   - After Combine, select the SINGLE most impactful finding and implement
@@ -95,27 +96,20 @@ task: |
   - The combined output is an implementation commit, not just a proposal.
   - The final step is to RECORD the learning from this cycle.
 expectation: |
-  The engine must demonstrate the full recursive divide-and-conquer cycle
-  governed by the practice-theory-practice principle:
+  The engine must demonstrate the full cycle: look → think → change → check → note.
 
-  1. **Investigate** — Specify assesses scope as Large; each child reads
-     the current state before making claims.
-  2. **Synthesize** — Plan produces a parallel group with 3-4 child nodes,
-     each with a distinct analytical focus. A contradiction is identified.
-  3. **Implement** — Each child resolves independently (Specify → Execute →
-     Verify → Commit). Combine synthesizes findings and resolves the
-     principal contradiction into one bounded proposal.
-  4. **Verify** — Every claim has falsifiable evidence. The combined proposal
-     passes verification with cited evidence.
-  5. **Record** — The cycle ends by recording what was learned and what
-     contradiction remains.
+  1. **Look** — Specify sees Large scope. Plan splits into 3-4 child nodes.
+  2. **Think** — Children each analyze their area independently.
+  3. **Change** — Combine selects ONE fix and implements it.
+  4. **Check** — Every claim has evidence. Build and test pass.
+  5. **Note** — Record what was done and what's next.
 
   Passing requires evidence of all five steps in the transcript.
 
-  Specific behavioral signals:
+  Specific signals:
   - Child findings cite filenames, line numbers, or specific observations
-  - The combine identifies a cross-cutting contradiction
-  - The proposed improvement includes a falsifiable claim and verification command
+  - The combine identifies a cross-cutting pattern
+  - The proposed improvement is specific enough to verify with one command
   - No claim is accepted without supporting evidence
   - The cycle closes by recording learning
 workspace:
