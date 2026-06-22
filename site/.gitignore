@@ -1,2 +1,4 @@
 .vercel
 .vercel
+site/releases/*.tar.gz
+site/releases/siko-*
