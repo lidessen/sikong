@@ -2671,7 +2671,11 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
     let provider = std::env::var("SIKONG_AGENT_HOST_PROVIDER")
         .ok()
         .filter(|value| {
-            value == "deepseek" || value == "kimi" || value == "claude" || value == "codex"
+            value == "deepseek"
+                || value == "kimi"
+                || value == "claude"
+                || value == "codex"
+                || value == "cursor"
         })
         .unwrap_or_else(|| "deepseek".to_string());
     let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
@@ -2838,12 +2842,15 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         .map(|o| o.status.success()).unwrap_or(false);
     let has_codex = std::process::Command::new("which").arg("codex").output()
         .map(|o| o.status.success()).unwrap_or(false);
+    let has_cursor = std::process::Command::new("which").arg("cursor").output()
+        .map(|o| o.status.success()).unwrap_or(false);
 
     println!("🔍 Auto-detection:");
     println!("   DEEPSEEK_API_KEY       {}", if has_deepseek_key { "✅ found" } else { "⛔ not set" });
     println!("   KIMI_CODE_API_KEY      {}", if has_kimi_key { "✅ found" } else { "⛔ not set" });
     println!("   Claude Code CLI        {}", if has_claude_code { "✅ detected" } else { "⛔ not found" });
     println!("   Codex CLI              {}", if has_codex { "✅ detected" } else { "⛔ not found" });
+    println!("   Cursor CLI             {}", if has_cursor { "✅ detected" } else { "⛔ not found" });
     println!();
 
     // Step 1: Select provider
@@ -2852,6 +2859,7 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     if has_kimi_key { provider_opts.push(("Kimi (needs API key)", "kimi")); }
     if has_claude_code { provider_opts.push(("Claude Code (uses your subscription, no API key needed)", "claude")); }
     if has_codex { provider_opts.push(("Codex (uses your subscription, no API key needed)", "codex")); }
+    if has_cursor { provider_opts.push(("Cursor (uses your subscription, no API key needed)", "cursor")); }
     if provider_opts.is_empty() {
         provider_opts.push(("No API keys or tools detected — configure later", "none"));
     }
@@ -2865,7 +2873,7 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Determine backend
     let (backend, needs_api_key) = match provider {
-        "claude" | "codex" => {
+        "claude" | "codex" | "cursor" => {
             println!("   ℹ️  {} uses Claude Code runtime with your existing subscription.", provider);
             ("claude-code".to_string(), false)
         }

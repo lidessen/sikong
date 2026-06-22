@@ -2,6 +2,8 @@ import {
   aiSdkLoop,
   anthropic,
   claudeCodeLoop,
+  codexLoop,
+  cursorLoop,
   defineTool,
   deepseek,
   kimi,
@@ -268,11 +270,11 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
         "Kimi Code does not support the ai-sdk runtime without client allowlist onboarding.",
       );
     case "claude":
+      return claudeCodeLoop({ provider: createProvider(options) });
     case "codex":
-      // Use Claude Code's own authentication — no API key needed from Sikong
-      return claudeCodeLoop({
-        provider: createProvider(options),
-      });
+      return codexLoop({});
+    case "cursor":
+      return cursorLoop({});
   }
 }
 
@@ -289,7 +291,10 @@ function createProvider(options: AgentLoopWorkerOptions): ModelProvider {
     case "claude":
       return anthropic({ model: options.model ?? "claude-sonnet-4-20250514" });
     case "codex":
-      return anthropic({ model: options.model ?? "claude-sonnet-4-20250514" });
+      // codexLoop handles its own provider
+      return anthropic({});
+    case "cursor":
+      return anthropic({});
   }
 }
 
