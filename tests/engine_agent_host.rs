@@ -1,10 +1,7 @@
 use siko::*;
-use std::{ffi::OsStr, fs, path::Path, process::Command};
+use support::{TestGitRepo, scoped_git_leaf, skip_without_bun};
 
-fn bun_available() -> bool {
-    Command::new("bun").arg("--version").output().is_ok()
-}
-
+mod support;
 fn host_worker() -> ProcessAgentRunScheduler {
     ProcessAgentRunScheduler::new("bun", ["packages/agent-host/src/runtime-host.ts"])
 }
@@ -15,14 +12,6 @@ fn memory_engine() -> Engine<MemoryWorkspace, ProcessAgentRunScheduler> {
 
 fn workspace_engine() -> Engine<Workspaces, ProcessAgentRunScheduler> {
     Engine::new(Workspaces::default(), host_worker())
-}
-
-fn skip_without_bun(test_name: &str) -> bool {
-    if bun_available() {
-        return false;
-    }
-    eprintln!("skipping {test_name}: bun not found");
-    true
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -419,85 +408,3 @@ async fn host_git_workspace_surface_is_written_captured_and_cleaned() {
     }));
 }
 
-fn scoped_git_leaf(key: &str, output: &str, path: &str) -> NodeTemplate {
-    NodeTemplate {
-        key: ProblemKey(key.to_string()),
-        intent: output.to_string(),
-        size: WorkSize::Small,
-        scope_assessment: None,
-        workspace: WorkspaceRequirement::git([path]),
-        capabilities: CapabilityProfile::writable(),
-        budget: Budget::default(),
-        plan: NodePlan::Execute,
-    }
-}
-
-struct TestGitRepo {
-    _temp: tempfile::TempDir,
-    root: std::path::PathBuf,
-    worktrees: std::path::PathBuf,
-}
-
-impl TestGitRepo {
-    fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("repo");
-        let worktrees = temp.path().join("worktrees");
-        fs::create_dir_all(&root).unwrap();
-        fs::create_dir_all(&worktrees).unwrap();
-        run_git(&root, ["init"]);
-        Self {
-            _temp: temp,
-            root,
-            worktrees,
-        }
-    }
-
-    fn root(&self) -> &Path {
-        &self.root
-    }
-
-    fn worktrees(&self) -> &Path {
-        &self.worktrees
-    }
-
-    fn write(&self, path: &str, content: &str) {
-        let path = self.root.join(path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(path, content).unwrap();
-    }
-
-    fn git<I, S>(&self, args: I) -> String
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        run_git(&self.root, args)
-    }
-}
-
-fn run_git<I, S>(cwd: &Path, args: I) -> String
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output = Command::new("git")
-        .arg("-c")
-        .arg("user.name=Sikong Test")
-        .arg("-c")
-        .arg("user.email=sikong-test@example.invalid")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git failed: {}\n{}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}

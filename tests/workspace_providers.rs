@@ -1,6 +1,9 @@
 use siko::*;
-use std::{ffi::OsStr, fs, path::Path, process::Command};
+use std::fs;
+use std::path::Path;
+use support::TestGitRepo;
 
+mod support;
 #[test]
 fn memory_workspace_forks_and_combines_without_conflicts() {
     let mut workspace = MemoryWorkspace::default();
@@ -266,76 +269,6 @@ fn workspaces_route_by_requirement_provider() {
     assert_eq!(memory.id, 1);
     assert_eq!(files.id, 2);
     assert_eq!(git.id, 3);
-}
-
-struct TestGitRepo {
-    _temp: tempfile::TempDir,
-    root: std::path::PathBuf,
-    worktrees: std::path::PathBuf,
-}
-
-impl TestGitRepo {
-    fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("repo");
-        let worktrees = temp.path().join("worktrees");
-        fs::create_dir_all(&root).unwrap();
-        fs::create_dir_all(&worktrees).unwrap();
-        run_git(&root, ["init"]);
-        Self {
-            _temp: temp,
-            root,
-            worktrees,
-        }
-    }
-
-    fn root(&self) -> &Path {
-        &self.root
-    }
-
-    fn worktrees(&self) -> &Path {
-        &self.worktrees
-    }
-
-    fn write(&self, path: &str, content: &str) {
-        let path = self.root.join(path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(path, content).unwrap();
-    }
-
-    fn git<I, S>(&self, args: I) -> String
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        run_git(&self.root, args)
-    }
-}
-
-fn run_git<I, S>(cwd: &Path, args: I) -> String
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output = Command::new("git")
-        .arg("-c")
-        .arg("user.name=Sikong Test")
-        .arg("-c")
-        .arg("user.email=sikong-test@example.invalid")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git failed: {}\n{}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 #[cfg(test)]

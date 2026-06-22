@@ -2,7 +2,7 @@ use serde_json::Value;
 use siko::*;
 
 mod support;
-use support::RecordingAgentRunScheduler;
+use support::{RecordingAgentRunScheduler, scoped_git_leaf};
 
 #[tokio::test]
 async fn engine_harness_sends_structured_context_packet_to_agent_loop() {
@@ -1070,19 +1070,6 @@ fn plan_for_operation(operation: NodeOperation) -> NodePlan {
             mode: PlanGroupMode::Parallel,
             items: vec![NodeTemplate::memory_leaf("child", "child output")],
         }),
-    }
-}
-
-fn scoped_git_leaf(key: &str, output: &str, path: &str) -> NodeTemplate {
-    NodeTemplate {
-        key: ProblemKey(key.to_string()),
-        intent: output.to_string(),
-        size: WorkSize::Small,
-        scope_assessment: None,
-        workspace: WorkspaceRequirement::git([path]),
-        capabilities: CapabilityProfile::writable(),
-        budget: Budget::default(),
-        plan: NodePlan::Execute,
     }
 }
 

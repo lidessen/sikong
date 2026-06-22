@@ -1,5 +1,4 @@
 use std::{
-    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -10,7 +9,7 @@ use std::{
 use siko::*;
 
 mod support;
-use support::TestAgentRunScheduler;
+use support::{TestAgentRunScheduler, skip_without_bun};
 
 #[derive(Debug, Default)]
 struct TestAssistantLoop;
@@ -861,19 +860,6 @@ fn request(id: u64, method: &str, params: serde_json::Value) -> AcpRequest {
         params,
     }
 }
-
-fn bun_available() -> bool {
-    Command::new("bun").arg("--version").output().is_ok()
-}
-
-fn skip_without_bun(test_name: &str) -> bool {
-    if bun_available() {
-        return false;
-    }
-    eprintln!("skipping {test_name}: bun not found");
-    true
-}
-
 async fn wait_until(timeout: Duration, condition: impl Fn() -> bool) {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
