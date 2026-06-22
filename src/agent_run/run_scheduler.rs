@@ -291,9 +291,7 @@ impl ProcessAgentRunScheduler {
                     return Err(ProcessAgentRunSchedulerError::Host(message));
                 }
                 ProcessAgentRunSchedulerHostMessage::Result { .. }
-                | ProcessAgentRunSchedulerHostMessage::Error { .. } => {
-                    continue;
-                }
+                | ProcessAgentRunSchedulerHostMessage::Error { .. } => {}
             }
         }
     }
@@ -329,9 +327,7 @@ impl ProcessAgentRunScheduler {
                         ProcessAgentRunSchedulerHostMessage::Error { id, message } if id == expected_id => {
                             return Err(ProcessAgentRunSchedulerError::Host(message));
                         }
-                        ProcessAgentRunSchedulerHostMessage::Result { .. } | ProcessAgentRunSchedulerHostMessage::Error { .. } => {
-                            continue;
-                        }
+                        ProcessAgentRunSchedulerHostMessage::Result { .. } | ProcessAgentRunSchedulerHostMessage::Error { .. } => {}
                     }
                 }
             }

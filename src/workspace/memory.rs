@@ -11,10 +11,9 @@ pub struct MemoryWorkspace {
 }
 
 impl MemoryWorkspace {
-    #[allow(unused_variables)]
     pub(super) fn snapshot_record(
         id: WorkspaceSnapshotId,
-        requirement: &WorkspaceRequirement,
+        _requirement: &WorkspaceRequirement,
     ) -> WorkspaceSnapshot {
         WorkspaceSnapshot {
             id,
