@@ -3102,6 +3102,27 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+
+fn run_metrics_command() {
+    // TODO: Integrate with a global/live MetricsCollector instance once one is
+    //       established by the engine or session lifecycle. For now, this
+    //       creates a fresh collector and populates it with basic process-level
+    //       metrics as a demonstration of the pipeline.
+    let mut collector = MetricsCollector::new();
+
+    // Record some basic process-level metrics
+    let uptime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    collector.increment_counter("uptime_seconds", uptime.as_secs());
+    collector.record_timing("uptime", uptime);
+    collector.record_cost("version_cost", 0.1);
+
+    let snapshot = collector.snapshot();
+    let formatter = MetricsFormatter;
+    let output = formatter.format(&snapshot);
+    println!("{output}");
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4355,23 +4376,3 @@ workspace:
 }
 
 
-fn run_metrics_command() {
-    // TODO: Integrate with a global/live MetricsCollector instance once one is
-    //       established by the engine or session lifecycle. For now, this
-    //       creates a fresh collector and populates it with basic process-level
-    //       metrics as a demonstration of the pipeline.
-    let mut collector = MetricsCollector::new();
-
-    // Record some basic process-level metrics
-    let uptime = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    collector.increment_counter("uptime_seconds", uptime.as_secs());
-    collector.record_timing("uptime", uptime);
-    collector.record_cost("version_cost", 0.1);
-
-    let snapshot = collector.snapshot();
-    let formatter = MetricsFormatter;
-    let output = formatter.format(&snapshot);
-    println!("{output}");
-}
