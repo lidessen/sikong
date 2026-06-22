@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use crate::{
     common::metrics::{MetricsCollector, MetricsFormatter},
+    non_empty_env,
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
     AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
@@ -2873,17 +2874,6 @@ fn resolve_agent_host_launch_from(
         debug,
         "packages/agent-host/src/runtime-host.ts".to_string(),
     )
-}
-
-fn non_empty_env(env: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
-    env(name).and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
 }
 
 fn sibling_agent_host_binary(current_exe: Option<&Path>) -> Option<PathBuf> {
