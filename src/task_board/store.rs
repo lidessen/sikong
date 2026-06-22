@@ -199,3 +199,79 @@ fn temp_path_for(path: &Path) -> PathBuf {
 fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, error)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // ── temp_path_for tests ───────────────────────────────────────────────
+
+    #[test]
+    fn temp_path_for_adds_tmp_extension_to_regular_file() {
+        let path = Path::new("/tmp/store/tasks.json");
+        let result = temp_path_for(path);
+        assert_eq!(result, PathBuf::from("/tmp/store/tasks.json.tmp"));
+    }
+
+    #[test]
+    fn temp_path_for_handles_file_with_double_extension() {
+        let path = Path::new("data.tar.gz");
+        let result = temp_path_for(path);
+        assert_eq!(result, PathBuf::from("data.tar.gz.tmp"));
+    }
+
+    #[test]
+    fn temp_path_for_handles_file_without_extension() {
+        let path = Path::new("datafile");
+        let result = temp_path_for(path);
+        assert_eq!(result, PathBuf::from("datafile.tmp"));
+    }
+
+    #[test]
+    fn temp_path_for_handles_relative_path() {
+        let path = Path::new("relative/path/tasks.json");
+        let result = temp_path_for(path);
+        assert_eq!(result, PathBuf::from("relative/path/tasks.json.tmp"));
+    }
+
+    #[test]
+    fn temp_path_for_handles_dotfile() {
+        let path = Path::new(".secret");
+        let result = temp_path_for(path);
+        assert_eq!(result, PathBuf::from(".secret.tmp"));
+    }
+
+    #[test]
+    fn temp_path_for_handles_path_with_dot_in_directory() {
+        let path = Path::new("/home/user/.config/app/data.yaml");
+        let result = temp_path_for(path);
+        assert_eq!(result, PathBuf::from("/home/user/.config/app/data.yaml.tmp"));
+    }
+
+    // ── invalid_data tests ────────────────────────────────────────────────
+
+    #[test]
+    fn invalid_data_creates_io_error_with_string() {
+        let error = invalid_data("something went wrong");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let msg = error.to_string();
+        assert!(msg.contains("something went wrong"), "error should contain message: {msg}");
+    }
+
+    #[test]
+    fn invalid_data_creates_io_error_from_std_error() {
+        let parse_error = "not-a-number".parse::<i32>().unwrap_err();
+        let error = invalid_data(parse_error);
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn invalid_data_preserves_inner_message() {
+        let inner = std::io::Error::new(std::io::ErrorKind::NotFound, "inner error");
+        let error = invalid_data(inner);
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let msg = error.to_string();
+        assert!(msg.contains("inner error"), "error should contain inner message: {msg}");
+    }
+}
