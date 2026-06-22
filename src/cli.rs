@@ -2849,7 +2849,6 @@ fn init_tracing() {
 
 fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     use dialoguer::{Input, Select, theme::ColorfulTheme};
-    use std::fmt::Write;
     use std::path::PathBuf;
 
     let theme = ColorfulTheme::default();
