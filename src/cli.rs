@@ -458,6 +458,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
+    let worker_launch = resolve_agent_loop_launch(&debug, 12);
     let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
@@ -465,8 +466,8 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let session = AssistantSession::with_worker_factory(
         assistant_loop,
         {
-            let launch = launch.clone();
-            move || ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone())
+            let wl = worker_launch.clone();
+            move || ProcessAgentRunScheduler::new(wl.command.clone(), wl.args.clone())
         },
         AssistantSessionConfig {
             max_parallel_tasks: config.assistant.max_parallel_tasks,
@@ -524,6 +525,7 @@ async fn run_assistant_prompt_async(
     };
     let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
+    let worker_launch = resolve_agent_loop_launch(&debug, 12);
     let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
@@ -531,8 +533,8 @@ async fn run_assistant_prompt_async(
     let mut session = AssistantSession::with_worker_factory(
         assistant_loop,
         {
-            let launch = launch.clone();
-            move || ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone())
+            let wl = worker_launch.clone();
+            move || ProcessAgentRunScheduler::new(wl.command.clone(), wl.args.clone())
         },
         AssistantSessionConfig {
             max_parallel_tasks: config.assistant.max_parallel_tasks,
