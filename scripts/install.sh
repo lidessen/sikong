@@ -3,10 +3,10 @@
 # Usage: curl -fsSL https://sikong.dev/install.sh | sh
 set -euo pipefail
 
-REPO="${SIKONG_REPO:-sikong/sikong}"
+REPO="${SIKONG_REPO:-lidessen/sikong}"
 VERSION="${SIKONG_VERSION:-latest}"
 INSTALL_DIR="${SIKONG_INSTALL_DIR:-$HOME/.sikong/bin}"
-BASE_URL="${SIKONG_BASE_URL:-https://sikong.dev}"
+BASE_URL="${SIKONG_BASE_URL:-https://github.com/$REPO/releases/latest}"
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -26,14 +26,16 @@ mkdir -p "$INSTALL_DIR"
 TMP_DIR=$(mktemp -d)
 TAR_PATH="$TMP_DIR/$ASSET_NAME"
 
-# Try sikong.dev first, fall back to GitHub releases
-DOWNLOAD_URL="$BASE_URL/releases/$ASSET_NAME"
+# Try GitHub releases first
+if [ "$VERSION" = "latest" ]; then
+  DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/$ASSET_NAME"
+else
+  DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$ASSET_NAME"
+fi
 echo "  -> downloading $ASSET_NAME..."
 if ! curl -fsSL "$DOWNLOAD_URL" -o "$TAR_PATH" 2>/dev/null; then
-  if [ "$VERSION" = "latest" ]; then
-    VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
-  fi
-  DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$ASSET_NAME"
+  # Fall back to sikong.dev
+  DOWNLOAD_URL="https://sikong.dev/releases/$ASSET_NAME"
   echo "  -> fallback: $DOWNLOAD_URL"
   curl -fsSL "$DOWNLOAD_URL" -o "$TAR_PATH"
 fi
