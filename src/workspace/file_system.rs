@@ -11,6 +11,7 @@ pub struct FileSystemWorkspace {
 }
 
 impl FileSystemWorkspace {
+    #[allow(unused_variables)]
     pub(super) fn snapshot_record(
         id: WorkspaceSnapshotId,
         requirement: &WorkspaceRequirement,
@@ -18,12 +19,6 @@ impl FileSystemWorkspace {
         WorkspaceSnapshot {
             id,
             provider: WorkspaceProvider::FileSystem,
-            scope: requirement
-                .read_scope
-                .iter()
-                .chain(requirement.write_scope.iter())
-                .cloned()
-                .collect(),
             git: None,
         }
     }

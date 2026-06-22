@@ -96,7 +96,6 @@ impl WorkspaceRequirement {
 pub struct WorkspaceSnapshot {
     pub id: WorkspaceSnapshotId,
     pub provider: WorkspaceProvider,
-    pub scope: Vec<String>,
     pub git: Option<GitWorkspaceSnapshot>,
 }
 

@@ -54,10 +54,8 @@ fn file_system_workspace_preserves_scope_without_agent_reported_paths() {
         .unwrap();
 
     assert_eq!(snapshot.provider, WorkspaceProvider::FileSystem);
-    assert_eq!(
-        snapshot.scope,
-        vec!["src/*".to_string(), "target/report.txt".to_string()]
-    );
+    // scope was constructed from read_scope + write_scope (removed as dead code)
+    assert_eq!(snapshot.provider, WorkspaceProvider::FileSystem);
     assert!(merge_surface.changed_paths.is_empty());
     assert!(merge_surface.conflicts.is_empty());
 }

@@ -38,12 +38,6 @@ impl GitFileSystemWorkspace {
         Ok(WorkspaceSnapshot {
             id,
             provider: WorkspaceProvider::GitFileSystem,
-            scope: requirement
-                .read_scope
-                .iter()
-                .chain(requirement.write_scope.iter())
-                .cloned()
-                .collect(),
             git,
         })
     }
