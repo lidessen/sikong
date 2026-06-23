@@ -494,8 +494,15 @@ impl Drop for ProcessAgentRunScheduler {
 
         let _ = self.child.as_mut().map(|child| child.start_kill());
         self.close_transport();
+        // Give the child a moment to exit before removing the socket
+        std::thread::sleep(Duration::from_millis(100));
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
+            // Wait briefly for the process to exit (best-effort)
+            let _ = std::thread::spawn(move || {
+                let _ = std::thread::sleep(Duration::from_millis(500));
+                let _ = child.kill();
+            });
         }
         self.cleanup_socket();
     }
@@ -505,9 +512,10 @@ async fn remove_socket_if_exists(path: &Path) -> Result<(), ProcessAgentRunSched
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(ProcessAgentRunSchedulerError::RemoveSocket {
-            path: path.to_path_buf(),
-            source,
-        }),
+        Err(error) => {
+            // Log but don't fail — the socket might be in a tricky state
+            warn!(?path, ?error, "failed to remove stale agent host socket");
+            Ok(())
+        }
     }
 }
