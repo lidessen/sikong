@@ -723,7 +723,23 @@ where
         node_id: NodeId,
         artifact_id: ArtifactId,
     ) -> Result<Option<VerificationVerdict>, EngineError> {
-        let Some(change) = &self.artifact(artifact_id)?.workspace_change else {
+        let artifact = self.artifact(artifact_id)?;
+
+        // Check for empty or trivially short output — reject deterministically
+        // without needing an LLM Verify call. Coverage includes both Memory
+        // provider artifacts (no workspace_change) and file-based artifacts.
+        let trimmed = artifact.text.trim();
+        if trimmed.is_empty() || trimmed.chars().filter(|c| !c.is_whitespace()).count() < 10 {
+            return Ok(Some(VerificationVerdict::Reject {
+                failure_class: FailureClass::IncompleteOutput,
+                reason: format!(
+                    "output too short ({} chars after trim); expected meaningful artifact",
+                    trimmed.len()
+                ),
+            }));
+        }
+
+        let Some(change) = &artifact.workspace_change else {
             return Ok(None);
         };
         let node = self.node(node_id)?;
