@@ -32,8 +32,8 @@ RUST_BIN="$ROOT/target/release/siko"
 echo "  -> bundling agent-host source..."
 AGENT_HOST_DIR="$ROOT/dist/release/agent-host"
 mkdir -p "$AGENT_HOST_DIR"
-cp "$ROOT/packages/agent-host/src/"*.ts "$AGENT_HOST_DIR/"
-cp "$ROOT/packages/agent-host/package.json "$AGENT_HOST_DIR/"
+cp "$ROOT/packages/agent-host/src"/*.ts "$AGENT_HOST_DIR/"
+cp "$ROOT/packages/agent-host/package.json" "$AGENT_HOST_DIR/"
 # Bundle agent-host dependencies into a single JS entry for bun ./runtime-host.ts
 bun build "$ROOT/packages/agent-host/src/runtime-host.ts" \
   --target=bun \
@@ -53,7 +53,7 @@ chmod +x "$RELEASE_DIR/siko" "$RELEASE_DIR/siko-agent-host"
 
 # Create tarball
 cd "$RELEASE_DIR"
-tar -czf "$ASSET_NAME" siko siko-agent-host
+tar -czf "$ASSET_NAME" siko siko-agent-host agent-host
 shasum -a 256 "$ASSET_NAME" > "$ASSET_NAME.sha256"
 
 echo ""
