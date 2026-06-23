@@ -34,21 +34,17 @@ AGENT_HOST_DIR="$ROOT/dist/release/agent-host"
 mkdir -p "$AGENT_HOST_DIR"
 bun build --target=bun --outfile="$AGENT_HOST_DIR/runtime-host.js" \
   "$ROOT/packages/agent-host/src/runtime-host.ts" 2>&1 | tail -1
-# Also ship the compiled binary as option (may not work in all environments)
-HOST_BIN="$ROOT/dist/siko-agent-host"
 
-# Verify both exist
+# Verify the Rust binary exists
 if [[ ! -x "$RUST_BIN" ]]; then echo "ERROR: siko binary not found at $RUST_BIN" >&2; exit 1; fi
-if [[ ! -x "$HOST_BIN" ]]; then echo "ERROR: siko-agent-host not found at $HOST_BIN" >&2; exit 1; fi
 
 # Package into release dir
 cp "$RUST_BIN" "$RELEASE_DIR/siko"
-cp "$HOST_BIN" "$RELEASE_DIR/siko-agent-host"
-chmod +x "$RELEASE_DIR/siko" "$RELEASE_DIR/siko-agent-host"
+chmod +x "$RELEASE_DIR/siko"
 
 # Create tarball
 cd "$RELEASE_DIR"
-tar -czf "$ASSET_NAME" siko siko-agent-host agent-host
+tar -czf "$ASSET_NAME" siko agent-host
 shasum -a 256 "$ASSET_NAME" > "$ASSET_NAME.sha256"
 
 echo ""
