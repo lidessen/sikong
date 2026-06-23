@@ -1,0 +1,40 @@
+id: fix-install-and-provider
+task: |
+  修复两个 bug。
+
+  **Bug 1: Install script 下载不到最新版本**
+  根因：install.sh 下载 `siko-darwin-arm64.tar.gz`，但 GitHub Actions release workflow
+  发布的是 `sikong-darwin-arm64.tar.gz`（调用的是 `build-release-darwin-arm64.sh`，
+  不是 `build-release-rust.sh`）。
+  修复：给两个选择——
+  a. 更新 site/install.sh 和 scripts/install.sh 下载 `sikong-$OS-$ARCH.tar.gz`，
+     提取 `sikong` 并重命名为 `siko`（或其他方式兼容）
+  b. 或者让 release workflow 调用 `build-release-rust.sh`，这样产出的就是
+     `siko-darwin-arm64.tar.gz` 包含 `siko` + `siko-agent-host`
+
+  优先选方案 b（让 Rust 版的 build script 被发布流程使用），如果改 release.yml
+  不方便就选方案 a。
+
+  **Bug 2: 配置 codex 但仍提示 deepseek apikey**
+  根因：`packages/agent-host/src/runtime-host.ts` 中的 `parseAgentLoopProvider`
+  只接受 `"deepseek"` 和 `"kimi"`。当配置 `codex`、`claude`、`cursor` 时
+  返回 `undefined`，导致 agent-loop 默认 fallback 到 deepseek，然后报 no apikey。
+
+  修复：在 `parseAgentLoopProvider` 中增加 `"codex"`、`"claude"`、`"cursor"` 的支持。
+
+  做完运行 cargo build && cargo test 验证，然后发布。
+expectation: |
+  Install 能下载到最新版。codex 配置不再提示 deepseek apikey。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - site/install.sh
+    - scripts/install.sh
+    - scripts/build-release-rust.sh
+    - packages/agent-host/src/runtime-host.ts
+    - packages/agent-host/src/agent-loop-worker.ts
+    - .github/workflows/release.yml
+  allow_write: true
+max_steps: 48

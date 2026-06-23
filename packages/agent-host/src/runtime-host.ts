@@ -258,9 +258,9 @@ function createRuntimeWorker(argv: string[]): RuntimeWorker {
   return runMockAgentWorker;
 }
 
-function parseAgentLoopProvider(argv: string[]): "deepseek" | "kimi" | undefined {
+function parseAgentLoopProvider(argv: string[]): "deepseek" | "kimi" | "claude" | "codex" | "cursor" | undefined {
   const provider = parseFlag(argv, "--provider") ?? Bun.env.SIKONG_AGENT_HOST_PROVIDER;
-  if (provider === "deepseek" || provider === "kimi") {
+  if (provider === "deepseek" || provider === "kimi" || provider === "claude" || provider === "codex" || provider === "cursor") {
     return provider;
   }
   return undefined;
