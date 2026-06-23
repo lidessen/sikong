@@ -260,59 +260,31 @@ fn run_cli(cli: Cli) -> i32 {
             json,
             allow_write,
             write_scope,
-            scenario,
-            scenario_file,
         }) => {
-            if scenario.is_some() || scenario_file.is_some() {
-                // Direct engine path (not assistant message path)
-                match run_task_run_split_eval(
-                    None,  // task
-                    scenario,
-                    scenario_file,
-                    None,  // artifact_dir
-                    false, // route_only
-                    json,
-                ) {
-                    Ok(passed) => {
-                        if passed {
-                            0
-                        } else {
-                            1
-                        }
-                    }
-                    Err(error) => {
-                        error!(%error, "failed to run scenario");
-                        eprintln!("failed to run scenario: {error}");
-                        1
-                    }
-                }
+            if task.is_empty() {
+                eprintln!("error: task description is required");
+                return 1;
+            }
+            let effective_scope = if allow_write && !write_scope.is_empty() {
+                write_scope
+            } else if allow_write {
+                vec!["**/*".to_string()]
             } else {
-                // Existing assistant-message path (unchanged behavior)
-                if task.is_empty() {
-                    eprintln!("error: task description is required when --scenario is not specified");
-                    return 1;
-                }
-                let effective_scope = if allow_write && !write_scope.is_empty() {
-                    write_scope
-                } else if allow_write {
-                    vec!["**/*".to_string()]
-                } else {
-                    Vec::new()
-                };
-                match run_assistant_prompt(
-                    task,
-                    wait_ms,
-                    AssistantPromptWorkspace::CurrentFileSystem,
-                    allow_write,
-                    effective_scope,
-                    json,
-                ) {
-                    Ok(()) => 0,
-                    Err(error) => {
-                        error!(%error, "failed to send task");
-                        eprintln!("failed to send task: {error}");
-                        1
-                    }
+                Vec::new()
+            };
+            match run_assistant_prompt(
+                task,
+                wait_ms,
+                AssistantPromptWorkspace::CurrentFileSystem,
+                allow_write,
+                effective_scope,
+                json,
+            ) {
+                Ok(()) => 0,
+                Err(error) => {
+                    error!(%error, "failed to send task");
+                    eprintln!("failed to send task: {error}");
+                    1
                 }
             }
         }
@@ -373,8 +345,7 @@ enum Command {
     /// Use the assistant layer to understand requests, create tasks, and return results.
     Send {
         /// Task description. Example: "analyze this project", "fix the bug in src/main.rs"
-        /// Not required when --scenario or --scenario-file is used.
-        #[arg(required = false, trailing_var_arg = true)]
+        #[arg(required = true, trailing_var_arg = true)]
         task: Vec<String>,
 
         /// Wait time in milliseconds for task completion (default 300000 = 5 min).
@@ -394,16 +365,6 @@ enum Command {
         /// Defaults to **/* (entire workspace) when --allow-write is set without this flag.
         #[arg(long = "write-scope")]
         write_scope: Vec<String>,
-
-        /// Run an eval scenario through the direct engine.
-        /// When set, the task argument is not required.
-        #[arg(long)]
-        scenario: Option<String>,
-
-        /// YAML scenario file to run through the direct engine.
-        /// When set, the task argument is not required.
-        #[arg(long)]
-        scenario_file: Option<PathBuf>,
     },
     /// Run evaluation scenarios (internal).
     #[command(hide = true)]
