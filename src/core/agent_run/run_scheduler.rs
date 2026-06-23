@@ -194,7 +194,7 @@ impl ProcessAgentRunScheduler {
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(ProcessAgentRunSchedulerError::Spawn)?;
         debug!(
