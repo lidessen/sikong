@@ -25,12 +25,15 @@ fn plan_from_scope_assessment(
     assessment: &ScopeAssessment,
     current_plan: &NodePlan,
     policy: NodePolicy,
+    allow_decompose: bool,
 ) -> NodePlan {
     // Decompose policy forces planning so the node is split into sub-tasks.
     // This enables recursive task decomposition up to 3 levels: a parent
     // plans children, children with Decompose policy plan their own children,
     // and so on until the work fits a single Execute node.
-    if policy == NodePolicy::Decompose {
+    // When allow_decompose is false (max depth reached), Decompose policy
+    // falls through to normal size-based routing.
+    if policy == NodePolicy::Decompose && allow_decompose {
         return match current_plan {
             NodePlan::Group(_) => current_plan.clone(),
             _ => NodePlan::NeedsPlanning,
@@ -50,6 +53,7 @@ pub struct Engine<W: Workspace, A: AgentRunScheduler> {
     workspace: W,
     agent: A,
     stop_after_route_depth: Option<usize>,
+    max_decomposition_depth: usize,
     next_node_id: NodeId,
     next_artifact_id: ArtifactId,
     nodes: HashMap<NodeId, ProblemNode>,
@@ -71,6 +75,7 @@ where
             workspace,
             agent,
             stop_after_route_depth: None,
+            max_decomposition_depth: 3,
             next_node_id: 0,
             next_artifact_id: 0,
             nodes: HashMap::new(),
@@ -85,6 +90,11 @@ where
 
     pub fn with_stop_after_route_depth(mut self, depth: usize) -> Self {
         self.stop_after_route_depth = Some(depth);
+        self
+    }
+
+    pub fn with_max_decomposition_depth(mut self, depth: usize) -> Self {
+        self.max_decomposition_depth = depth;
         self
     }
 
@@ -164,7 +174,7 @@ where
             return Ok(Some(artifact_id));
         }
 
-        self.specify(node_id, cancellation).await?;
+        self.specify(node_id, depth, cancellation).await?;
 
         let should_plan = self.should_plan(node_id)?;
         if self.stop_after_route_depth == Some(depth) && !should_plan {
@@ -225,6 +235,7 @@ where
     async fn specify(
         &mut self,
         node_id: NodeId,
+        depth: usize,
         cancellation: &CancellationToken,
     ) -> Result<(), EngineError> {
         if self.node(node_id)?.status == NodeStatus::New {
@@ -234,8 +245,9 @@ where
             if let NodeOperationOutput::Specified { scope_assessment } = result.output {
                 let current_plan = self.node(node_id)?.plan.clone();
                 let node_policy = self.node(node_id)?.policy;
+                let allow_decompose = depth < self.max_decomposition_depth;
                 let plan =
-                    plan_from_scope_assessment(&scope_assessment, &current_plan, node_policy);
+                    plan_from_scope_assessment(&scope_assessment, &current_plan, node_policy, allow_decompose);
                 let node = self.node_mut(node_id)?;
                 node.size = scope_assessment.size;
                 node.intent = scope_assessment.next.clone();
@@ -373,6 +385,7 @@ where
     ) -> Result<(), EngineError> {
         let mut branches = JoinSet::new();
         let stop_after_route_depth = self.stop_after_route_depth;
+        let max_decomposition_depth = self.max_decomposition_depth;
         for child_id in child_ids {
             check_cancelled(cancellation)?;
             let child = self.node(child_id)?.clone();
@@ -385,6 +398,7 @@ where
                 // workspace resources the branch created.
                 let mut branch = Engine::new(workspace.clone(), agent);
                 branch.stop_after_route_depth = stop_after_route_depth;
+                branch.max_decomposition_depth = max_decomposition_depth;
                 branch.next_node_id = child.id;
                 branch.nodes.insert(child.id, child);
 
@@ -1540,28 +1554,28 @@ mod tests {
     #[test]
     fn plan_from_assessment_tiny_becomes_fast_execute() {
         let assessment = ScopeAssessment::new("do it", WorkSize::Tiny, "tiny task");
-        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::Execute);
     }
 
     #[test]
     fn plan_from_assessment_small_executes() {
         let assessment = ScopeAssessment::new("do it", WorkSize::Small, "small task");
-        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::Execute);
     }
 
     #[test]
     fn plan_from_assessment_medium_executes() {
         let assessment = ScopeAssessment::new("do it", WorkSize::Medium, "medium task");
-        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::Execute);
     }
 
     #[test]
     fn plan_from_assessment_large_with_execute_plan_becomes_needs_planning() {
         let assessment = ScopeAssessment::new("big task", WorkSize::Large, "needs decomposition");
-        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::NeedsPlanning);
     }
 
@@ -1569,7 +1583,7 @@ mod tests {
     fn plan_from_assessment_large_with_needs_planning_becomes_needs_planning() {
         let assessment = ScopeAssessment::new("big task", WorkSize::Large, "needs decomposition");
         let plan =
-            plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning, NodePolicy::Explore);
+            plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::NeedsPlanning);
     }
 
@@ -1580,14 +1594,14 @@ mod tests {
             items: vec![NodeTemplate::memory_leaf("child", "work")],
         });
         let assessment = ScopeAssessment::new("big task", WorkSize::Large, "already planned");
-        let plan = plan_from_scope_assessment(&assessment, &group, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &group, NodePolicy::Explore, true);
         assert_eq!(plan, group);
     }
 
     #[test]
     fn plan_from_assessment_xlarge_with_execute_plan_becomes_needs_planning() {
         let assessment = ScopeAssessment::new("huge task", WorkSize::XLarge, "needs planning");
-        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::NeedsPlanning);
     }
 
@@ -1601,7 +1615,7 @@ mod tests {
             ],
         });
         let assessment = ScopeAssessment::new("huge task", WorkSize::XLarge, "already staged");
-        let plan = plan_from_scope_assessment(&assessment, &group, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &group, NodePolicy::Explore, true);
         assert_eq!(plan, group);
     }
 
@@ -1609,7 +1623,7 @@ mod tests {
     fn plan_from_assessment_tiny_ignores_needs_planning_current_plan() {
         let assessment = ScopeAssessment::new("tiny fix", WorkSize::Tiny, "trivial");
         let plan =
-            plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning, NodePolicy::Explore);
+            plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::Execute);
     }
 
@@ -1619,7 +1633,7 @@ mod tests {
     fn plan_with_decompose_policy_tiny_becomes_needs_planning() {
         let assessment = ScopeAssessment::new("tiny sub-task", WorkSize::Tiny, "decompose anyway");
         let plan =
-            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose);
+            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose, true);
         assert_eq!(plan, NodePlan::NeedsPlanning);
     }
 
@@ -1628,7 +1642,7 @@ mod tests {
         let assessment =
             ScopeAssessment::new("small sub-task", WorkSize::Small, "needs further split");
         let plan =
-            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose);
+            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose, true);
         assert_eq!(plan, NodePlan::NeedsPlanning);
     }
 
@@ -1637,7 +1651,7 @@ mod tests {
         let assessment =
             ScopeAssessment::new("medium sub-task", WorkSize::Medium, "still needs split");
         let plan =
-            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose);
+            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose, true);
         assert_eq!(plan, NodePlan::NeedsPlanning);
     }
 
@@ -1645,7 +1659,7 @@ mod tests {
     fn plan_with_decompose_policy_large_becomes_needs_planning() {
         let assessment = ScopeAssessment::new("large sub-task", WorkSize::Large, "decompose");
         let plan =
-            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose);
+            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose, true);
         assert_eq!(plan, NodePlan::NeedsPlanning);
     }
 
@@ -1657,7 +1671,7 @@ mod tests {
         });
         let assessment =
             ScopeAssessment::new("already grouped", WorkSize::Large, "already planned");
-        let plan = plan_from_scope_assessment(&assessment, &group, NodePolicy::Decompose);
+        let plan = plan_from_scope_assessment(&assessment, &group, NodePolicy::Decompose, true);
         assert_eq!(plan, group);
     }
 
@@ -1665,7 +1679,27 @@ mod tests {
     fn plan_with_explore_policy_tiny_still_fast_execute() {
         // Ensure Explore policy does not force planning
         let assessment = ScopeAssessment::new("tiny explore", WorkSize::Tiny, "just look");
-        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
+        let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore, true);
         assert_eq!(plan, NodePlan::Execute);
     }
+    #[test]
+    fn plan_with_decompose_policy_disallowed_at_max_depth_tiny_executes() {
+        // When allow_decompose=false (max depth reached), Decompose policy
+        // falls through to size-based routing. Tiny -> Execute.
+        let assessment = ScopeAssessment::new("tiny sub-task", WorkSize::Tiny, "decompose anyway");
+        let plan =
+            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose, false);
+        assert_eq!(plan, NodePlan::Execute);
+    }
+
+    #[test]
+    fn plan_with_decompose_policy_disallowed_at_max_depth_large_still_needs_planning() {
+        // When allow_decompose=false, Decompose policy falls through.
+        // Large -> NeedsPlanning (size-based routing still applies).
+        let assessment = ScopeAssessment::new("large sub-task", WorkSize::Large, "decompose but at limit");
+        let plan =
+            plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Decompose, false);
+        assert_eq!(plan, NodePlan::NeedsPlanning);
+    }
+
 }
