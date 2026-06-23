@@ -1,0 +1,30 @@
+id: evaluate-large-task-planning
+task: |
+  验证 Policy Packs 在大任务上的分治效果。目标是：给一个复杂任务，
+  只看 engine 的 Plan 输出质量，不关心子节点是否能执行完。
+
+  设计一个 eval 方式：
+  1. 创建一个需要多级分解的大型任务
+  2. 限制 max_steps 让它只能走到 Plan（走不到 Execute 子节点）
+  3. 或者让子节点用 mock agent 快速完成
+  4. 评估 Plan 的质量：子节点数量是否合理、scope 是否清晰、
+     分组模式（parallel/stage）是否正确
+
+  如果现有框架不支持这种 eval，可以扩展一下：
+  - 添加 route-only 模式到 Policy Packs 的测试中
+  - 或者创建一个 scenario 文件，配成 route-only 模式
+  - 或者直接在测试里构造这种场景
+
+  实现后验证，提交。
+expectation: |
+  能评估 engine 的分治质量，不需要完整执行子节点。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/**/*.rs
+    - evals/task-run/
+    - tests/
+  allow_write: true
+max_steps: 48

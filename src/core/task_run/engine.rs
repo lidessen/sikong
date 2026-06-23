@@ -11,7 +11,7 @@ use crate::common::workspace::{
 use crate::core::agent_run::{AgentRunScheduler, CancellationToken};
 
 use super::node::{
-    Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroupMode, PolicyPack,
+    Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode, PolicyPack,
     ProblemNode, ScopeAssessment, WorkSize,
 };
 use super::resources::WorkspaceResourceRegistry;
@@ -104,6 +104,17 @@ where
         self
     }
 
+    /// Enable plan-only mode: the engine stops after the Plan phase at the
+    /// root node (depth 0) without executing any child nodes.
+    ///
+    /// This is useful for eval scenarios that need to observe and validate
+    /// the Plan output (child nodes, grouping mode, scope boundaries)
+    /// without actually executing the children.
+    pub fn with_plan_only_mode(mut self) -> Self {
+        self.stop_after_route_depth = Some(0);
+        self
+    }
+
     pub fn insert_root(&mut self, template: NodeTemplate) -> NodeId {
         self.insert_node(None, template)
     }
@@ -140,6 +151,17 @@ where
 
     pub fn node(&self, id: NodeId) -> Result<&ProblemNode, EngineError> {
         self.nodes.get(&id).ok_or(EngineError::MissingNode(id))
+    }
+
+    /// Return the plan group for a node if it has been planned.
+    pub fn node_plan_group(
+        &self,
+        id: NodeId,
+    ) -> Result<Option<&PlanGroup>, EngineError> {
+        Ok(match &self.node(id)?.plan {
+            NodePlan::Group(group) => Some(group),
+            _ => None,
+        })
     }
 
     pub fn artifact(&self, id: ArtifactId) -> Result<&Artifact, EngineError> {
