@@ -543,7 +543,7 @@ where
 
         // Tiny tasks with no workspace changes skip Verify and commit directly.
         if node.size == WorkSize::Tiny && change.changed_paths.is_empty() {
-            drop(node);
+            let _ = node;
             self.commit(node_id, artifact_id)?;
             return Ok(());
         }
