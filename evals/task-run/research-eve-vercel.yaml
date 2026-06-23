@@ -1,0 +1,25 @@
+id: research-eve-vercel
+task: |
+  调研 Eve.dev 和 Vercel 的新框架。了解它们在做什么，和 Sikong 有什么关系。
+
+  去它们的网站和文档看看：
+  - https://eve.dev
+  - https://vercel.com/new
+
+  回答以下问题：
+  1. Eve.dev 是什么？它解决什么问题？它的核心架构是什么样的？
+  2. Vercel 的新框架是什么？和 Next.js 有什么关系？
+  3. 这些和 Sikong 有关系吗？是竞争关系还是互补关系？
+  4. 有什么可以借鉴的设计思路？
+
+  输出到 development-log。不要改代码。
+expectation: |
+  一份调研文档，分析 Eve.dev 和 Vercel 新框架。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - development-log/
+  allow_write: true
+max_steps: 32
