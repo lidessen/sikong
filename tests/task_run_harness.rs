@@ -282,17 +282,12 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
 
         assert_eq!(request.protocol_version, 1);
         assert_eq!(request.objective, format!("{operation:?} node 1"));
-        assert!(request.prompt.len() >= 5);
+        assert!(request.prompt.len() >= 4);
         assert!(prompt_section_exists(&request.prompt, "Role"));
         assert!(prompt_section_exists(&request.prompt, "Operation Context"));
-        assert!(prompt_section_exists(
-            &request.prompt,
-            "Governance Boundary"
-        ));
         assert!(prompt_section_exists(&request.prompt, expected_section));
         assert!(prompt_section_exists(&request.prompt, "Completion"));
         assert!(prompt_contains(&request.prompt, prompt_fragment));
-        assert!(prompt_contains(&request.prompt, "authority boundary"));
         assert!(prompt_contains(
             &request.prompt,
             "\"kind\": \"engine_operation\""
@@ -338,10 +333,6 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             ));
             assert!(prompt_contains(&request.prompt, "tiny is a direct answer"));
             assert!(prompt_contains(&request.prompt, "x_large"));
-            assert!(prompt_contains(
-                &request.prompt,
-                "information gathering is just another possible next work"
-            ));
             assert!(!prompt_contains(&request.prompt, "missing_info"));
         }
         if operation == NodeOperation::Plan {
@@ -385,16 +376,10 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
                 &request.prompt,
                 "allow_write controls mutation only"
             ));
-            assert!(prompt_section_exists(&request.prompt, "External Evidence"));
-            assert!(prompt_contains(
-                &request.prompt,
-                "external URLs, repositories, docs"
-            ));
             assert!(prompt_contains(
                 &request.prompt,
                 "instead of reconstructing details from model memory"
             ));
-            assert!(prompt_contains(&request.prompt, "Self Contained Work"));
             assert!(prompt_contains(
                 &request.prompt,
                 "Empty read_scope is not a blocker"
@@ -438,10 +423,6 @@ fn engine_harness_builds_operation_specific_prompt_tools_and_config() {
             assert!(prompt_contains(
                 &request.prompt,
                 "Empty read_scope is not missing information"
-            ));
-            assert!(prompt_section_exists(
-                &request.prompt,
-                "External Evidence Gate"
             ));
             assert!(prompt_contains(
                 &request.prompt,

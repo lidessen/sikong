@@ -169,9 +169,6 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                 "Attention Contract" {
                     "This pass defines the next parent contract, not the local solution. Preserve the attention boundary: the user's current intent, the next work boundary, and the evidence boundary that determines whether this node should stay atomic or enter Plan. Let later Execute or child nodes own local execution."
                 }
-                "Governance Boundary" {
-                    governance_prompt(context.operation)
-                }
                 "Size Reading" {
                     "Pick the smallest safe size by coordination cost while preserving the user's full current intent. tiny is a direct answer from current context. small is one local problem with one obvious verification path. medium is one coherent responsibility or coherent change package whose evidence cannot usefully be accepted in separate parts, even if it touches several nearby files, prompts, tests, or eval cases. large means planning reduces risk because the work has ordered phases, shared evidence feeding later work, multiple independently accepted deliverables, separate responsibilities that deserve separate verification, or a single final proposal built from several independently inspectable evidence surfaces. x_large means multiple independent targets or product delivery across several major surfaces."
                 }
@@ -184,11 +181,8 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                 "Boundary" {
                     "Information gathering is not a special route. If the raw intent cannot be meaningfully worked without a missing user choice, missing external fact, or missing input location, make next the concrete evidence-gathering work and size that work. Otherwise keep the user's requested work intact and let Execute or Plan handle the local details."
                 }
-                "Tool Use Discipline" {
-                    "Use tools in this pass only when a small targeted look is necessary to avoid mis-sizing or losing the user's intent. Do not perform broad repository inspection, file-by-file analysis, implementation, verification, or evidence collection here; those belong to Execute or Plan children."
-                }
-                "Non Goals" {
-                    "Do not solve the task, create the plan, verify a candidate, combine child work, or mutate workspace state. Do not use missing-info or route fields; information gathering is just another possible next work."
+                "Constraints" {
+                    "Use tools in this pass only for targeted look to avoid mis-sizing or losing the user's intent; do not perform broad inspection, implementation, verification, or evidence collection here."
                 }
                 "Completion" {
                     finish_prompt(&[EngineTool::SubmitSpecification.name()])
@@ -207,32 +201,26 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                         context.node.id, context.node.intent
                     )
                 }
-                "Planning Lens" {
-                    "Find the parent problem's attention boundary: the pressure that determines the shape of the rest. Decompose only around that pressure. Keep child intent clear enough that each child can re-enter Specify and solve its own local problem without being micromanaged by this plan."
-                }
-                "Governance Boundary" {
-                    governance_prompt(context.operation)
-                }
                 "Leverage Parent Context" {
                     "When the parent Operation Context already names independent evidence surfaces, such as module directories, package paths, doc families, runtime boundaries, or explicit audit targets, produce child scopes from that boundary directly. Do not read representative files, inspect workspace paths, or enumerate those surfaces just to decide the plan. If a human lead could assign child scopes from the parent context, use that same level of specificity in the plan items. Use tools only when the boundary is genuinely ambiguous or missing."
                 }
-                "Divide And Attention" {
-                    "Plan is the method layer for divide-and-conquer. The parent owns the mainline, group mode, child boundaries, and acceptance evidence. Children own local investigation and tactics. Divide only where it lowers global attention cost: ordered phases become stage; independent evidence surfaces become parallel; a coherent local change stays one child."
+                "Group Rules" {
+                    format!(
+                        "{}\n\n{}\n\n{}",
+                        "Find the parent problem's attention boundary: the pressure that determines the shape of the rest. Decompose only around that pressure. Keep child intent clear enough that each child can re-enter Specify and solve its own local problem without being micromanaged by this plan.",
+                        "Plan is the method layer for divide-and-conquer. The parent owns the mainline, group mode, child boundaries, and acceptance evidence. Children own local investigation and tactics. Divide only where it lowers global attention cost: ordered phases become stage; independent evidence surfaces become parallel; a coherent local change stays one child.",
+                        "Create the smallest useful non-empty item set that preserves the parent shape. A good child is a natural next-level subproblem with its own main contradiction, not a checklist row. This Plan pass defines only the current local group; child nodes always re-enter Specify, so do not force them to execute and do not pre-expand their internal plan here.",
+                    )
                 }
                 "Group Shape" {
                     "Choose stage when the parent problem uses ordered language such as first/then/after, or when each item changes the understanding needed for the next item. Choose parallel only when every item can start immediately and does not need outputs from any sibling item. Do not invert these modes: ordered phases are stage; mutually independent peer surfaces are parallel."
                 }
-                "Planning Strategy" {
-                    "Create the smallest useful non-empty item set that preserves the parent shape. A good child is a natural next-level subproblem with its own main contradiction, not a checklist row. This Plan pass defines only the current local group; child nodes always re-enter Specify, so do not force them to execute and do not pre-expand their internal plan here."
-                }
-                "Plan Item Shape" {
-                    "Each item should describe one child node. Submit at least one item, and normally one item per ordered phase or independent surface named by the parent intent. Prefer key and intent. Keep child intents concise and outcome-level. Include requires_prior_results for every item: use false when it can run from the parent context alone, and true only when it must wait for earlier item outputs. In parallel mode every item must use requires_prior_results=false. Do not add a synthesis, summary, final-report, or convergence item to a parallel group; the parent Combine pass performs that integration after child artifacts are accepted. Include size and reason when useful to preserve why the child is that size. If the parent has a file workspace and a child owns a narrower evidence surface, include read_scope as coarse glob strings within the parent scope, such as src/task_run/**/*.rs; include write_scope only when the child may write and needs a narrower write surface. Leave scopes empty when the child should inherit the parent workspace unchanged. You may also use title, description, and verification when they clarify acceptance without micromanaging execution. Use policy=decompose when a child is itself large enough to need further decomposition (up to 3 levels deep). Children with decompose policy will be automatically routed through their own Plan phase. Do not include plan.kind or nested groups in plan items."
-                }
-                "Recursive Decomposition" {
-                    "Recursive planning is allowed and sometimes required. A child may later split again when it still contains multiple independent deliverables, ordered phases, or more work than one coherent artifact can safely hold. That second split should be decided by the child Specify/Plan pass, not precomputed by the parent. The engine supports up to 3 levels of recursive decomposition: parent plans children, children with decompose policy plan their own children, and those grandchildren execute as leaf nodes. Use policy=decompose on plan items that should be further broken down rather than executed directly."
-                }
-                "Non Goals" {
-                    "Do not execute item work or combine results here. This pass only defines one local plan group."
+                "Item Shape" {
+                    format!(
+                        "{}\n\n{}",
+                        "Each item should describe one child node. Submit at least one item, and normally one item per ordered phase or independent surface named by the parent intent. Prefer key and intent. Keep child intents concise and outcome-level. Include requires_prior_results for every item: use false when it can run from the parent context alone, and true only when it must wait for earlier item outputs. In parallel mode every item must use requires_prior_results=false. Do not add a synthesis, summary, final-report, or convergence item to a parallel group; the parent Combine pass performs that integration after child artifacts are accepted. Include size and reason when useful to preserve why the child is that size. If the parent has a file workspace and a child owns a narrower evidence surface, include read_scope as coarse glob strings within the parent scope, such as src/task_run/**/*.rs; include write_scope only when the child may write and needs a narrower write surface. Leave scopes empty when the child should inherit the parent workspace unchanged. You may also use title, description, and verification when they clarify acceptance without micromanaging execution. Use policy=decompose when a child is itself large enough to need further decomposition (up to 3 levels deep). Children with decompose policy will be automatically routed through their own Plan phase. Do not include plan.kind or nested groups in plan items.",
+                        "Recursive planning is allowed and sometimes required. A child may later split again when it still contains multiple independent deliverables, ordered phases, or more work than one coherent artifact can safely hold. That second split should be decided by the child Specify/Plan pass, not precomputed by the parent. The engine supports up to 3 levels of recursive decomposition: parent plans children, children with decompose policy plan their own children, and those grandchildren execute as leaf nodes. Use policy=decompose on plan items that should be further broken down rather than executed directly.",
+                    )
                 }
                 "Completion" {
                     finish_prompt(&[EngineTool::SubmitPlanGroup.name()])
@@ -258,20 +246,14 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                         context.node.capabilities.allow_write,
                     )
                 }
-                "Self Contained Work" {
-                    "If the node asks for a self-contained analysis, design proposal, readiness package, test plan, explanation, or memory-only artifact, do the work from the supplied task text and operation context. Empty read_scope is not a blocker for that kind of work. Keep unknown details at the appropriate abstraction level; submit a blocker only when the node explicitly requires evidence that is unavailable."
-                }
-                "External Evidence" {
-                    "If the node asks you to inspect, cite, compare, or make factual claims about external URLs, repositories, docs, current releases, or other outside state, use available web or retrieval tools to observe that evidence before submitting factual claims. If no retrieval tool or supplied evidence is available, submit that evidence gap as the work result instead of reconstructing details from model memory."
-                }
-                "Execution Standard" {
-                    "Produce the smallest complete artifact that satisfies this node from Operation Context and the allowed workspace surface. Work like a competent owner of this local slice: inspect the relevant context, make the local change or answer, and run focused checks when the workspace and capability scope allow it. Include the useful evidence in the submitted result. Do not split the work, claim final task acceptance, or decide global completion from this pass."
-                }
-                "Governance Boundary" {
-                    governance_prompt(context.operation)
-                }
-                "Local Autonomy" {
-                    "Own local execution inside this node. Choose the concrete inspection path, implementation tactic, and focused evidence that best satisfies the node. If you discover that the parent intent, workspace boundary, or acceptance evidence is wrong, submit that as the result or blocker instead of silently changing the parent contract."
+                "Constraints" {
+                    format!(
+                        "{}\n\n{}\n\n{}\n\n{}",
+                        "If the node asks for a self-contained analysis, design proposal, readiness package, test plan, explanation, or memory-only artifact, do the work from the supplied task text and operation context. Empty read_scope is not a blocker for that kind of work. Keep unknown details at the appropriate abstraction level; submit a blocker only when the node explicitly requires evidence that is unavailable.",
+                        "If the node asks you to inspect, cite, compare, or make factual claims about external URLs, repositories, docs, current releases, or other outside state, use available web or retrieval tools to observe that evidence before submitting factual claims. If no retrieval tool or supplied evidence is available, submit that evidence gap as the work result instead of reconstructing details from model memory.",
+                        "Produce the smallest complete artifact that satisfies this node from Operation Context and the allowed workspace surface. Work like a competent owner of this local slice: inspect the relevant context, make the local change or answer, and run focused checks when the workspace and capability scope allow it. Include the useful evidence in the submitted result. Do not split the work, claim final task acceptance, or decide global completion from this pass.",
+                        "Own local execution inside this node. Choose the concrete inspection path, implementation tactic, and focused evidence that best satisfies the node. If you discover that the parent intent, workspace boundary, or acceptance evidence is wrong, submit that as the result or blocker instead of silently changing the parent contract.",
+                    )
                 }
                 "Completion" {
                     finish_prompt(&[EngineTool::SubmitWork.name()])
@@ -296,16 +278,11 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                     "Workspace change details are normally hidden. If conflicts are present, resolve those conflict paths as part of the parent artifact instead of treating them as deterministic failure. Operation Context is the complete available input for this pass; do not defer by saying you will inspect files or gather more context."
                 }
                 "Parent Synthesis Standard" {
-                    "Produce the parent-level artifact from accepted child evidence already present in Operation Context. Do not paste child outputs together, do not restart child work, and do not introduce new factual claims that are not supported by child artifacts or parent context. Preserve what matters, discard duplicate or local scaffolding, resolve contradictions against the parent intent, and make remaining caveats explicit. If children represent parallel evidence surfaces, synthesize the common conclusion and meaningful differences. A useful conflict resolution names the conflict path, states how accepted child artifacts should be woven together, and submits the merged parent-level artifact."
-                }
-                "Governance Boundary" {
-                    governance_prompt(context.operation)
-                }
-                "Parent Attention" {
-                    "Act as the same parent that delegated the children, not as a new independent role. Accept compressed child artifacts as the evidence surface, not the full trace. Preserve the parent mainline, integrate what supports it, reject or qualify weak evidence, and surface any child result that would require changing the parent contract."
-                }
-                "Non Goals" {
-                    "Do not create new child nodes, re-run child investigation, re-run verification, or invent an Arch-level change. Verification happens after this parent artifact is submitted."
+                    format!(
+                        "{}\n\n{}",
+                        "Produce the parent-level artifact from accepted child evidence already present in Operation Context. Do not paste child outputs together, do not restart child work, and do not introduce new factual claims that are not supported by child artifacts or parent context. Preserve what matters, discard duplicate or local scaffolding, resolve contradictions against the parent intent, and make remaining caveats explicit. If children represent parallel evidence surfaces, synthesize the common conclusion and meaningful differences. A useful conflict resolution names the conflict path, states how accepted child artifacts should be woven together, and submits the merged parent-level artifact.",
+                        "Act as the same parent that delegated the children, not as a new independent role. Accept compressed child artifacts as the evidence surface, not the full trace. Preserve the parent mainline, integrate what supports it, reject or qualify weak evidence, and surface any child result that would require changing the parent contract.",
+                    )
                 }
                 "Completion" {
                     finish_prompt(&[EngineTool::SubmitCombination.name()])
@@ -324,20 +301,16 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                         context.node.id, context.node.intent
                     )
                 }
-                "Verification Lens" {
-                    "Judge the candidate artifact against the node intent, workspace scope, and any child artifact evidence present in Operation Context. Workspace change details are verified by the engine instead of model judgment. Verify against the node intent and available context, not against extra requirements introduced along the way."
-                }
                 "Verdict Standard" {
                     "Use this judgement model. The verdict value must be exactly one of: accept, reject, need_information. If acceptance depends on a concrete fact missing from Operation Context, return verdict=need_information with the specific missing fact. If the candidate satisfies the node intent and scope with available evidence, return verdict=accept. If it falls short but the same node can repair it, return verdict=reject with feedback written for the next Execute attempt: what is missing, what evidence shows the gap, and what a corrected artifact should change. If the candidate reports no readable workspace surface, verify that claim against Operation Context instead of assuming one exists. Empty read_scope is not missing information for self-contained analysis, design proposal, readiness package, test plan, explanation, or memory-only artifact work unless the node explicitly requires unavailable evidence. Do not reject based on style preference alone."
                 }
-                "External Evidence Gate" {
-                    "When the node intent asks for concrete evidence from external URLs, repositories, project docs, current releases, or other outside state, do not accept factual claims that are only reconstructed from training knowledge or unstated memory. Accept only if the candidate cites observed evidence supplied in Operation Context or gathered during execution; otherwise return reject or need_information and name the missing external evidence."
-                }
-                "Governance Boundary" {
-                    governance_prompt(context.operation)
-                }
-                "Boundary" {
-                    "Do not edit the artifact or workspace in verification. Return only the verdict and concise reasoning that helps the engine either converge or retry efficiently."
+                "Constraints" {
+                    format!(
+                        "{}\n\n{}\n\n{}",
+                        "Judge the candidate artifact against the node intent, workspace scope, and any child artifact evidence present in Operation Context. Workspace change details are verified by the engine instead of model judgment. Verify against the node intent and available context, not against extra requirements introduced along the way.",
+                        "When the node intent asks for concrete evidence from external URLs, repositories, project docs, current releases, or other outside state, do not accept factual claims that are only reconstructed from training knowledge or unstated memory. Accept only if the candidate cites observed evidence supplied in Operation Context or gathered during execution; otherwise return reject or need_information and name the missing external evidence.",
+                        "Do not edit the artifact or workspace in verification. Return only the verdict and concise reasoning that helps the engine either converge or retry efficiently.",
+                    )
                 }
                 "Completion" {
                     finish_prompt(&[EngineTool::SubmitVerdict.name()])

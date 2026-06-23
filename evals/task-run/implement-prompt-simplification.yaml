@@ -1,0 +1,32 @@
+id: implement-prompt-simplification
+task: |
+  按 prompt-split-eval.md 的方案精简 src/core/task_run/harness.rs 中的 prompt 段。
+
+  具体改动：
+  1. 从所有 5 个 operation 中删除 "Governance Boundary" 段
+  2. 从 Specify、Plan、Combine 中删除 "Non Goals" 段
+  3. 将 Plan 的 "Planning Lens" + "Divide And Attention" + "Planning Strategy"
+     合并为 "Group Rules"
+  4. 将 Plan 的 "Plan Item Shape" + "Recursive Decomposition" 合并为 "Item Shape"
+  5. 将 Execute 的 "Self Contained Work" + "External Evidence" + "Execution Standard"
+     + "Local Autonomy" 合并为 "Constraints"
+  6. Combine 的 "Parent Attention" 合并到 "Parent Synthesis Standard"
+  7. Verify 的 "Verification Lens" + "External Evidence Gate" + "Boundary"
+     合并为 "Constraints"
+  8. 将 Specify 的 "Tool Use Discipline" 简化为一行话合并到约束里
+
+  不要改段的内容逻辑——只是删减和合并。行为不变。
+
+  约束：
+  - 只改 harness.rs 一个文件
+  - cargo build && cargo test 必须通过
+expectation: |
+  Prompt 段从 54 精简到 36。测试通过。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - src/core/task_run/harness.rs
+  write_scope:
+    - src/core/task_run/harness.rs
+  allow_write: true
+max_steps: 24
