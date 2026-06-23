@@ -41,6 +41,15 @@ pub struct ProcessAgentRunScheduler {
     reader: Option<BufReader<OwnedReadHalf>>,
 }
 
+fn create_temp_socket_dir() -> Result<(PathBuf, TempDir), ProcessAgentRunSchedulerError> {
+    let dir = tempfile::Builder::new()
+        .prefix("siko-agent-host-")
+        .tempdir()
+        .map_err(ProcessAgentRunSchedulerError::TempDir)?;
+    let path = dir.path().join("agent-host.sock");
+    Ok((path, dir))
+}
+
 impl Clone for ProcessAgentRunScheduler {
     fn clone(&self) -> Self {
         Self::new(self.command.clone(), self.args.clone())
