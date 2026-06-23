@@ -625,7 +625,9 @@ async fn run_assistant_prompt_async(
 
     println!("🤔 Processing...");
     let reply = session.handle_message(&mut store, message).await;
-    session.drain(&mut store).await;
+    session
+        .wait_for_all(&mut store, Duration::from_secs(300))
+        .await;
     let state = session.state();
     let task_status = reply
         .task_id
