@@ -3056,6 +3056,11 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
+    let has_bun = std::process::Command::new("which")
+        .arg("bun")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
     let has_codex = std::process::Command::new("which")
         .arg("codex")
         .output()
