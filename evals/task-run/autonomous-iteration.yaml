@@ -1,11 +1,13 @@
 id: autonomous-iteration
-max_steps: 24
+max_steps: 48
 task: |
-  看一下 development-log，找到最近的方向，然后往前推进一步。
+  读 development-log 和 git log，了解当前状态。然后往前推进一步——
+  让 siko 能更好地处理大型任务（递归分解，最多三层）。
+
   改完跑 cargo build && cargo test，然后 git add && git commit。
   记到 development-log 里。
 expectation: |
-  推进了项目。有代码变更或文档更新。
+  推进了项目。大任务分解能力前进一步。
 workspace:
   provider: current-file-system
   read_scope:

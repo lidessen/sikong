@@ -402,7 +402,6 @@ fn segment_chars_match(pattern: &[char], segment: &[char], pi: usize, si: usize)
     segment_chars_match(pattern, segment, pi + 1, si + 1)
 }
 
-
 /// Stage and commit only those changed files in `worktree_path` whose paths
 /// match at least one of the `write_scope` glob patterns.
 ///

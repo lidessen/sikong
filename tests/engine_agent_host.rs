@@ -126,10 +126,7 @@ async fn host_specify_can_rewrite_missing_context_into_evidence_work() {
             .iter()
             .map(|run| run.operation)
             .collect::<Vec<_>>(),
-        vec![
-            NodeOperation::Specify,
-            NodeOperation::Execute,
-        ]
+        vec![NodeOperation::Specify, NodeOperation::Execute,]
     );
 }
 

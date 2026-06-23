@@ -9,9 +9,9 @@ use crate::{
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
     AssistantTask, AssistantTaskEvent, AssistantTaskStatus, Budget, CancellationToken,
     CapabilityProfile, DebugConfig, Engine, FileTaskStore, NodeId, NodeOperation,
-    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness, PlanGroup,
-    PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig, TaskStore,
-    WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface, Workspaces,
+    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness,
+    PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig,
+    TaskStore, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface, Workspaces,
     common::metrics::{MetricsCollector, MetricsFormatter},
     non_empty_env, run_acp_stdio_server,
 };
@@ -228,7 +228,7 @@ fn run_cli(cli: Cli) -> i32 {
                     1
                 }
             }
-        },
+        }
         Some(Command::Dogfood { command }) => {
             if require_dev().is_err() {
                 eprintln!("error: dogfood is an internal command. Set SIKONG_DEV=1 to enable.");

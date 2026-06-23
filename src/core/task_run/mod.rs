@@ -14,8 +14,8 @@ pub use harness::{
     EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, OperationHarness,
 };
 pub use node::{
-    Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode, ProblemNode,
-    ScopeAssessment, WorkSize,
+    Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode,
+    ProblemNode, ScopeAssessment, WorkSize,
 };
 pub use types::{
     AgentRunRecord, ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError,

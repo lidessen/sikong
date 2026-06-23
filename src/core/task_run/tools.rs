@@ -110,6 +110,11 @@ pub(crate) struct PlanItemInput {
     pub size: Option<WorkSize>,
     pub reason: Option<String>,
     pub requires_prior_results: bool,
+    /// Node execution policy. Use `decompose` when the child should be
+    /// recursively decomposed into smaller sub-tasks (up to 3 levels).
+    /// Defaults to `explore` when absent.
+    #[serde(default)]
+    pub policy: Option<NodePolicy>,
 }
 
 impl PlanItemInput {
@@ -141,7 +146,7 @@ impl PlanItemInput {
         });
 
         NodeTemplate {
-        policy: NodePolicy::Explore,
+            policy: self.policy.unwrap_or(NodePolicy::Explore),
             key: ProblemKey(key),
             intent,
             size,
@@ -306,6 +311,7 @@ mod tests {
                     size: None,
                     reason: None,
                     requires_prior_results: false,
+                    policy: None,
                 },
                 PlanItemInput {
                     key: None,
@@ -318,6 +324,7 @@ mod tests {
                     size: None,
                     reason: None,
                     requires_prior_results: true,
+                    policy: None,
                 },
             ],
         });
@@ -342,6 +349,7 @@ mod tests {
                     size: Some(WorkSize::Small),
                     reason: Some("focused scan".to_string()),
                     requires_prior_results: false,
+                    policy: None,
                 },
                 PlanItemInput {
                     key: Some("surface-b".to_string()),
@@ -354,6 +362,7 @@ mod tests {
                     size: None,
                     reason: None,
                     requires_prior_results: false,
+                    policy: None,
                 },
             ],
         });

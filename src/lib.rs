@@ -23,9 +23,9 @@ pub use core::task_run::{
     EngineAgentGovernanceGatePacket, EngineAgentGovernancePacket, EngineAgentNodePacket,
     EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, EngineError,
     EngineReport, FailureClass, GovernanceGate, GovernanceLayer, NodeId, NodeOperation,
-    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationEvent, OperationHarness,
-    PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment, VerificationVerdict,
-    WorkSize,
+    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationEvent,
+    OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment,
+    VerificationVerdict, WorkSize,
 };
 pub use harness::assistant::{
     AcpRequest, AcpResponse, AcpServer, AcpServerConfig, AgentAssistantLoop, AssistantContext,
