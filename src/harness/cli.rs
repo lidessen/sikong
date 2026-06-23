@@ -2791,13 +2791,23 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
                 || value == "codex"
                 || value == "cursor"
         })
-        .unwrap_or_else(|| "deepseek".to_string());
+        .unwrap_or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.worker_provider())
+                .unwrap_or_else(|| "deepseek".to_string())
+        });
     let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
         .ok()
         .filter(|value| {
             value == "ai-sdk" || value == "claude-code" || value == "codex" || value == "cursor"
         })
-        .unwrap_or_else(|| "ai-sdk".to_string());
+        .unwrap_or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.worker_backend())
+                .unwrap_or_else(|| "ai-sdk".to_string())
+        });
     let model = std::env::var("SIKONG_AGENT_HOST_MODEL")
         .ok()
         .filter(|v| !v.is_empty())
@@ -2971,6 +2981,15 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
+    let codex_logged_in = if has_codex {
+        std::process::Command::new("codex")
+            .args(["login", "status"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        false
+    };
     let has_cursor = std::process::Command::new("which")
         .arg("cursor")
         .output()
@@ -3003,11 +3022,18 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     println!(
-        "   Codex CLI              {}",
+        "   Codex CLI              {}  {}",
         if has_codex {
             "✅ detected"
         } else {
             "⛔ not found"
+        },
+        if has_codex && codex_logged_in {
+            "🔑 logged in"
+        } else if has_codex && !codex_logged_in {
+            "⚠️  not logged in"
+        } else {
+            ""
         }
     );
     println!(
@@ -3063,9 +3089,15 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
             ("claude-code".to_string(), false)
         }
         "codex" => {
-            println!(
-                "   ℹ️  Codex backend — uses the `codex` CLI with your existing subscription."
-            );
+            if codex_logged_in {
+                println!(
+                    "   ℹ️  Codex backend — uses the `codex` CLI with your existing subscription."
+                );
+            } else {
+                println!(
+                    "⚠️  Codex CLI found but not logged in. Run 'codex login' first, or choose another provider."
+                );
+            }
             ("codex".to_string(), false)
         }
         "cursor" => {

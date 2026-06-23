@@ -1,0 +1,34 @@
+id: debug-setup-experience
+task: |
+  排查 siko setup 命令的用户体验。
+
+  具体问题：用户配置了 codex（已登录），但 setup 仍然提示需要配置 DeepSeek API key。
+
+  需要做：
+  1. 读取 src/harness/cli.rs 中的 run_setup 函数，理解当前的 setup 流程
+  2. 排查问题原因：
+     - setup 是否检测了 codex 的登录状态？
+     - 当 codex 可用时，是否允许用户选择 codex 作为 provider？
+     - 当 provider 不需要 API key 时，是否跳过了 API key 提示？
+     - 检测逻辑是否完整（不只看 env var，也要检测 CLI 是否已安装）
+  3. 修复发现的问题
+  4. 确保 cargo build && cargo test 通过
+
+  排查范围可以参考 SIKONG_AGENT_HOST_RUNTIME 环境变量和 cli.rs 中 resolve_agent_host_launch 等相关逻辑。
+
+  另外看看 siko run 命令中 resolve_assistant_prompt_workspace 和 engine 启动时 worker_launch 的 provider 一致性：
+  - setup 配了 codex
+  - siko run 使用的 provider 是否和 setup 一致？
+  - 如果 setup 配了 codex，run 的时候是否还要 deepseek api key？
+expectation: |
+  Setup 体验问题被排查并修复。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/harness/cli.rs
+    - src/**/*.rs
+    - packages/agent-host/src/**/*.ts
+  allow_write: true
+max_steps: 48
