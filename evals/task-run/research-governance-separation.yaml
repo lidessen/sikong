@@ -1,0 +1,52 @@
+id: research-governance-separation
+task: |
+  研究一个问题：治理模型（GovernanceLayer、GovernanceGate、hard_gates）
+  应该属于 harness 层还是 mechanism 层？要不要从 core 移到 harness？
+
+  背景：
+  - 当前 GovernanceLayer 和 GovernanceGate 定义在 src/core/task_run/types.rs
+  - harness.rs 和 tools.rs 也都引用了治理模型
+  - 设计审查说治理层和操作层有冗余
+  - 但你说分层最初是为了解决"什么时候分层、分多少层"的问题
+
+  你的研究：
+
+  1. 读所有使用 GovernanceLayer 和 GovernanceGate 的代码：
+     - src/core/task_run/types.rs — 定义
+     - src/core/task_run/harness.rs — 哪里用到 governance
+     - src/core/task_run/tools.rs — terminal tool 里的 gate 检查
+     - src/core/task_run/engine.rs — engine 里有 governance 引用吗？
+     - src/harness/assistant/pack.rs — assistant 的 pack 里有用吗？
+     - src/harness/cli.rs — CLI 层有没有 governance？
+
+  2. 分析：哪些 governance 逻辑是 engine 真正需要的（机械约束）？
+     哪些只是注入到 prompt 里的文本，LLM 层（harness）就能处理？
+
+     - G-SCOPE-WIDEN：engine 在创建子节点前检查 ← 这是机械的，需要 core 知道
+     - G-PARALLEL-DEPENDENCY：submit_plan_group 参数校验 ← 机械的，需要 core 知道  
+     - G-PASS-WITH-HARD-VIOLATION：verify 的 hard_violations 字段 ← 机械的，core 需要
+     - G-ARCH-ESCAPE：prompt 里告诉 agent 不能做什么 ← 不是机械的，harness 就够了
+     - G-SYNTHESIS-CHILD、G-UNSUPPORTED-FACT、G-PROTOCOL、G-CHECK-FAIL：
+       大多是 prompt 级别的，能移到 harness 吗？
+
+  3. 给出具体的迁移方案：
+     - GovernanceLayer 和 GovernanceGate 类型可以移到 harness 吗？
+     - 还是说应该在 common/ 里？
+     - 哪些 gate 检查应该保留在 core/（作为机械约束）
+     - 哪些可以完全删除（因为不机械也没有实际效果）
+     - 迁移后 core/ 需要知道"治理"这个概念吗？还是只需要具体的 checks？
+
+  输出到 development-log 里。
+  不要改代码。
+expectation: |
+  一份研究文档，分析治理模型的每一部分应该放在哪一层。
+  有具体的迁移方案，不只是一个"要不要删"的结论。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - src/
+    - design/
+  write_scope:
+    - development-log/
+  allow_write: true
+max_steps: 32
