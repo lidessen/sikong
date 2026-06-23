@@ -31,7 +31,7 @@ import { MODEL_PRICES } from "./prices.generated";
 const DEEPSEEK_ANTHROPIC = "https://api.deepseek.com/anthropic";
 /** DeepSeek's cheap/fast tier — used for Claude Code haiku-level + subagent calls. */
 const DEEPSEEK_FLASH = "deepseek-v4-flash";
-const KIMI_CODE_ANTHROPIC = "https://api.kimi.com/coding/";
+const KIMI_CODE_ANTHROPIC = "https://api.kimi.com/coding";
 const ANTHROPIC_BASE = "https://api.anthropic.com";
 const OPENAI_BASE = "https://api.openai.com/v1";
 
@@ -150,6 +150,7 @@ export function kimi(opts: { apiKey?: string } = {}): ModelProvider {
             env: {
               ANTHROPIC_BASE_URL: KIMI_CODE_ANTHROPIC,
               ANTHROPIC_API_KEY: apiKey,
+              ANTHROPIC_MODEL: "kimi",
               CLAUDE_CODE_AUTO_COMPACT_WINDOW: "262144",
             },
           };

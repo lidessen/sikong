@@ -1,0 +1,33 @@
+id: fix-kimi-provider
+task: |
+  Kimi provider with claude-code runtime hangs on siko send.
+
+  根因分析：
+  - packages/agent-loop/src/providers/index.ts 中 kimi() 的 claude-code 配置
+    没有设置 ANTHROPIC_MODEL，导致 claude CLI 使用默认模型名
+    （如 claude-sonnet-4-20250514），Kimi API 不识别这个模型。
+  - 相比之下 deepseek() 设置了 ANTHROPIC_MODEL: "deepseek-chat"
+
+  修复：
+  1. 在 kimi provider 的 claude-code 配置中增加 ANTHROPIC_MODEL
+  2. 模型名应该是 kimi 能识别的，查看 Kimi 文档确定模型名称
+  3. 如果 Kimi 不需要模型名（服务端路由），则排查其他原因：
+     - 检查 ANTHROPIC_BASE_URL 的尾部斜杠是否导致 URL 拼接问题
+     - 检查 CLAUDE_CODE_AUTO_COMPACT_WINDOW 是否必要
+
+  或者更简单的修复：
+  4. 让 siko send 命令在 dete到 kimi + claude-code 时，
+     改用 ai-sdk 运行时（不需要 claude CLI）
+
+  约束：cargo build && cargo test 和 bun test 必须通过。
+expectation: |
+  Kimi + claude-code 不再卡住，正常返回。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - packages/agent-loop/src/providers/index.ts
+    - packages/agent-host/src/agent-loop-worker.ts
+  allow_write: true
+max_steps: 48

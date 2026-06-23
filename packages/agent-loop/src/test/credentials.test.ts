@@ -82,8 +82,9 @@ describe("credential resolution", () => {
       expect(cfg.runtime).toBe("claude-code");
       if (cfg.runtime === "claude-code") {
         expect(cfg.model).toBeUndefined();
-        expect(cfg.env.ANTHROPIC_BASE_URL).toBe("https://api.kimi.com/coding/");
+        expect(cfg.env.ANTHROPIC_BASE_URL).toBe("https://api.kimi.com/coding");
         expect(cfg.env.ANTHROPIC_API_KEY).toBe("sk-kimi");
+        expect(cfg.env.ANTHROPIC_MODEL).toBe("kimi");
         expect(cfg.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("262144");
       }
     } finally {
