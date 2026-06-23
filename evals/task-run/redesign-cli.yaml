@@ -1,0 +1,31 @@
+id: redesign-cli
+task: |
+  重新设计 siko CLI 的交互命令。
+
+  当前命令：
+  - siko run "task" — 运行任务（需rename）
+  - siko setup — 交互式配置
+  - siko assistant — ACP / prompt 模式
+  - siko metrics — 统计看板
+  - siko dogfood — 内部隐藏命令
+  - siko eval — 内部隐藏命令
+
+  要求：
+  1. 把 run 改名为 send，更准确地表达"发送消息给助手"的含义
+  2. run 作为 send 的 alias（别名），保持向后兼容
+  3. 添加 log 子命令，可以查看最近的 task 执行记录（从 task store 读取）
+  4. 重新审视整个命令结构，确保逻辑清晰一致
+  5. 只改 src/harness/cli.rs，不改核心逻辑
+  6. 更新所有输出文本中的 run 引用
+
+  约束：cargo build && cargo test 必须通过。
+expectation: |
+  CLI 重新设计完成。sender 可用。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/harness/cli.rs
+  allow_write: true
+max_steps: 64

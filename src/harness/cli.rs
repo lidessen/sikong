@@ -254,7 +254,7 @@ fn run_cli(cli: Cli) -> i32 {
                 },
             }
         }
-        Some(Command::Run {
+        Some(Command::Send {
             task,
             wait_ms,
             json,
@@ -278,8 +278,8 @@ fn run_cli(cli: Cli) -> i32 {
             ) {
                 Ok(()) => 0,
                 Err(error) => {
-                    error!(%error, "failed to run task");
-                    eprintln!("failed to run task: {error}");
+                    error!(%error, "failed to send task");
+                    eprintln!("failed to send task: {error}");
                     1
                 }
             }
@@ -346,6 +346,16 @@ fn run_cli(cli: Cli) -> i32 {
         Some(Command::Metrics { json }) => {
             run_metrics_command(json);
             0
+        },
+        Some(Command::Log { limit, json }) => {
+            match print_task_logs(limit, json) {
+                Ok(()) => 0,
+                Err(error) => {
+                    error!(%error, "failed to show task logs");
+                    eprintln!("failed to show task logs: {error}");
+                    1
+                }
+            }
         }
     }
 }
@@ -375,9 +385,10 @@ enum Command {
         #[arg(long)]
         acp: bool,
     },
-    /// Run a task through the assistant. This is the primary user-facing command.
+    /// Send a task through the assistant. This is the primary user-facing command.
     /// Use the assistant layer to understand requests, create tasks, and return results.
-    Run {
+    #[command(alias = "run")]
+    Send {
         /// Task description. Example: "analyze this project", "fix the bug in src/main.rs"
         #[arg(required = true, trailing_var_arg = true)]
         task: Vec<String>,
@@ -420,6 +431,16 @@ enum Command {
     },
     /// Collect and display current metrics snapshot.
     Metrics {
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show recent task execution records from the task store.
+    Log {
+        /// Maximum number of recent tasks to display.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+
         /// Print structured JSON output.
         #[arg(long)]
         json: bool,
@@ -852,6 +873,38 @@ fn print_assistant_list(json_output: bool) -> Result<(), Box<dyn std::error::Err
         let first_line = task.request.lines().next().unwrap_or("").to_string();
         println!("{}  {:?}  {}", id_prefix, task.status, first_line);
     }
+    Ok(())
+}
+
+fn print_task_logs(limit: usize, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let mut tasks = store.list_tasks();
+    // Sort by some ordering - list_tasks may return in arbitrary order.
+    // For now we just take the last `limit` tasks
+    tasks.reverse();
+    tasks.truncate(limit);
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
+        println!();
+        return Ok(());
+    }
+
+    if tasks.is_empty() {
+        println!("No task execution records found.");
+        return Ok(());
+    }
+
+    println!("Recent task execution records (last {}):", limit);
+    println!("{:-<80}", "");
+    for task in &tasks {
+        let id_prefix: String = task.id.chars().take(12).collect();
+        let first_line = task.request.lines().next().unwrap_or("").to_string();
+        println!("{}  {:?}  {}", id_prefix, task.status, first_line);
+    }
+    println!("{:-<80}", "");
+    println!("Total: {} tasks", tasks.len());
     Ok(())
 }
 
@@ -3418,7 +3471,7 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     );
     println!();
     println!("{} Quick start:", console::style("[START]").green().bold());
-    println!("   siko run \"analyze this\"     # Run a task");
+    println!("   siko send \"analyze this\"     # Send a task");
     println!("   siko assistant --acp       # ACP server for external tools");
     println!("   siko dogfood run           # Self-iteration loop");
     if needs_api_key
