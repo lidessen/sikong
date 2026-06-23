@@ -4,6 +4,10 @@ task: |
   读 development-log 和 git log，了解当前状态。然后往前推进一步——
   让 siko 能更好地处理大型任务（递归分解，最多三层）。
 
+  如果本轮涉及修改 harness prompt（src/core/task_run/harness.rs 或
+  相关 prompt 代码），先读 .reasonix/skills/harness-prompt-design/SKILL.md
+  中的 prompt 设计方法论，再动手。
+
   改完跑 cargo build && cargo test，然后 git add && git commit。
   记到 development-log 里。
 expectation: |
@@ -12,7 +16,9 @@ workspace:
   provider: current-file-system
   read_scope:
     - src/
+    - design/
     - development-log/
+    - .reasonix/skills/
   write_scope:
     - src/**
   allow_write: true
