@@ -1,0 +1,48 @@
+id: simplify-harness-prompts
+task: |
+  研究 prompt-guidance.md 中的注意力分层理论，然后重新设计 harness prompt。
+
+  核心原则（来自 prompt-guidance.md）：
+  - L0（一次 agent 调用）：只需要 operation objective + 约束条件 + 工具 + 证据标准
+  - 超过 L0 的内容 = 分层违规（prompt bug）
+  - 当前 prompt 有大量 L2/L3 的内容泄漏到 L0 里
+
+  你的工作：
+
+  1. 读 design/philosophy/prompt-guidance.md，理解注意力分层
+  2. 读 design/philosophy/development-philosophy.md 中的"Agent As Intelligent Node"
+  3. 读 src/core/task_run/harness.rs 当前 prompt 段（每个 operation 的 prompt）
+  4. 读 src/harness/governance.rs（刚移过来的治理类型）
+
+  5. 对每个 operation（Specify、Plan、Execute、Combine、Verify），列出当前 prompt 段，
+     标注每个段是 L0 必需的还是 L2/L3 泄漏。
+     例如：
+     - "Role" → L0 必需（告诉 agent 它的角色）
+     - "Governance Boundary" → L2 泄漏（治理是 harness 层的概念，不应该出现在 L0 prompt 里）
+     - "Non Goals" → L2 泄漏（防御性指示）
+     - "Size Reading" → L0 必需（Specify 的约束条件）
+     - "Tool Use Discipline" → L0 必需（工具的约束条件）
+
+  6. 对每个 operation，给出精简后的 prompt 方案：
+     - 保留：Role, [操作特定内容], [约束], [工具], Completion
+     - 删除：Governance Boundary、Non Goals、过度防御性的段
+     - 合并："Medium Versus Large" 可以合并到 "Size Reading"
+     - 简化：重复的内容只留一次
+
+  7. 输出到 development-log。不要改代码。
+
+  原则：prompt 是干活的，不是教学的。agent 不需要知道治理模型、分层理论。
+  它只需要知道当前操作该做什么。
+expectation: |
+  一份 prompt 精简方案。每个 operation 的当前 prompt 段标注了 L0/L2/L3，
+  并给出了精简后的方案。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - design/philosophy/
+    - src/core/task_run/harness.rs
+    - src/harness/governance.rs
+  write_scope:
+    - development-log/
+  allow_write: true
+max_steps: 24
