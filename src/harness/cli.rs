@@ -2879,8 +2879,12 @@ fn resolve_agent_host_launch_from(
         let ts_entry = sibling_dir.join("runtime-host.ts");
         let entry = if js_entry.exists() { js_entry } else { ts_entry };
         if entry.exists() {
+            // Use bun from PATH or known locations
+            let bun_cmd = env("BUN")
+                .or_else(|| which_bun())
+                .unwrap_or_else(|| "bun".to_string());
             return AgentHostLaunch {
-                command: "bun".to_string(),
+                command: bun_cmd,
                 args: vec!["run".to_string(), entry.to_string_lossy().to_string()],
             };
         }
@@ -2929,6 +2933,23 @@ fn sibling_agent_host_source_dir(current_exe: Option<&Path>) -> Option<PathBuf> 
     let exe = current_exe?;
     let dir = exe.parent()?.join("agent-host");
     dir.is_dir().then_some(dir)
+}
+
+/// Try to find bun executable — check common locations and PATH.
+fn which_bun() -> Option<String> {
+    let candidates = [
+        std::env::var("HOME").map(|h| PathBuf::from(h).join(".bun/bin/bun")).ok(),
+        Some(PathBuf::from("/opt/homebrew/bin/bun")),
+        Some(PathBuf::from("/usr/local/bin/bun")),
+        Some(PathBuf::from("/usr/bin/bun")),
+    ];
+    for c in candidates.into_iter().flatten() {
+        if c.exists() {
+            return Some(c.to_string_lossy().to_string());
+        }
+    }
+    // Try PATH lookup as last resort
+    None
 }
 
 fn binary_launch(path: impl Into<PathBuf>) -> AgentHostLaunch {
