@@ -295,7 +295,7 @@ fn run_cli(cli: Cli) -> i32 {
 #[command(name = "siko")]
 #[command(about = "Recursive agent engine prototype")]
 #[command(version = concat!(
-    env!("CARGO_PKG_VERSION"),
+    env!("SIKO_BUILD_VERSION"),
     " (",
     env!("CARGO_PKG_NAME"),
     ")"
