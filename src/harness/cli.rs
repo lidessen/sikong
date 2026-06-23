@@ -2948,7 +2948,27 @@ fn which_bun() -> Option<String> {
             return Some(c.to_string_lossy().to_string());
         }
     }
-    // Try PATH lookup as last resort
+    // Try PATH lookup via `which bun`
+    if let Ok(output) = std::process::Command::new("which").arg("bun").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    // Try `command -v bun` as alternative
+    if let Ok(output) = std::process::Command::new("bash")
+        .args(["-c", "command -v bun"])
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
     None
 }
 
