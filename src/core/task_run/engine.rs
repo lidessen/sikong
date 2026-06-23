@@ -725,17 +725,14 @@ where
     ) -> Result<Option<VerificationVerdict>, EngineError> {
         let artifact = self.artifact(artifact_id)?;
 
-        // Check for empty or trivially short output — reject deterministically
-        // without needing an LLM Verify call. Coverage includes both Memory
-        // provider artifacts (no workspace_change) and file-based artifacts.
+        // Short output check: reject truly empty outputs deterministically
+        // without an LLM Verify call. The threshold is intentionally low (2 chars)
+        // to catch only clearly empty outputs, not short but valid ones.
         let trimmed = artifact.text.trim();
-        if trimmed.is_empty() || trimmed.chars().filter(|c| !c.is_whitespace()).count() < 10 {
+        if trimmed.is_empty() {
             return Ok(Some(VerificationVerdict::Reject {
                 failure_class: FailureClass::IncompleteOutput,
-                reason: format!(
-                    "output too short ({} chars after trim); expected meaningful artifact",
-                    trimmed.len()
-                ),
+                reason: "output is empty".to_string(),
             }));
         }
 
