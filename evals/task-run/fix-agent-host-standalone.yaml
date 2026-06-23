@@ -1,0 +1,37 @@
+id: fix-agent-host-standalone
+task: |
+  修复 siko-agent-host 编译后无法在外部项目中使用的问题。
+
+  当前问题：`bun build --compile` 产生的 agent-host binary 引用了外部 chunk 文件（如 `745.index.js`），
+  当 CWD 不是构建目录时无法加载这些文件，导致 `Cannot find module './745.index.js'` 错误。
+
+  观察：
+  - 在 sikong 仓库目录内运行正常
+  - 在 /tmp/ 或其他目录运行时报错 ResolveMessage
+
+  解决方案：
+  用 bun build compile 时带上输出目录，而不是只输出单个 binary 文件。
+
+  或者改用 `bun build --compile --target=bun` flag。
+
+  或者用 bun build --compile --target=bun-darwin-arm64 （这应该生成完全独立的 binary）。
+
+  验证方法：
+  1. 在 sikong 仓库构建 agent-host：`bun build --compile ./packages/agent-host/src/runtime-host.ts --outfile /tmp/test-agent`
+  2. 将 binary 复制到 /tmp/anyproject/ 并运行 `./test-agent --socket /tmp/test.sock`
+  3. 检查 socket 是否被创建
+
+  需要改 build-release-rust.sh 确保产出的 tarball 包含可用的 agent-host。
+  测试后提交。
+expectation: |
+  agent-host binary 可以从任意目录运行。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - scripts/build-release-rust.sh
+    - packages/agent-host/package.json
+    - .github/workflows/release.yml
+  allow_write: true
+max_steps: 48

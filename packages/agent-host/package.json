@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build:runtime-host": "bun build --compile ./src/runtime-host.ts --outfile ../../dist/siko-agent-host",
+    "build:runtime-host": "bun build --compile --target=bun-darwin-arm64 ./src/runtime-host.ts --outfile ../../dist/siko-agent-host",
     "typecheck": "tsgo --project tsconfig.json",
     "test": "bun test ./src",
     "runtime-host": "bun ./src/runtime-host.ts"
