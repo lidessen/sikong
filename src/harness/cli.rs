@@ -2873,8 +2873,22 @@ fn resolve_agent_host_launch_from(
     }
 
     // Prefer compiled agent-host binary (no Bun dependency)
+    // But first verify it actually works — compile output may not be truly self-contained
     if let Some(path) = sibling_agent_host_binary(current_exe) {
-        return binary_launch(path);
+        // Quick smoke test: run --help to verify the binary starts
+        match std::process::Command::new(&path)
+            .arg("--help")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Ok(status) if status.success() => {
+                return binary_launch(path);
+            }
+            _ => {
+                // Binary doesn't start — fall through to JS bundle
+            }
+        }
     }
 
     // Fall back to agent-host JS bundle (requires Bun)
