@@ -6,11 +6,14 @@ use crate::common::workspace::WorkspaceProvider;
 use crate::core::agent_run::{
     AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRuntimeProfile,
 };
+use crate::harness::governance::{
+    GovernanceGate, GovernanceLayer, active_hard_gates_for, governance_layer_for,
+};
 
 use super::tools::{EngineTool, EngineTools};
 use super::{
-    AgentOperationContext, AgentRunDecodeError, AgentRunResult, Artifact, GovernanceGate,
-    GovernanceLayer, NodeOperation, NodePlan, NodePolicy, ScopeAssessment, WorkSize,
+    AgentOperationContext, AgentRunDecodeError, AgentRunResult, Artifact, NodeOperation, NodePlan,
+    NodePolicy, ScopeAssessment, WorkSize,
 };
 
 macro_rules! operation_prompt {
@@ -250,9 +253,7 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                 }
                 "Workspace Rules" {
                     format!(
-                        "If workspace_surface is present, treat it as the concrete execution surface. Respect read_scope, write_scope, provider details, and allow_write exactly. read_scope controls what files may be read. allow_write controls mutation only; do not report a write-permission blocker for read-only inspection work. Submit only the work result; the workspace provider captures file changes and side effects. If the work asks you to inspect files or external state but read_scope is empty and the context provides no readable surface, say exactly that no readable file or external evidence surface is available.
-
-Write permission: {} (allow_write={})",
+                        "If workspace_surface is present, treat it as the concrete execution surface. Respect read_scope, write_scope, provider details, and allow_write exactly. read_scope controls what files may be read. allow_write controls mutation only; do not report a write-permission blocker for read-only inspection work. Submit only the work result; the workspace provider captures file changes and side effects. If the work asks you to inspect files or external state but read_scope is empty and the context provides no readable surface, say exactly that no readable file or external evidence surface is available.\n\nWrite permission: {} (allow_write={})",
                         if context.node.capabilities.allow_write { "enabled" } else { "disabled" },
                         context.node.capabilities.allow_write,
                     )
@@ -350,11 +351,10 @@ Write permission: {} (allow_write={})",
 }
 
 fn governance_prompt(operation: NodeOperation) -> String {
-    let Some(layer) = operation.governance_layer() else {
+    let Some(layer) = governance_layer_for(operation) else {
         return "This operation is engine-only and has no agent governance layer.".to_string();
     };
-    let gates = operation
-        .active_hard_gates()
+    let gates = active_hard_gates_for(operation)
         .iter()
         .map(|gate| format!("{}: {}", gate.id(), gate.description()))
         .collect::<Vec<_>>()
@@ -529,11 +529,8 @@ fn operation_context_packet(context: &AgentOperationContext) -> EngineAgentConte
 
 fn governance_packet(operation: NodeOperation) -> EngineAgentGovernancePacket {
     EngineAgentGovernancePacket {
-        layer: operation
-            .governance_layer()
-            .unwrap_or(GovernanceLayer::Arch),
-        hard_gates: operation
-            .active_hard_gates()
+        layer: governance_layer_for(operation).unwrap_or(GovernanceLayer::Arch),
+        hard_gates: active_hard_gates_for(operation)
             .iter()
             .copied()
             .map(gate_packet)

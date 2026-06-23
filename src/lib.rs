@@ -22,10 +22,9 @@ pub use core::task_run::{
     EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,
     EngineAgentGovernanceGatePacket, EngineAgentGovernancePacket, EngineAgentNodePacket,
     EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, EngineError,
-    EngineReport, FailureClass, GovernanceGate, GovernanceLayer, NodeId, NodeOperation,
-    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationEvent,
-    OperationHarness, PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ScopeAssessment,
-    VerificationVerdict, WorkSize,
+    EngineReport, FailureClass, NodeId, NodeOperation, NodeOperationOutput, NodePlan, NodePolicy,
+    NodeStatus, NodeTemplate, OperationEvent, OperationHarness, PlanGroup, PlanGroupMode,
+    ProblemKey, ProblemNode, ScopeAssessment, VerificationVerdict, WorkSize,
 };
 pub use harness::assistant::{
     AcpRequest, AcpResponse, AcpServer, AcpServerConfig, AgentAssistantLoop, AssistantContext,
@@ -34,3 +33,4 @@ pub use harness::assistant::{
     AssistantTaskBoardContext, AssistantTurn, AssistantTurnError, JsonRpcError, SessionReply,
     SessionState, run_acp_stdio_server,
 };
+pub use harness::governance::{GovernanceGate, GovernanceLayer, active_hard_gates_for, governance_layer_for};

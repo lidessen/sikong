@@ -717,44 +717,42 @@ async fn engine_harness_rejects_dependent_parallel_plan_items() {
         })
         .expect("dependent parallel plan should decode as invalid plan");
 
-    let NodeOperationOutput::InvalidPlan { gate, reason } = result.output else {
+    let NodeOperationOutput::InvalidPlan { code, reason } = result.output else {
         panic!("expected invalid plan output");
     };
-    assert_eq!(gate, Some(GovernanceGate::ParallelDependency));
+    assert_eq!(code, "parallel_dependency");
     assert!(reason.contains("parallel plan items must be mutually independent"));
 }
 
 #[test]
 fn node_operations_report_governance_layer_and_active_gates() {
     assert_eq!(
-        NodeOperation::Specify.governance_layer(),
+        governance_layer_for(NodeOperation::Specify),
         Some(GovernanceLayer::Plan)
     );
     assert_eq!(
-        NodeOperation::Plan.governance_layer(),
+        governance_layer_for(NodeOperation::Plan),
         Some(GovernanceLayer::Plan)
     );
     assert_eq!(
-        NodeOperation::Execute.governance_layer(),
+        governance_layer_for(NodeOperation::Execute),
         Some(GovernanceLayer::Execute)
     );
     assert_eq!(
-        NodeOperation::Combine.governance_layer(),
+        governance_layer_for(NodeOperation::Combine),
         Some(GovernanceLayer::Execute)
     );
     assert_eq!(
-        NodeOperation::Verify.governance_layer(),
+        governance_layer_for(NodeOperation::Verify),
         Some(GovernanceLayer::Verify)
     );
-    assert_eq!(NodeOperation::Commit.governance_layer(), None);
+    assert_eq!(governance_layer_for(NodeOperation::Commit), None);
     assert!(
-        NodeOperation::Plan
-            .active_hard_gates()
+        active_hard_gates_for(NodeOperation::Plan)
             .contains(&GovernanceGate::ParallelDependency)
     );
     assert!(
-        NodeOperation::Verify
-            .active_hard_gates()
+        active_hard_gates_for(NodeOperation::Verify)
             .contains(&GovernanceGate::PassWithHardViolation)
     );
 }

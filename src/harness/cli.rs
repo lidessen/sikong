@@ -2430,13 +2430,16 @@ fn operation_result_summary(result: &AgentRunResult) -> String {
         NodeOperationOutput::Planned { group } => {
             format!("planned mode={:?} items={}", group.mode, group.items.len())
         }
-        NodeOperationOutput::InvalidPlan { gate, reason } => match gate {
-            Some(gate) => format!(
-                "invalid plan gate={} reason={}",
-                gate.id(),
-                truncate_for_eval(reason, 240)
-            ),
-            None => format!("invalid plan reason={}", truncate_for_eval(reason, 240)),
+        NodeOperationOutput::InvalidPlan { code, reason } => {
+            if code.is_empty() {
+                format!("invalid plan reason={}", truncate_for_eval(reason, 240))
+            } else {
+                format!(
+                    "invalid plan gate={} reason={}",
+                    code,
+                    truncate_for_eval(reason, 240)
+                )
+            }
         },
         NodeOperationOutput::Executed { output } => {
             format!("executed output={}", truncate_for_eval(output, 500))

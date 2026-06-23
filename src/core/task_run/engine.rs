@@ -325,19 +325,23 @@ where
             .await?;
         let group = match result.output {
             NodeOperationOutput::Planned { group } => group,
-            NodeOperationOutput::InvalidPlan { gate, reason } => {
+            NodeOperationOutput::InvalidPlan { code, reason } => {
                 self.record(
                     node_id,
                     NodeOperation::Plan,
-                    match gate {
-                        Some(gate) => format!("invalid plan {}: {reason}", gate.id()),
-                        None => format!("invalid plan: {reason}"),
+                    if code.is_empty() {
+                        format!("invalid plan: {reason}")
+                    } else {
+                        format!("invalid plan {}: {reason}", code)
                     },
                 );
                 return Err(EngineError::AgentProtocol(format!(
                     "invalid plan for node {node_id}: {}{reason}",
-                    gate.map(|gate| format!("{}: ", gate.id()))
-                        .unwrap_or_default()
+                    if code.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}: ", code)
+                    }
                 )));
             }
             _ => return Ok(()),

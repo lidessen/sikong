@@ -19,8 +19,8 @@ pub use node::{
 };
 pub use types::{
     AgentRunRecord, ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError,
-    EngineReport, FailureClass, GovernanceGate, GovernanceLayer, NodeId, NodeOperation, NodeStatus,
-    OperationEvent, ProblemKey, VerificationVerdict,
+    EngineReport, FailureClass, NodeId, NodeOperation, NodeStatus, OperationEvent, ProblemKey,
+    VerificationVerdict,
 };
 
 #[derive(Debug, Clone)]
@@ -55,7 +55,7 @@ pub enum NodeOperationOutput {
         group: PlanGroup,
     },
     InvalidPlan {
-        gate: Option<GovernanceGate>,
+        code: String,
         reason: String,
     },
     Executed {

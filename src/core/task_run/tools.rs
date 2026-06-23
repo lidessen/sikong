@@ -2,9 +2,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::{
-    Budget, CapabilityProfile, FailureClass, GovernanceGate, NodeOperationOutput, NodePlan,
-    NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment,
-    VerificationVerdict, WorkSize,
+    Budget, CapabilityProfile, FailureClass, NodeOperationOutput, NodePlan, NodePolicy,
+    NodeTemplate, PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, VerificationVerdict,
+    WorkSize,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -32,7 +32,7 @@ impl EngineTools {
     pub(crate) fn submit_plan_group(&self, args: SubmitPlanGroupArgs) -> NodeOperationOutput {
         if args.items.is_empty() {
             return NodeOperationOutput::InvalidPlan {
-                gate: Some(GovernanceGate::Protocol),
+                code: "protocol".into(),
                 reason: "plan group must contain at least one item".to_string(),
             };
         }
@@ -40,7 +40,7 @@ impl EngineTools {
             && args.items.iter().any(|item| item.requires_prior_results)
         {
             return NodeOperationOutput::InvalidPlan {
-                gate: Some(GovernanceGate::ParallelDependency),
+                code: "parallel_dependency".into(),
                 reason:
                     "parallel plan items must be mutually independent; dependent synthesis belongs in the parent Combine pass"
                         .to_string(),
@@ -280,7 +280,7 @@ mod tests {
             items: Vec::new(),
         });
         assert!(
-            matches!(&output, NodeOperationOutput::InvalidPlan { gate, .. } if *gate == Some(GovernanceGate::Protocol))
+            matches!(&output, NodeOperationOutput::InvalidPlan { code, .. } if code == "protocol")
         );
     }
 
@@ -291,7 +291,7 @@ mod tests {
             items: Vec::new(),
         });
         assert!(
-            matches!(&output, NodeOperationOutput::InvalidPlan { gate, .. } if *gate == Some(GovernanceGate::Protocol))
+            matches!(&output, NodeOperationOutput::InvalidPlan { code, .. } if code == "protocol")
         );
     }
 
@@ -329,7 +329,7 @@ mod tests {
             ],
         });
         assert!(
-            matches!(&output, NodeOperationOutput::InvalidPlan { gate, .. } if *gate == Some(GovernanceGate::ParallelDependency))
+            matches!(&output, NodeOperationOutput::InvalidPlan { code, .. } if code == "parallel_dependency")
         );
     }
 

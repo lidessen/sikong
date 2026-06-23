@@ -1,0 +1,55 @@
+id: migrate-governance-to-harness
+task: |
+  把治理模型（GovernanceLayer、GovernanceGate）从 core 移到 harness。
+  分层是策略，通过 prompt 引导，不是通过 core 类型。
+
+  指导思想：
+  - core 不关心"治理"这个概念，它只做分治（Specify→Plan→Execute→Verify→Commit）
+  - 分层是 harness 在构建 prompt 时决定的指导原则
+  - 机械校验（空 items、parallel+依赖、accept+hard_violations）保留但不用 gate 标签
+
+  具体要做：
+
+  1. 在 src/harness/governance.rs 新建文件：
+     - GovernanceLayer 枚举（Arch, Plan, Execute, Verify）
+     - GovernanceGate 枚举（所有 8 个变体，但只作为 prompt 级别的标识）
+     - fn governance_layer_for(op: NodeOperation) -> Option<GovernanceLayer>
+     - fn active_hard_gates_for(op: NodeOperation) -> Vec<GovernanceGate>
+     - GovernanceGate::description() — 每个 gate 的描述文本
+
+  2. 修改 src/core/task_run/types.rs：
+     - 删除 GovernanceLayer 枚举
+     - 删除 GovernanceGate 枚举
+     - 删除 NodeOperation::governance_layer()
+     - 删除 NodeOperation::active_hard_gates()
+     - NodeOperationOutput::InvalidPlan 的 gate 字段改成 code: String
+       （"protocol"、"parallel_dependency"、"pass_with_hard_violation" 或空字符串）
+
+  3. 修改 src/core/task_run/tools.rs：
+     - submit_plan_group 的校验返回 InvalidPlan { code: "protocol".into(), reason: ... }
+       而不是 InvalidPlan { gate: Some(GovernanceGate::Protocol), ... }
+     - SubmitVerdictArgs::into_verdict() 同样改用 code
+
+  4. 修改 src/core/task_run/harness.rs：
+     - 引用新的 harness/governance.rs 而不是 core/task_run/types.rs 中的治理类型
+
+  5. 修改 src/core/task_run/mod.rs 和 src/lib.rs：
+     - 更新 re-export
+
+  6. 更新测试。
+
+  约束：
+  - 行为不变。InvalidPlan 仍然会返回，只是 gate 标签变成 code 字符串
+  - 三个机械校验仍然执行
+  - cargo build && cargo test 必须通过
+expectation: |
+  治理模型从 core 移到 harness。行为不变。测试通过。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/**/*.rs
+    - tests/**/*.rs
+  allow_write: true
+max_steps: 64
