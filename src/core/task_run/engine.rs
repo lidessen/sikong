@@ -29,7 +29,7 @@ fn plan_from_scope_assessment(
     // Decompose policy forces planning so the node is split into sub-tasks.
     // This enables recursive task decomposition up to 3 levels: a parent
     // plans children, children with Decompose policy plan their own children,
-    // and so on until the work fits a single Execute or FastExecute node.
+    // and so on until the work fits a single Execute node.
     if policy == NodePolicy::Decompose {
         return match current_plan {
             NodePlan::Group(_) => current_plan.clone(),
@@ -37,7 +37,7 @@ fn plan_from_scope_assessment(
         };
     }
     match assessment.size {
-        WorkSize::Tiny => NodePlan::FastExecute,
+        WorkSize::Tiny => NodePlan::Execute,
         WorkSize::Small | WorkSize::Medium => NodePlan::Execute,
         WorkSize::Large | WorkSize::XLarge => match current_plan {
             NodePlan::Group(_) => current_plan.clone(),
@@ -211,18 +211,11 @@ where
             }
             self.combine(node_id, cancellation).await?;
         } else if self.node(node_id)?.candidate.is_none() {
-            match self.node(node_id)?.plan {
-                NodePlan::FastExecute => {
-                    self.fast_execute(node_id, cancellation).await?;
-                    // If fast_execute self-verified and already committed,
-                    // return the accepted artifact and skip verify.
-                    if self.node(node_id)?.status == NodeStatus::Committed {
-                        return Ok(self.node(node_id)?.accepted_artifact);
-                    }
-                }
-                _ => {
-                    self.execute(node_id, cancellation).await?;
-                }
+            self.execute(node_id, cancellation).await?;
+            // If execute committed directly (Tiny + no workspace change),
+            // return the accepted artifact and skip verify.
+            if self.node(node_id)?.status == NodeStatus::Committed {
+                return Ok(self.node(node_id)?.accepted_artifact);
             }
         }
 
@@ -543,6 +536,14 @@ where
         self.cleanup_releasable_resources()?;
         let node = self.node_mut(node_id)?;
         node.execution_attempts += 1;
+
+        // Tiny tasks with no workspace changes skip Verify and commit directly.
+        if node.size == WorkSize::Tiny && change.changed_paths.is_empty() {
+            drop(node);
+            self.commit(node_id, artifact_id)?;
+            return Ok(());
+        }
+
         node.candidate = Some(artifact_id);
         node.status = NodeStatus::Verifying;
         Ok(())
@@ -554,38 +555,6 @@ where
     /// self-verifies by committing the output immediately. On failure
     /// (e.g., agent returns unexpected output), falls back to the
     /// standard verify-then-reject path by creating a candidate artifact.
-    async fn fast_execute(
-        &mut self,
-        node_id: NodeId,
-        cancellation: &CancellationToken,
-    ) -> Result<(), EngineError> {
-        self.record(node_id, NodeOperation::Execute, "fast execute path");
-
-        let result = self
-            .run_agent(node_id, NodeOperation::Execute, cancellation)
-            .await?;
-
-        let NodeOperationOutput::Executed { output } = result.output else {
-            // Fast path failed — agent did not produce Executed output.
-            // Fall back: create an empty candidate so verify handles it.
-            self.node_mut(node_id)?.execution_attempts += 1;
-            self.record(
-                node_id,
-                NodeOperation::Execute,
-                "fast execute did not produce Executed output, falling back to verify",
-            );
-            return Ok(());
-        };
-
-        // Success path: self-verify by committing directly.
-        let artifact_id =
-            self.push_artifact(node_id, ArtifactContentKind::Text, output, None, Vec::new());
-
-        self.node_mut(node_id)?.execution_attempts += 1;
-        self.commit(node_id, artifact_id)?;
-        Ok(())
-    }
-
     async fn combine(
         &mut self,
         node_id: NodeId,
@@ -1568,7 +1537,7 @@ mod tests {
     fn plan_from_assessment_tiny_becomes_fast_execute() {
         let assessment = ScopeAssessment::new("do it", WorkSize::Tiny, "tiny task");
         let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
-        assert_eq!(plan, NodePlan::FastExecute);
+        assert_eq!(plan, NodePlan::Execute);
     }
 
     #[test]
@@ -1637,7 +1606,7 @@ mod tests {
         let assessment = ScopeAssessment::new("tiny fix", WorkSize::Tiny, "trivial");
         let plan =
             plan_from_scope_assessment(&assessment, &NodePlan::NeedsPlanning, NodePolicy::Explore);
-        assert_eq!(plan, NodePlan::FastExecute);
+        assert_eq!(plan, NodePlan::Execute);
     }
 
     // --- Decompose policy tests ---
@@ -1693,6 +1662,6 @@ mod tests {
         // Ensure Explore policy does not force planning
         let assessment = ScopeAssessment::new("tiny explore", WorkSize::Tiny, "just look");
         let plan = plan_from_scope_assessment(&assessment, &NodePlan::Execute, NodePolicy::Explore);
-        assert_eq!(plan, NodePlan::FastExecute);
+        assert_eq!(plan, NodePlan::Execute);
     }
 }
