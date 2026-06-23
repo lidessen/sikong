@@ -260,31 +260,64 @@ fn run_cli(cli: Cli) -> i32 {
             json,
             allow_write,
             write_scope,
+            scenario,
+            scenario_file,
         }) => {
-            let effective_scope = if allow_write && !write_scope.is_empty() {
-                write_scope
-            } else if allow_write {
-                vec!["**/*".to_string()]
+            if scenario.is_some() || scenario_file.is_some() {
+                // Direct engine path (not assistant message path)
+                match run_dogfood_run(
+                    scenario_file,
+                    scenario,
+                    None,  // artifact_dir
+                    false, // route_only
+                    false, // log
+                    json,
+                ) {
+                    Ok(passed) => {
+                        if passed {
+                            0
+                        } else {
+                            1
+                        }
+                    }
+                    Err(error) => {
+                        error!(%error, "failed to run scenario");
+                        eprintln!("failed to run scenario: {error}");
+                        1
+                    }
+                }
             } else {
-                Vec::new()
-            };
-            match run_assistant_prompt(
-                task,
-                wait_ms,
-                AssistantPromptWorkspace::CurrentFileSystem,
-                allow_write,
-                effective_scope,
-                json,
-            ) {
-                Ok(()) => 0,
-                Err(error) => {
-                    error!(%error, "failed to send task");
-                    eprintln!("failed to send task: {error}");
-                    1
+                // Existing assistant-message path (unchanged behavior)
+                if task.is_empty() {
+                    eprintln!("error: task description is required when --scenario is not specified");
+                    return 1;
+                }
+                let effective_scope = if allow_write && !write_scope.is_empty() {
+                    write_scope
+                } else if allow_write {
+                    vec!["**/*".to_string()]
+                } else {
+                    Vec::new()
+                };
+                match run_assistant_prompt(
+                    task,
+                    wait_ms,
+                    AssistantPromptWorkspace::CurrentFileSystem,
+                    allow_write,
+                    effective_scope,
+                    json,
+                ) {
+                    Ok(()) => 0,
+                    Err(error) => {
+                        error!(%error, "failed to send task");
+                        eprintln!("failed to send task: {error}");
+                        1
+                    }
                 }
             }
         }
         Some(Command::Dogfood { command }) => {
+            eprintln!("warning: 'dogfood' is deprecated, use 'run --scenario' or 'run --scenario-file' instead");
             if require_dev().is_err() {
                 eprintln!("error: dogfood is an internal command. Set SIKONG_DEV=1 to enable.");
                 return 1;
@@ -390,7 +423,8 @@ enum Command {
     #[command(alias = "run")]
     Send {
         /// Task description. Example: "analyze this project", "fix the bug in src/main.rs"
-        #[arg(required = true, trailing_var_arg = true)]
+        /// Not required when --scenario or --scenario-file is used.
+        #[arg(required = false, trailing_var_arg = true)]
         task: Vec<String>,
 
         /// Wait time in milliseconds for task completion (default 300000 = 5 min).
@@ -410,6 +444,16 @@ enum Command {
         /// Defaults to **/* (entire workspace) when --allow-write is set without this flag.
         #[arg(long = "write-scope")]
         write_scope: Vec<String>,
+
+        /// Run an eval scenario through the direct engine (alternative to dogfood run --scenario).
+        /// When set, the task argument is not required.
+        #[arg(long)]
+        scenario: Option<String>,
+
+        /// YAML scenario file to run through the direct engine (alternative to dogfood run --scenario-file).
+        /// When set, the task argument is not required.
+        #[arg(long)]
+        scenario_file: Option<PathBuf>,
     },
     /// Run evaluation scenarios (internal).
     #[command(hide = true)]
@@ -418,6 +462,7 @@ enum Command {
         command: EvalCommand,
     },
     /// Run dogfood self-development tasks (internal).
+    /// Deprecated: use `run --scenario` or `run --scenario-file` instead.
     #[command(hide = true)]
     Dogfood {
         #[command(subcommand)]
