@@ -371,7 +371,6 @@ enum Command {
     },
     /// Send a task through the assistant. This is the primary user-facing command.
     /// Use the assistant layer to understand requests, create tasks, and return results.
-    #[command(alias = "run")]
     Send {
         /// Task description. Example: "analyze this project", "fix the bug in src/main.rs"
         /// Not required when --scenario or --scenario-file is used.

@@ -1,0 +1,16 @@
+id: remove-run-alias
+task: |
+  删除 run 命令（send 的 alias）。只保留 send。
+
+  要求：删除 Command::Send 枚举上的 #[command(alias = "run")]，清理所有相关引用。
+  只改 src/harness/cli.rs。
+expectation: |
+  run 别名删除完成，只有 send。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/harness/cli.rs
+  allow_write: true
+max_steps: 16
