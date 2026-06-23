@@ -15,7 +15,7 @@ pub use harness::{
 };
 pub use node::{
     Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode,
-    ProblemNode, ScopeAssessment, WorkSize,
+    PolicyPack, ProblemNode, ScopeAssessment, TaskType, WorkSize,
 };
 pub use types::{
     AgentRunRecord, ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError,

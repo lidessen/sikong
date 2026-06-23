@@ -282,6 +282,7 @@ pub fn skip_without_bun(test_name: &str) -> bool {
 pub fn scoped_git_leaf(key: &str, output: &str, path: &str) -> NodeTemplate {
     NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey(key.to_string()),
         intent: output.to_string(),
         size: WorkSize::Small,

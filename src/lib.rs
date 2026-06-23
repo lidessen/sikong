@@ -22,7 +22,7 @@ pub use core::task_run::{
     EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,
     EngineAgentGovernanceGatePacket, EngineAgentGovernancePacket, EngineAgentNodePacket,
     EngineAgentWorkspaceRequirementPacket, EngineAgentWorkspaceSurfacePacket, EngineError,
-    EngineReport, FailureClass, NodeId, NodeOperation, NodeOperationOutput, NodePlan, NodePolicy,
+    EngineReport, FailureClass, NodeId, NodeOperation, NodeOperationOutput, NodePlan, NodePolicy, PolicyPack, TaskType,
     NodeStatus, NodeTemplate, OperationEvent, OperationHarness, PlanGroup, PlanGroupMode,
     ProblemKey, ProblemNode, ScopeAssessment, VerificationVerdict, WorkSize,
 };

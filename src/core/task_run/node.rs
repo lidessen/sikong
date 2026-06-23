@@ -7,7 +7,7 @@ use std::fmt;
 
 use super::{ArtifactId, Budget, CapabilityProfile, NodeId, NodeStatus, ProblemKey};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum WorkSize {
@@ -28,6 +28,103 @@ impl fmt::Display for WorkSize {
             Self::Large => "large",
             Self::XLarge => "xlarge",
         })
+    }
+}
+
+
+/// The type of work a node performs.
+///
+/// Task types categorize nodes by their fundamental mode of operation.
+/// Each task type is associated with a [`PolicyPack`] that defines the
+/// planning engine's behavior for that type, replacing the old approach
+/// where a single `policy` field directly encoded both the task category
+/// and its planning behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum TaskType {
+    /// Investigation, research, or evidence gathering.
+    Explore,
+    /// Code or artifact implementation and construction.
+    Exploit,
+    /// Polish, optimization, or iterative improvement.
+    Refine,
+    /// Verification, testing, or acceptance checking.
+    Verify,
+}
+
+impl fmt::Display for TaskType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Self::Explore => "explore",
+            Self::Exploit => "exploit",
+            Self::Refine => "refine",
+            Self::Verify => "verify",
+        })
+    }
+}
+
+/// A Policy Pack defines the planning engine's behavior for a given task type.
+///
+/// Different task types can have different planning policies — for example,
+/// an "explore" task might decompose at a larger size threshold than an
+/// "exploit" task, or a "verify" task might never decompose at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PolicyPack {
+    /// Whether this task type encourages recursive decomposition.
+    pub decompose: bool,
+    /// The size threshold above which the engine automatically enters
+    /// NeedsPlanning. Tasks below this threshold execute directly.
+    pub auto_plan_threshold: WorkSize,
+}
+
+impl TaskType {
+    /// Returns the default [`PolicyPack`] for this task type.
+    ///
+    /// These defaults are chosen to be broadly useful:
+    ///
+    /// | TaskType  | decompose | auto_plan_threshold |
+    /// |-----------|-----------|---------------------|
+    /// | Explore   | true      | Large               |
+    /// | Exploit   | true      | Medium              |
+    /// | Refine    | false     | Large               |
+    /// | Verify    | false     | Large               |
+    ///
+    /// - **Explore** tasks (investigation, research) decompose at Large+
+    ///   because exploration often benefits from splitting into focused
+    ///   sub-questions, but small explorations are fine as direct executes.
+    /// - **Exploit** tasks (implementation, construction) decompose at Medium+
+    ///   because implementation work above medium complexity benefits from
+    ///   planning before executing.
+    /// - **Refine** tasks (polish, iteration) never auto-decompose and
+    ///   only plan at Large+, since refinement is normally a focused pass.
+    /// - **Verify** tasks (testing, acceptance) never auto-decompose and
+    ///   only plan at Large+, since verification is a single judgement pass.
+    pub fn default_policy_pack(&self) -> PolicyPack {
+        match self {
+            Self::Explore => PolicyPack {
+                decompose: true,
+                auto_plan_threshold: WorkSize::Large,
+            },
+            Self::Exploit => PolicyPack {
+                decompose: true,
+                auto_plan_threshold: WorkSize::Medium,
+            },
+            Self::Refine => PolicyPack {
+                decompose: false,
+                auto_plan_threshold: WorkSize::Large,
+            },
+            Self::Verify => PolicyPack {
+                decompose: false,
+                auto_plan_threshold: WorkSize::Large,
+            },
+        }
+    }
+}
+
+impl Default for TaskType {
+    fn default() -> Self {
+        Self::Explore
     }
 }
 
@@ -133,6 +230,7 @@ pub struct NodeTemplate {
     pub capabilities: CapabilityProfile,
     pub budget: Budget,
     pub policy: NodePolicy,
+    pub task_type: TaskType,
     pub plan: NodePlan,
 }
 
@@ -147,6 +245,7 @@ impl NodeTemplate {
             capabilities: CapabilityProfile::read_only(),
             budget: Budget::default(),
             policy: NodePolicy::Explore,
+            task_type: TaskType::Explore,
             plan: NodePlan::Execute,
         }
     }
@@ -165,6 +264,7 @@ pub struct ProblemNode {
     pub budget: Budget,
     pub policy: NodePolicy,
     pub children: Vec<NodeId>,
+    pub task_type: TaskType,
     pub status: NodeStatus,
     pub plan: NodePlan,
     pub candidate: Option<ArtifactId>,

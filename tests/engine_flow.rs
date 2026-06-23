@@ -146,6 +146,7 @@ async fn stop_after_root_route_creates_children_without_executing_them() {
     let mut engine = engine().with_stop_after_route_depth(0);
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("route-only".to_string()),
         intent: "plan repository audit".to_string(),
         size: WorkSize::Large,
@@ -218,6 +219,7 @@ async fn verify_receives_candidate_workspace_surface_for_file_system_nodes() {
     );
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("verify-file-surface".to_string()),
         intent: "review local files".to_string(),
         size: WorkSize::Small,
@@ -239,6 +241,7 @@ async fn information_gathering_work_executes_as_a_normal_node() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("provider-evidence".to_string()),
         intent: "identify the selected provider and model in the current runtime config"
             .to_string(),
@@ -274,6 +277,7 @@ async fn specify_can_rewrite_missing_context_into_evidence_work() {
     let root = engine.insert_root(NodeTemplate {
 
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("provider-config".to_string()),
         intent: "Configure the production model provider selected by the user, but the provider choice is not present."
             .to_string(),
@@ -318,6 +322,7 @@ async fn parallel_group_resolves_children_and_combines_parent() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("design".to_string()),
         intent: "complete design".to_string(),
         size: WorkSize::Small,
@@ -360,6 +365,7 @@ async fn planned_children_inherit_parent_workspace_and_capabilities() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("scoped-plan".to_string()),
         intent: "complete scoped plan".to_string(),
         size: WorkSize::Large,
@@ -398,6 +404,7 @@ async fn planned_children_can_narrow_parent_workspace_scope() {
     child.workspace.write_scope = vec!["design/task-run/**".to_string()];
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("scoped-plan".to_string()),
         intent: "complete scoped plan".to_string(),
         size: WorkSize::Large,
@@ -435,6 +442,7 @@ async fn planned_children_cannot_widen_parent_workspace_scope() {
     child.workspace.read_scope = vec!["secrets/**".to_string()];
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("scoped-plan".to_string()),
         intent: "complete scoped plan".to_string(),
         size: WorkSize::Large,
@@ -473,6 +481,7 @@ async fn parallel_group_executes_children_concurrently() {
     );
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("parallel".to_string()),
         intent: "combined concurrent work".to_string(),
         size: WorkSize::Small,
@@ -503,6 +512,7 @@ async fn parallel_group_merges_children_as_they_finish() {
     let mut engine = Engine::new(MemoryWorkspace::default(), StaggeredAgentRunScheduler);
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("staggered".to_string()),
         intent: "combined staggered work".to_string(),
         size: WorkSize::Small,
@@ -546,6 +556,7 @@ async fn stage_group_resolves_items_in_order_and_combines_parent() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("staged-design".to_string()),
         intent: "complete staged design".to_string(),
         size: WorkSize::Small,
@@ -689,6 +700,7 @@ async fn verify_reject_retries_leaf_until_accept() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("retry".to_string()),
         intent: "retry once".to_string(),
         size: WorkSize::Small,
@@ -718,6 +730,7 @@ async fn repeated_failure_rejected_after_budget() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("fail".to_string()),
         intent: "always bad".to_string(),
         size: WorkSize::Small,
@@ -747,6 +760,7 @@ async fn missing_info_reject_waits_without_retrying_execute() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("missing-info".to_string()),
         intent: "missing-info reject".to_string(),
         size: WorkSize::Small,
@@ -777,6 +791,7 @@ async fn unresolved_parallel_child_blocks_parent_combine() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("parent".to_string()),
         intent: "combine accepted child evidence".to_string(),
         size: WorkSize::Large,
@@ -815,6 +830,7 @@ async fn unresolved_stage_child_stops_later_siblings() {
     let mut engine = engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("stage-parent".to_string()),
         intent: "combine ordered child evidence".to_string(),
         size: WorkSize::Large,
@@ -871,6 +887,7 @@ async fn read_only_workspace_change_is_rejected() {
     let mut engine = Engine::new(Workspaces::default(), WritingGitAgentRunScheduler);
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("read-only".to_string()),
         intent: "read only must not write".to_string(),
         size: WorkSize::Small,
@@ -918,6 +935,7 @@ async fn git_combine_conflict_is_given_to_agent_instead_of_pruning_parent() {
     let mut engine = Engine::new(Workspaces::default(), TestAgentRunScheduler);
     let child_a = NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("a".to_string()),
         intent: "patch a".to_string(),
         size: WorkSize::Small,
@@ -929,6 +947,7 @@ async fn git_combine_conflict_is_given_to_agent_instead_of_pruning_parent() {
     };
     let child_b = NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("b".to_string()),
         intent: "patch b".to_string(),
         size: WorkSize::Small,
@@ -940,6 +959,7 @@ async fn git_combine_conflict_is_given_to_agent_instead_of_pruning_parent() {
     };
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("conflict".to_string()),
         intent: "combined patch".to_string(),
         size: WorkSize::Small,
@@ -984,6 +1004,7 @@ async fn engine_cleans_git_workspace_resources_after_run() {
     let mut engine = Engine::new(Workspaces::default(), WritingGitAgentRunScheduler);
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("write-file".to_string()),
         intent: "write file".to_string(),
         size: WorkSize::Small,
@@ -1016,6 +1037,7 @@ async fn writable_node_outside_write_scope_is_rejected() {
     let mut engine = Engine::new(Workspaces::default(), WriteOutsideScopeScheduler);
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("out-of-scope".to_string()),
         intent: "write unscoped file".to_string(),
         size: WorkSize::Small,

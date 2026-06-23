@@ -65,6 +65,7 @@ async fn specify_uses_general_profile_even_for_git_workspace() {
     let mut engine = Engine::new(Workspaces::default(), worker);
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("git-specify".to_string()),
         intent: "Audit the repository for stale design surfaces.".to_string(),
         size: WorkSize::Large,
@@ -103,6 +104,7 @@ fn verify_with_file_workspace_surface_uses_code_profile() {
     let context = AgentOperationContext {
         node: ProblemNode {
             policy: NodePolicy::Explore,
+            task_type: TaskType::Explore,
             workspace: WorkspaceRequirement::read_only_files(),
             ..problem_node(NodePlan::Execute)
         },
@@ -140,6 +142,7 @@ async fn engine_harness_includes_candidate_child_and_workspace_surface_context()
     let child_b = scoped_git_leaf("b", "patch b", "packages/client/src/api.ts");
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("combine".to_string()),
         intent: "combined patch".to_string(),
         size: WorkSize::Small,
@@ -1058,6 +1061,7 @@ fn plan_for_operation(operation: NodeOperation) -> NodePlan {
 fn problem_node(plan: NodePlan) -> ProblemNode {
     ProblemNode {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         id: 1,
         key: ProblemKey("node".to_string()),
         parent: None,

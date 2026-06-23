@@ -13,7 +13,7 @@ use crate::harness::governance::{
 use super::tools::{EngineTool, EngineTools};
 use super::{
     AgentOperationContext, AgentRunDecodeError, AgentRunResult, Artifact, NodeOperation, NodePlan,
-    NodePolicy, ScopeAssessment, WorkSize,
+    NodePolicy, ScopeAssessment, TaskType, WorkSize,
 };
 
 macro_rules! operation_prompt {
@@ -87,6 +87,7 @@ pub struct EngineAgentNodePacket {
     pub execution_attempts: u32,
     pub verification_attempts: u32,
     pub policy: NodePolicy,
+    pub task_type: TaskType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -527,6 +528,7 @@ fn node_packet(context: &AgentOperationContext) -> EngineAgentNodePacket {
         execution_attempts: node.execution_attempts,
         verification_attempts: node.verification_attempts,
         policy: node.policy,
+        task_type: node.task_type,
     }
 }
 

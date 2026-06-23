@@ -9,7 +9,7 @@ use crate::{
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
     AssistantTask, AssistantTaskEvent, AssistantTaskStatus, Budget, CancellationToken,
     CapabilityProfile, DebugConfig, Engine, FileTaskStore, NodeId, NodeOperation,
-    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness,
+    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness, TaskType,
     PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig,
     TaskStore, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface, Workspaces,
     common::metrics::{MetricsCollector, MetricsFormatter},
@@ -1756,6 +1756,7 @@ fn eval_task_root_template(
 ) -> NodeTemplate {
     NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("task-run-split-eval".to_string()),
         intent: task.to_string(),
         size: WorkSize::Small,
@@ -2383,6 +2384,7 @@ fn problem_node(id: NodeId, key: &str, intent: &str, plan: NodePlan) -> ProblemN
         execution_attempts: 0,
         verification_attempts: 0,
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
     }
 }
 

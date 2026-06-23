@@ -3,8 +3,8 @@ use serde::Deserialize;
 
 use super::{
     Budget, CapabilityProfile, FailureClass, NodeOperationOutput, NodePlan, NodePolicy,
-    NodeTemplate, PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, VerificationVerdict,
-    WorkSize,
+    NodeTemplate, PlanGroup, PlanGroupMode, ProblemKey, ScopeAssessment, TaskType,
+    VerificationVerdict, WorkSize,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -115,6 +115,10 @@ pub(crate) struct PlanItemInput {
     /// Defaults to `explore` when absent.
     #[serde(default)]
     pub policy: Option<NodePolicy>,
+    /// Task type for this plan item. Determines the Policy Pack used
+    /// to configure planning behavior. Defaults to `explore` when absent.
+    #[serde(default)]
+    pub task_type: Option<TaskType>,
 }
 
 impl PlanItemInput {
@@ -145,8 +149,10 @@ impl PlanItemInput {
             reason,
         });
 
+        let task_type = self.task_type.unwrap_or(TaskType::Explore);
         NodeTemplate {
             policy: self.policy.unwrap_or(NodePolicy::Explore),
+            task_type,
             key: ProblemKey(key),
             intent,
             size,
@@ -312,6 +318,7 @@ mod tests {
                     reason: None,
                     requires_prior_results: false,
                     policy: None,
+                    task_type: None,
                 },
                 PlanItemInput {
                     key: None,
@@ -325,6 +332,7 @@ mod tests {
                     reason: None,
                     requires_prior_results: true,
                     policy: None,
+                    task_type: None,
                 },
             ],
         });
@@ -350,6 +358,7 @@ mod tests {
                     reason: Some("focused scan".to_string()),
                     requires_prior_results: false,
                     policy: None,
+                    task_type: None,
                 },
                 PlanItemInput {
                     key: Some("surface-b".to_string()),
@@ -363,6 +372,7 @@ mod tests {
                     reason: None,
                     requires_prior_results: false,
                     policy: None,
+                    task_type: None,
                 },
             ],
         });

@@ -1,0 +1,14 @@
+id: m5-policy-packs
+task: |
+  M5 还差一个缺口：Policy Packs。让不同的任务类型有不同的规划行为。
+  去推进它。
+expectation: |
+  M5 缺口补齐了。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/**/*.rs
+  allow_write: true
+max_steps: 48

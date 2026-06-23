@@ -49,6 +49,7 @@ async fn host_information_gathering_work_executes_as_a_normal_node() {
     let mut engine = memory_engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("provider-evidence".to_string()),
         intent: "identify the selected provider and model in the current runtime config"
             .to_string(),
@@ -90,6 +91,7 @@ async fn host_specify_can_rewrite_missing_context_into_evidence_work() {
     let mut engine = memory_engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("provider-config".to_string()),
         intent: "Configure the production model provider selected by the user, but the provider choice is not present."
             .to_string(),
@@ -139,6 +141,7 @@ async fn host_nested_group_resolves_children_recursively() {
     let mut engine = memory_engine();
     let nested = NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("nested".to_string()),
         intent: "nested combined".to_string(),
         size: WorkSize::Large,
@@ -156,6 +159,7 @@ async fn host_nested_group_resolves_children_recursively() {
     };
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("root-group".to_string()),
         intent: "root combined".to_string(),
         size: WorkSize::Small,
@@ -206,6 +210,7 @@ async fn host_reject_retries_until_accepted() {
     let mut engine = memory_engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("host-retry".to_string()),
         intent: "retry once".to_string(),
         size: WorkSize::Small,
@@ -239,6 +244,7 @@ async fn host_uncertain_verdict_moves_node_to_waiting_for_info() {
     let mut engine = memory_engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("host-uncertain".to_string()),
         intent: "needs post-verify info".to_string(),
         size: WorkSize::Small,
@@ -276,6 +282,7 @@ async fn host_unsafe_read_only_change_prunes_node() {
     let mut engine = workspace_engine();
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("host-read-only".to_string()),
         intent: "read only must not write".to_string(),
         size: WorkSize::Small,
@@ -325,6 +332,7 @@ async fn host_git_merge_conflict_is_given_to_agent_instead_of_pruning_parent() {
     let child_b = scoped_git_leaf("host-b", "patch b", "packages/client/src/api.ts");
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("host-conflict".to_string()),
         intent: "combined patch".to_string(),
         size: WorkSize::Small,
@@ -375,6 +383,7 @@ async fn host_git_workspace_surface_is_written_captured_and_cleaned() {
     let mut engine = Engine::new(Workspaces::default(), host_worker());
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
         key: ProblemKey("host-git-write".to_string()),
         intent: "host writes git file".to_string(),
         size: WorkSize::Small,
