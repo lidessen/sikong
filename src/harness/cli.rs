@@ -265,12 +265,12 @@ fn run_cli(cli: Cli) -> i32 {
         }) => {
             if scenario.is_some() || scenario_file.is_some() {
                 // Direct engine path (not assistant message path)
-                match run_dogfood_run(
-                    scenario_file,
+                match run_task_run_split_eval(
+                    None,  // task
                     scenario,
+                    scenario_file,
                     None,  // artifact_dir
                     false, // route_only
-                    false, // log
                     json,
                 ) {
                     Ok(passed) => {
@@ -312,55 +312,6 @@ fn run_cli(cli: Cli) -> i32 {
                         error!(%error, "failed to send task");
                         eprintln!("failed to send task: {error}");
                         1
-                    }
-                }
-            }
-        }
-        Some(Command::Dogfood { command }) => {
-            eprintln!("warning: 'dogfood' is deprecated, use 'run --scenario' or 'run --scenario-file' instead");
-            if require_dev().is_err() {
-                eprintln!("error: dogfood is an internal command. Set SIKONG_DEV=1 to enable.");
-                return 1;
-            }
-            match command {
-                DogfoodCommand::List => {
-                    for scenario in task_run_split_eval_scenarios() {
-                        println!(
-                            "{}: {}",
-                            scenario.id,
-                            scenario.task.lines().next().unwrap_or("")
-                        );
-                    }
-                    0
-                }
-                DogfoodCommand::Run {
-                    scenario_file,
-                    scenario,
-                    artifact_dir,
-                    route_only,
-                    log,
-                    json,
-                } => {
-                    match run_dogfood_run(
-                        scenario_file,
-                        scenario,
-                        artifact_dir,
-                        route_only,
-                        log,
-                        json,
-                    ) {
-                        Ok(passed) => {
-                            if passed {
-                                0
-                            } else {
-                                1
-                            }
-                        }
-                        Err(error) => {
-                            error!(%error, "failed to run dogfood scenario");
-                            eprintln!("failed to run dogfood scenario: {error}");
-                            1
-                        }
                     }
                 }
             }
@@ -445,12 +396,12 @@ enum Command {
         #[arg(long = "write-scope")]
         write_scope: Vec<String>,
 
-        /// Run an eval scenario through the direct engine (alternative to dogfood run --scenario).
+        /// Run an eval scenario through the direct engine.
         /// When set, the task argument is not required.
         #[arg(long)]
         scenario: Option<String>,
 
-        /// YAML scenario file to run through the direct engine (alternative to dogfood run --scenario-file).
+        /// YAML scenario file to run through the direct engine.
         /// When set, the task argument is not required.
         #[arg(long)]
         scenario_file: Option<PathBuf>,
@@ -460,13 +411,6 @@ enum Command {
     Eval {
         #[command(subcommand)]
         command: EvalCommand,
-    },
-    /// Run dogfood self-development tasks (internal).
-    /// Deprecated: use `run --scenario` or `run --scenario-file` instead.
-    #[command(hide = true)]
-    Dogfood {
-        #[command(subcommand)]
-        command: DogfoodCommand,
     },
     /// Interactive first-time setup: configure provider, backend, and API keys.
     Setup {
@@ -492,37 +436,6 @@ enum Command {
     },
 }
 
-#[derive(Debug, Subcommand)]
-enum DogfoodCommand {
-    /// Run a dogfood scenario through the engine and judge the result.
-    Run {
-        /// YAML scenario file to evaluate.
-        #[arg(long)]
-        scenario_file: Option<PathBuf>,
-
-        /// Scenario id from built-in list, such as sikong-project-analysis.
-        #[arg(long)]
-        scenario: Option<String>,
-
-        /// Write full task-run artifacts to this directory for human review.
-        #[arg(long)]
-        artifact_dir: Option<PathBuf>,
-
-        /// Stop after the root Plan operation so routing can be evaluated cheaply.
-        #[arg(long)]
-        route_only: bool,
-
-        /// Record the outcome in the development log.
-        #[arg(long)]
-        log: bool,
-
-        /// Print full JSON output.
-        #[arg(long)]
-        json: bool,
-    },
-    /// List available built-in dogfood scenarios.
-    List,
-}
 
 #[derive(Debug, Subcommand)]
 enum AssistantCommand {
@@ -1327,185 +1240,6 @@ async fn run_task_run_split_eval_async(
     Ok(output.passed)
 }
 
-fn run_dogfood_run(
-    scenario_file: Option<PathBuf>,
-    scenario: Option<String>,
-    artifact_dir: Option<PathBuf>,
-    route_only: bool,
-    log: bool,
-    json_output: bool,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    // Default: run the autonomous iteration scenario
-    let scenario_file = scenario_file.or_else(|| {
-        if scenario.is_none() {
-            Some(Path::new("evals/task-run/autonomous-iteration.yaml").to_path_buf())
-        } else {
-            None
-        }
-    });
-    let scenarios = select_task_run_split_eval_scenarios(None, scenario, scenario_file.as_deref())?;
-    if scenarios.is_empty() {
-        return Err("no dogfood scenario selected; use --scenario or --scenario-file".into());
-    }
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .thread_name("siko-dogfood")
-        .enable_all()
-        .build()?;
-    runtime.block_on(run_dogfood_run_async(
-        scenarios,
-        artifact_dir.as_deref(),
-        route_only,
-        log,
-        json_output,
-    ))
-}
-
-async fn run_dogfood_run_async(
-    scenarios: Vec<TaskRunSplitScenario>,
-    artifact_dir: Option<&Path>,
-    route_only: bool,
-    log: bool,
-    json_output: bool,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let debug = DebugConfig::from_env();
-    let mut results = Vec::new();
-
-    for scenario in scenarios {
-        let run_started = Instant::now();
-        let launch = resolve_agent_loop_launch(&debug, scenario.actor_max_steps());
-        let (root_workspace, allow_write) = eval_task_workspace_requirement(&scenario)?;
-        let mut engine = Engine::new(
-            Workspaces::default(),
-            ProcessAgentRunScheduler::new(launch.command.clone(), launch.args.clone()),
-        );
-        if route_only {
-            engine = engine.with_stop_after_route_depth(0);
-        }
-        let root = engine.insert_root(eval_task_root_template(
-            &scenario.task,
-            root_workspace,
-            allow_write,
-        ));
-        let report = engine
-            .run(root)
-            .await
-            .map_err(|error| format!("scenario {} failed: {error:?}", scenario.id))?;
-
-        // Collect per-agent-run metrics
-        let mut metrics_collector = crate::common::metrics::MetricsCollector::new();
-        for agent_run in &report.agent_runs {
-            let operation = agent_run.operation.to_string();
-            let duration_ms = agent_run.duration_ms;
-            let passed = agent_run.terminal_tool.is_some();
-            if let Some(usage) = &agent_run.usage {
-                metrics_collector.record_agent_run(
-                    &operation,
-                    usage.input_tokens,
-                    usage.output_tokens,
-                    usage.cache_read_tokens,
-                    duration_ms,
-                    passed,
-                );
-            } else {
-                metrics_collector.record_agent_run(&operation, 0, 0, 0, duration_ms, passed);
-            }
-        }
-        let metrics = metrics_collector.snapshot().to_json_value();
-
-        let transcript = TaskRunSplitTranscript::from_engine(&scenario, root, &engine, &report);
-        let artifact_files =
-            write_task_run_artifacts(artifact_dir, &scenario, root, &engine, &report)?;
-        let actor_usage = sum_agent_run_usage(&report.agent_runs);
-
-        let judge_launch = resolve_agent_loop_launch(&debug, 6);
-        let mut judge = ProcessAgentRunScheduler::new(judge_launch.command, judge_launch.args);
-        let judge_response = judge
-            .run(judge_request(&transcript), CancellationToken::new())
-            .await;
-        let judgement = decode_judgement(judge_response.terminal_call)?;
-        let total_usage = sum_usage(Some(&actor_usage), judge_response.usage.as_ref());
-
-        if log {
-            dogfood_write_devlog_entry(&scenario, &judgement, run_started.elapsed())?;
-        }
-
-        if json_output {
-            let output = serde_json::json!({
-                "scenario": scenario.id,
-                "passed": judgement.passed,
-                "findings": judgement.findings,
-                "evidence": judgement.evidence,
-                "duration_ms": run_started.elapsed().as_millis(),
-                "total_usage": total_usage,
-                "status": report.status,
-                "artifact_files": artifact_files,
-                "agent_runs": report.agent_runs.len(),
-                "metrics": metrics,
-            });
-            serde_json::to_writer_pretty(std::io::stdout(), &output)?;
-            println!();
-        } else {
-            println!(
-                "dogfood {}: {} duration={}ms agent_runs={}",
-                scenario.id,
-                if judgement.passed { "PASSED" } else { "FAILED" },
-                run_started.elapsed().as_millis(),
-                report.agent_runs.len(),
-            );
-            for finding in &judgement.findings {
-                println!("  - {finding}");
-            }
-            for af in &artifact_files {
-                println!("  artifact node {}: {}", af.node_id, af.path);
-            }
-        }
-
-        results.push(judgement.passed);
-    }
-
-    Ok(results.iter().all(|p| *p))
-}
-
-fn dogfood_write_devlog_entry(
-    scenario: &TaskRunSplitScenario,
-    judgement: &TaskRunSplitJudgement,
-    duration: std::time::Duration,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let now = chrono_now_date();
-    let month = chrono_now_month();
-    let log_path = Path::new("development-log").join(format!("{month}.md"));
-    let mut log_content = if log_path.exists() {
-        std::fs::read_to_string(&log_path)?
-    } else {
-        format!("## {now} - Dogfood run\n\n")
-    };
-
-    log_content.push_str(&format!("\n### {} - {}\n\n", now, scenario.id,));
-    log_content.push_str(&format!(
-        "Scenario: {}\n\n",
-        scenario.task.lines().next().unwrap_or("")
-    ));
-    log_content.push_str(&format!(
-        "Verdict: {}\n\n",
-        if judgement.passed { "PASSED" } else { "FAILED" }
-    ));
-    if !judgement.findings.is_empty() {
-        log_content.push_str("Findings:\n");
-        for f in &judgement.findings {
-            log_content.push_str(&format!("- {f}\n"));
-        }
-        log_content.push('\n');
-    }
-    log_content.push_str(&format!("Duration: {}ms\n", duration.as_millis()));
-    log_content.push_str(&format!("Expectation: {}\n", scenario.expectation));
-
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&log_path, log_content)?;
-    eprintln!("dogfood result logged to {}", log_path.display());
-    Ok(())
-}
 
 fn chrono_now_date() -> String {
     let (y, m, d) = chrono_now_ymd();
@@ -3518,7 +3252,6 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("{} Quick start:", console::style("[START]").green().bold());
     println!("   siko send \"analyze this\"     # Send a task");
     println!("   siko assistant --acp       # ACP server for external tools");
-    println!("   siko dogfood run           # Self-iteration loop");
     if needs_api_key
         && std::env::var(match provider {
             "deepseek" => "DEEPSEEK_API_KEY",
@@ -3894,7 +3627,7 @@ workspace:
     }
 
     #[test]
-    fn dogfood_scenario_files_are_valid() {
+    fn scenario_files_are_valid() {
         for path in [
             "evals/task-run/autonomous-iteration.yaml",
             "evals/task-run/project-analysis.yaml",
@@ -3929,66 +3662,6 @@ workspace:
             "dogfood-doc-review"
         );
         assert_eq!(sanitize_artifact_file_component("..."), "scenario");
-    }
-
-    #[test]
-    fn dogfood_devlog_writes_to_month_level_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let original_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp.path()).unwrap();
-        let devlog_dir = temp.path().join("development-log");
-        std::fs::create_dir_all(&devlog_dir).unwrap();
-
-        // Call chrono_now_month to determine the expected file name
-        let month = chrono_now_month();
-        let expected_path = devlog_dir.join(format!("{month}.md"));
-
-        let scenario = TaskRunSplitScenario {
-            id: "test-scenario".to_string(),
-            task: "Test task.".to_string(),
-            expectation: "Test expectation.".to_string(),
-            workspace: TaskRunSplitWorkspace::Memory,
-            max_steps: None,
-        };
-        let judgement = TaskRunSplitJudgement {
-            passed: true,
-            findings: vec!["All good.".to_string()],
-            evidence: vec!["Evidence 1.".to_string()],
-        };
-
-        dogfood_write_devlog_entry(
-            &scenario,
-            &judgement,
-            std::time::Duration::from_millis(1234),
-        )
-        .unwrap();
-
-        // The file should exist at the month-level path
-        assert!(
-            expected_path.exists(),
-            "dev-log should be written to month-level file {}",
-            expected_path.display()
-        );
-
-        // Verify content includes the scenario id and verdict
-        let content = std::fs::read_to_string(&expected_path).unwrap();
-        assert!(content.contains("test-scenario"));
-        assert!(content.contains("PASSED"));
-        assert!(content.contains("All good."));
-        assert!(content.contains("1234ms"));
-        assert!(content.contains("Test expectation."));
-
-        // Calling again should append, not overwrite
-        dogfood_write_devlog_entry(
-            &scenario,
-            &judgement,
-            std::time::Duration::from_millis(5678),
-        )
-        .unwrap();
-        let content2 = std::fs::read_to_string(&expected_path).unwrap();
-        assert!(content2.matches("test-scenario").count() == 2);
-
-        std::env::set_current_dir(original_cwd).unwrap();
     }
 
     #[test]
@@ -4294,66 +3967,6 @@ workspace:
         );
     }
 
-    #[test]
-    fn parses_dogfood_run_command() {
-        let cli =
-            Cli::try_parse_from(["siko", "dogfood", "run", "--scenario", "simple-qa"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Dogfood {
-                command: DogfoodCommand::Run {
-                    scenario_file: None,
-                    scenario: Some(ref s),
-                    artifact_dir: None,
-                    route_only: false,
-                    log: false,
-                    json: false,
-                }
-            }) if s == "simple-qa"
-        ));
-    }
-
-    #[test]
-    fn parses_dogfood_run_with_flags() {
-        let cli = Cli::try_parse_from([
-            "siko",
-            "dogfood",
-            "run",
-            "--scenario-file",
-            "evals/task-run/dogfood-doc-review.yaml",
-            "--artifact-dir",
-            "/tmp/artifacts",
-            "--route-only",
-            "--log",
-            "--json",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Dogfood {
-                command: DogfoodCommand::Run {
-                    scenario_file: Some(ref path),
-                    artifact_dir: Some(ref dir),
-                    route_only: true,
-                    log: true,
-                    json: true,
-                    ..
-                }
-            }) if path.as_path() == Path::new("evals/task-run/dogfood-doc-review.yaml")
-                && dir.as_path() == Path::new("/tmp/artifacts")
-        ));
-    }
-
-    #[test]
-    fn parses_dogfood_list_command() {
-        let cli = Cli::try_parse_from(["siko", "dogfood", "list"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Dogfood {
-                command: DogfoodCommand::List,
-            })
-        ));
-    }
 
     // ── Utility function tests ──────────────────────────────────────────
 

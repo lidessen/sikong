@@ -1,0 +1,22 @@
+id: remove-dogfood-command
+task: |
+  彻底删除 dogfood 子命令。不用向后兼容，直接删干净。
+
+  要做的事：
+  1. 删除 Command::Dogfood 枚举变体及其所有相关代码
+  2. 删除 DogfoodCommand 枚举
+  3. 删除 run_dogfood_run 和 run_dogfood_run_async 函数（它们已通过 run --scenario 调用）
+  4. 删除 dogfood 的相关 CLI 解析代码
+  5. 确保 run --scenario 和 run --scenario-file 继续正常工作
+
+  只改 src/harness/cli.rs。
+expectation: |
+  Dogfood 命令从代码中彻底删除。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/harness/cli.rs
+  allow_write: true
+max_steps: 64
