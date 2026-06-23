@@ -28,23 +28,29 @@ else
 fi
 RUST_BIN="$ROOT/target/release/siko"
 
-# Build agent-host — bundle into a single JS for bun execution
-echo "  -> bundling agent-host source..."
+# Build agent-host — compile standalone binary AND bundle JS fallback
+echo "  -> building siko-agent-host (standalone binary)..."
+bun run build:agent-host 2>&1 | tail -1
+HOST_BIN="$ROOT/dist/siko-agent-host"
+
+echo "  -> bundling agent-host JS fallback..."
 AGENT_HOST_DIR="$ROOT/dist/release/agent-host"
 mkdir -p "$AGENT_HOST_DIR"
 bun build --target=bun --outfile="$AGENT_HOST_DIR/runtime-host.js" \
   "$ROOT/packages/agent-host/src/runtime-host.ts" 2>&1 | tail -1
 
-# Verify the Rust binary exists
+# Verify both exist
 if [[ ! -x "$RUST_BIN" ]]; then echo "ERROR: siko binary not found at $RUST_BIN" >&2; exit 1; fi
+if [[ ! -x "$HOST_BIN" ]]; then echo "ERROR: siko-agent-host not found at $HOST_BIN" >&2; exit 1; fi
 
 # Package into release dir
 cp "$RUST_BIN" "$RELEASE_DIR/siko"
+cp "$HOST_BIN" "$RELEASE_DIR/siko-agent-host"
 chmod +x "$RELEASE_DIR/siko"
 
 # Create tarball
 cd "$RELEASE_DIR"
-tar -czf "$ASSET_NAME" siko agent-host
+tar -czf "$ASSET_NAME" siko siko-agent-host agent-host
 shasum -a 256 "$ASSET_NAME" > "$ASSET_NAME.sha256"
 
 echo ""

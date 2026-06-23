@@ -2872,7 +2872,12 @@ fn resolve_agent_host_launch_from(
         return bun_script_launch(env, debug, script);
     }
 
-    // Prefer agent-host source directory (shipped in tarball, works from any CWD)
+    // Prefer compiled agent-host binary (no Bun dependency)
+    if let Some(path) = sibling_agent_host_binary(current_exe) {
+        return binary_launch(path);
+    }
+
+    // Fall back to agent-host JS bundle (requires Bun)
     if let Some(sibling_dir) = sibling_agent_host_source_dir(current_exe) {
         // Check for bundled JS first, then TS source
         let js_entry = sibling_dir.join("runtime-host.js");
