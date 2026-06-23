@@ -1,0 +1,38 @@
+id: deep-research-eve
+task: |
+  深度调研 Eve.dev。
+
+  第一阶段：收集信息
+  - 仔细阅读 https://vercel.com/docs/eve 的所有文档
+  - 看看 Eve 的 Markdown 指令文件是怎么写的，示例
+  - 看看 Eve 的 TypeScript 工具是怎么定义的
+  - 看看 Eve 的 filesystem-first 模式具体是怎么工作的
+  - 看看 Eve 的持久化、观测、部署是怎么做的
+  - 看看有什么示例项目或模板
+
+  第二阶段：分析
+  - Eve 的核心抽象是什么？文件？agent？skill？tool？
+  - Eve 的 agent 是怎么交互的？有递归分解吗？
+  - Eve 的验证机制是什么？怎么保证 agent 输出的质量？
+  - Eve 的工具系统是怎么设计的？和 Sikong 的 terminal tools 对比
+  - Eve 的持久化是怎么做的？有状态管理吗？
+  - Eve 的部署模型是什么样的？本地能跑吗？
+
+  第三阶段：产出
+  把调研结果更新到 development-log 中。
+  标记出：
+  - ✅ 可以借鉴的设计
+  - ⚠️ 需要注意的问题
+  - ❌ 不适合 Sikong 的设计
+
+  不要改代码。
+expectation: |
+  一份深入的 Eve.dev 调研，有代码层面的分析，有用法示例。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - development-log/
+  allow_write: true
+max_steps: 48
