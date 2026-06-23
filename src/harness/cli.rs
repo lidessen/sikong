@@ -2874,7 +2874,10 @@ fn resolve_agent_host_launch_from(
 
     // Prefer agent-host source directory (shipped in tarball, works from any CWD)
     if let Some(sibling_dir) = sibling_agent_host_source_dir(current_exe) {
-        let entry = sibling_dir.join("runtime-host.ts");
+        // Check for bundled JS first, then TS source
+        let js_entry = sibling_dir.join("runtime-host.js");
+        let ts_entry = sibling_dir.join("runtime-host.ts");
+        let entry = if js_entry.exists() { js_entry } else { ts_entry };
         if entry.exists() {
             return AgentHostLaunch {
                 command: "bun".to_string(),

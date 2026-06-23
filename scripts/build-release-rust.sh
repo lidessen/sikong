@@ -28,17 +28,12 @@ else
 fi
 RUST_BIN="$ROOT/target/release/siko"
 
-# Build agent-host — ship source so it works from any CWD
+# Build agent-host — bundle into a single JS for bun execution
 echo "  -> bundling agent-host source..."
 AGENT_HOST_DIR="$ROOT/dist/release/agent-host"
 mkdir -p "$AGENT_HOST_DIR"
-cp "$ROOT/packages/agent-host/src"/*.ts "$AGENT_HOST_DIR/"
-cp "$ROOT/packages/agent-host/package.json" "$AGENT_HOST_DIR/"
-# Bundle agent-host dependencies into a single JS entry for bun ./runtime-host.ts
-bun build "$ROOT/packages/agent-host/src/runtime-host.ts" \
-  --target=bun \
-  --outdir="$AGENT_HOST_DIR" \
-  --format=cjs 2>&1 | tail -1
+bun build --target=bun --outfile="$AGENT_HOST_DIR/runtime-host.js" \
+  "$ROOT/packages/agent-host/src/runtime-host.ts" 2>&1 | tail -1
 # Also ship the compiled binary as option (may not work in all environments)
 HOST_BIN="$ROOT/dist/siko-agent-host"
 
