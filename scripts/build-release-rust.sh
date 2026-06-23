@@ -14,7 +14,18 @@ mkdir -p "$RELEASE_DIR"
 
 # Build Rust CLI
 echo "  -> building siko (Rust CLI)..."
-cargo build --release --bin siko 2>&1 | tail -1
+# Build with version tag if provided
+VERSION_FLAG=""
+if [ -n "$GITHUB_REF_NAME" ]; then
+  VERSION_FLAG="$GITHUB_REF_NAME"
+elif [ -n "$1" ]; then
+  VERSION_FLAG="$1"
+fi
+if [ -n "$VERSION_FLAG" ]; then
+  SIKO_VERSION="$VERSION_FLAG" cargo build --release --bin siko 2>&1 | tail -1
+else
+  cargo build --release --bin siko 2>&1 | tail -1
+fi
 RUST_BIN="$ROOT/target/release/siko"
 
 # Build agent-host (Bun)
