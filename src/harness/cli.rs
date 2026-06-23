@@ -623,8 +623,10 @@ async fn run_assistant_prompt_async(
         },
     );
 
+    println!("🤔 Processing...");
+
     let reply = session.handle_message(&mut store, message).await;
-    if wait_ms > 0 {
+    if wait_ms > 0 && wait_ms < u64::MAX {
         session
             .wait_for_all(&mut store, Duration::from_millis(wait_ms))
             .await;
