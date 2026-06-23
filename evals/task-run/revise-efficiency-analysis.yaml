@@ -1,0 +1,33 @@
+id: revise-efficiency-analysis
+task: |
+  重新审视效率分析中"改进方向二：Stage 组件的自适应并行化"这个方案。
+
+  意见：Stage 就是串行的。如果两个 stage 可以并行，它们就不应该被设计为两个 stage。
+  PlanGroupMode::Stage 的存在意义就是处理必须按顺序执行的工作（build then test）。
+  试图把串行 stage "自适应并行化" 不仅增加复杂度，还破坏了 Stage 的语义。
+
+  你的任务：
+
+  1. 读 design/efficiency-analysis.md，特别是"改进方向二"部分
+  2. 读 src/core/task_run/node.rs 中 PlanGroupMode 的定义和注释
+  3. 读 src/core/task_run/engine.rs 中 stage 模式的处理逻辑
+  4. 理解为什么 Stage 是串行的，以及这和 Parallel 的区别
+  5. 更新 efficiency-analysis.md：
+     - 删除"改进方向二"（或重写为对 Stage/Parallel 选择准则的分析）
+     - 如果保留，必须解释为什么这个方向是错误的，以及正确的理解应该是什么
+     - 不要保留一个明知错误的方案
+
+  核心原则：设计文档要诚实。方案错了就承认错了，不要留着误导人。
+
+  不要改代码。只更新设计文档。
+expectation: |
+  更新后的效率分析文档，修正了 Adaptive Stage 的错误方案。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - design/
+    - src/core/task_run/
+  write_scope:
+    - design/
+  allow_write: true
+max_steps: 16
