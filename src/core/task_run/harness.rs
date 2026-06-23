@@ -323,25 +323,6 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
     }
 }
 
-fn governance_prompt(operation: NodeOperation) -> String {
-    let Some(layer) = governance_layer_for(operation) else {
-        return "This operation is engine-only and has no agent governance layer.".to_string();
-    };
-    let gates = active_hard_gates_for(operation)
-        .iter()
-        .map(|gate| format!("{}: {}", gate.id(), gate.description()))
-        .collect::<Vec<_>>()
-        .join("; ");
-    if gates.is_empty() {
-        format!(
-            "This operation runs under {layer:?} authority. Preserve that authority boundary and return upward when the work requires a higher-level decision."
-        )
-    } else {
-        format!(
-            "This operation runs under {layer:?} authority. Preserve that authority boundary and treat these as hard gates, not advice: {gates}."
-        )
-    }
-}
 
 fn tools_for_operation(operation: NodeOperation) -> Vec<EngineTool> {
     match operation {
