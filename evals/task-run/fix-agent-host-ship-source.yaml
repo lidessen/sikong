@@ -1,0 +1,47 @@
+id: fix-agent-host-ship-source
+task: |
+  修复 siko-agent-host standalone binary 在 CI 构建后无法工作的问题。
+
+  当前问题：`bun build --compile` 在 CI 环境（GitHub Actions macos-15）中
+  产生的 binary 引用了外部 chunk 文件（`745.index.js`），但在用户本地找不到这些文件。
+
+  根本原因：`bun build --compile` 的 standalone binary 在不同环境下产物不一致。
+  本地构建可以正常工作，但 CI 构建产物搜索外部文件。
+
+  解决方案：
+  不再依赖 compiled binary，改为在 tarball 中附带 agent-host 源码，
+  用 `bun` 直接运行。
+
+  具体改动：
+  1. 修改 `scripts/build-release-rust.sh`：
+     - 不再 `bun run build:agent-host` 编译 binary
+     - 而是把 `packages/agent-host/src/` 目录打包进 tarball
+     - tarball 结构：siko + agent-host/（含 runtime-host.ts 等源码和工作依赖）
+  2. 修改 `resolve_agent_host_launch`（在 cli.rs 中）：
+     - 查找 `siko-agent-host` binary 的逻辑改为查找 `agent-host/runtime-host.ts`
+     - 用 `bun run ./agent-host/runtime-host.ts` 替代直接执行 binary
+  3. 修改 `site/install.sh`：
+     - 安装时把 agent-host/ 目录也复制到 install dir
+
+  验证方法：
+  1. 构建 tarball
+  2. 解压到 /tmp/test-install/
+  3. cd /tmp/test-install && bun run ./agent-host/runtime-host.ts --socket /tmp/test-sock.sock
+  4. 检查 socket 是否创建
+  5. 确保没有 ResolveMessage 错误
+
+  cargo build && cargo test 必须通过。
+expectation: |
+  Agent-host 从任何目录都能运行。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - scripts/build-release-rust.sh
+    - src/harness/cli.rs
+    - site/install.sh
+    - .github/workflows/release.yml
+    - packages/agent-host/package.json
+  allow_write: true
+max_steps: 64

@@ -2872,6 +2872,17 @@ fn resolve_agent_host_launch_from(
         return bun_script_launch(env, debug, script);
     }
 
+    // Prefer agent-host source directory (shipped in tarball, works from any CWD)
+    if let Some(sibling_dir) = sibling_agent_host_source_dir(current_exe) {
+        let entry = sibling_dir.join("runtime-host.ts");
+        if entry.exists() {
+            return AgentHostLaunch {
+                command: "bun".to_string(),
+                args: vec!["run".to_string(), entry.to_string_lossy().to_string()],
+            };
+        }
+    }
+
     if let Some(path) = sibling_agent_host_binary(current_exe) {
         return binary_launch(path);
     }
@@ -2909,6 +2920,12 @@ fn sibling_agent_host_binary(current_exe: Option<&Path>) -> Option<PathBuf> {
     let exe = current_exe?;
     let sibling = exe.parent()?.join(agent_host_binary_name());
     sibling.exists().then_some(sibling)
+}
+
+fn sibling_agent_host_source_dir(current_exe: Option<&Path>) -> Option<PathBuf> {
+    let exe = current_exe?;
+    let dir = exe.parent()?.join("agent-host");
+    dir.is_dir().then_some(dir)
 }
 
 fn binary_launch(path: impl Into<PathBuf>) -> AgentHostLaunch {

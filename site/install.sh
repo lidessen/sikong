@@ -40,11 +40,17 @@ if ! curl -fsSL "$DOWNLOAD_URL" -o "$TAR_PATH" 2>/dev/null; then
   curl -fsSL "$DOWNLOAD_URL" -o "$TAR_PATH"
 fi
 
-tar -xzf "$TAR_PATH" -C "$TMP_DIR"
+mkdir -p "$TMP_DIR/siko-install"
+tar -xzf "$TAR_PATH" -C "$TMP_DIR/siko-install"
 
 # Install binaries
-install -m 755 "$TMP_DIR/siko" "$INSTALL_DIR/siko"
-install -m 755 "$TMP_DIR/siko-agent-host" "$INSTALL_DIR/siko-agent-host"
+install -m 755 "$TMP_DIR/siko-install/siko" "$INSTALL_DIR/siko"
+install -m 755 "$TMP_DIR/siko-install/siko-agent-host" 2>/dev/null || true
+# Install agent-host source (fallback for environments where compiled binary fails)
+if [ -d "$TMP_DIR/siko-install/agent-host" ]; then
+  mkdir -p "$INSTALL_DIR/agent-host"
+  cp -r "$TMP_DIR/siko-install/agent-host/"* "$INSTALL_DIR/agent-host/"
+fi
 
 rm -rf "$TMP_DIR"
 
