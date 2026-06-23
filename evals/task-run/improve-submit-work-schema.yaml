@@ -1,0 +1,42 @@
+id: improve-submit-work-schema
+task: |
+  改进 terminal tool schemas，让 submit_work 的输出结构根据任务类型（TaskType）有不同的约束。
+
+  当前问题：
+  - submit_work 的参数是 serde_json::Value，太自由
+  - Execute 阶段不校验输出质量，全压在 Verify 阶段
+  - 本应在 Execute 早期卡住的问题，拖到 Verify 才发现
+
+  需要改什么：
+
+  1. 定义每个 TaskType 的 submit_work 输出 schema：
+     - Explore → { findings: Vec<{claim: string, evidence: string}>, scope: string, summary: string }
+     - Exploit → { changes: Vec<{file: string, action: string, description: string}>, summary: string }
+     - Refine → { improvements: Vec<{target: string, change: string, rationale: string}>, summary: string }
+     - Verify → { verdict: "pass"|"fail"|"needs_revision", check_results: Vec<{check: string, passed: bool}> }
+
+  2. submit_work 收到参数后，校验是否符合当前节点 TaskType 的 schema
+     - 不符合 → 返回验证错误（让 agent 重试）
+     - 符合 → 传递结构化 output
+
+  3. Verify 阶段直接消费结构化 output，不再需要从自由文本解析
+
+  约束：
+  - 不改 engine 核心状态机
+  - 不改 terminal tool 机制本身（仍然是 submit_work）
+  - 只改 tools.rs 中 submit_work 的校验逻辑
+  - TaskType 已经在 node.rs 中定义了（Explore/Exploit/Refine/Verify）
+  - 改完 cargo build && cargo test 必须通过
+expectation: |
+  submit_work 的 payload 根据 TaskType 做结构化校验。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/core/task_run/tools.rs
+    - src/core/task_run/engine.rs
+    - src/core/task_run/node.rs
+    - tests/
+  allow_write: true
+max_steps: 64

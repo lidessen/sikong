@@ -758,6 +758,15 @@ where
             }));
         }
 
+        // Schema validation error check: reject outputs that failed
+        // per-TaskType schema validation in submit_work deterministically.
+        if trimmed.starts_with("VALIDATION_ERROR:") {
+            return Ok(Some(VerificationVerdict::Reject {
+                failure_class: FailureClass::BadOutput,
+                reason: trimmed.to_string(),
+            }));
+        }
+
         let Some(change) = &artifact.workspace_change else {
             return Ok(None);
         };
