@@ -605,8 +605,8 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let launch = resolve_agent_host_launch(&debug);
     let worker_launch = resolve_agent_loop_launch(&debug, 32);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
-        launch.command.clone(),
-        launch.args.clone(),
+        worker_launch.command.clone(),
+        worker_launch.args.clone(),
     )));
     let assistant_loop = AgentAssistantLoop::new(shared_scheduler.clone());
     let session = AssistantSession::with_worker_factory(
@@ -673,8 +673,8 @@ async fn run_assistant_prompt_async(
     let launch = resolve_agent_host_launch(&debug);
     let worker_launch = resolve_agent_loop_launch(&debug, 32);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
-        launch.command.clone(),
-        launch.args.clone(),
+        worker_launch.command.clone(),
+        worker_launch.args.clone(),
     )));
     let assistant_loop = AgentAssistantLoop::new(shared_scheduler.clone());
     let mut session = AssistantSession::with_worker_factory(
