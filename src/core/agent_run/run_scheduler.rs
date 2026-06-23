@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -12,6 +13,7 @@ use tokio::net::{
     unix::{OwnedReadHalf, OwnedWriteHalf},
 };
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info, warn};
 
@@ -505,6 +507,20 @@ impl Drop for ProcessAgentRunScheduler {
             });
         }
         self.cleanup_socket();
+    }
+}
+
+/// Shared scheduler — shares the same agent-host connection across
+/// the assistant loop and task execution. Prevents spawning duplicate
+/// agent-host processes.
+#[async_trait]
+impl AgentRunScheduler for Arc<Mutex<ProcessAgentRunScheduler>> {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        self.lock().await.run(input, cancellation).await
     }
 }
 

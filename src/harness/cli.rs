@@ -1,7 +1,9 @@
 use std::fs;
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 use crate::{
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
@@ -537,15 +539,16 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
     let worker_launch = resolve_agent_loop_launch(&debug, 32);
-    let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
+    let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
-    ));
+    )));
+    let assistant_loop = AgentAssistantLoop::new(shared_scheduler.clone());
     let session = AssistantSession::with_worker_factory(
         assistant_loop,
         {
-            let wl = worker_launch.clone();
-            move || ProcessAgentRunScheduler::new(wl.command.clone(), wl.args.clone())
+            let sched = shared_scheduler.clone();
+            move || Box::new(sched.clone())
         },
         AssistantSessionConfig {
             max_parallel_tasks: config.assistant.max_parallel_tasks,
@@ -604,15 +607,16 @@ async fn run_assistant_prompt_async(
     let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
     let launch = resolve_agent_host_launch(&debug);
     let worker_launch = resolve_agent_loop_launch(&debug, 32);
-    let assistant_loop = AgentAssistantLoop::new(ProcessAgentRunScheduler::new(
+    let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         launch.command.clone(),
         launch.args.clone(),
-    ));
+    )));
+    let assistant_loop = AgentAssistantLoop::new(shared_scheduler.clone());
     let mut session = AssistantSession::with_worker_factory(
         assistant_loop,
         {
-            let wl = worker_launch.clone();
-            move || ProcessAgentRunScheduler::new(wl.command.clone(), wl.args.clone())
+            let sched = shared_scheduler.clone();
+            move || Box::new(sched.clone())
         },
         AssistantSessionConfig {
             max_parallel_tasks: config.assistant.max_parallel_tasks,
