@@ -1,0 +1,27 @@
+id: design-review-simplicity
+max_steps: 24
+task: |
+  审查项目的六个设计决策。对每个决策回答：这是最简洁的设计吗？
+  有没有冗余？有没有弊大于利？
+
+  1. **NodePlan::FastExecute** — 需要新增枚举变体吗？
+  2. **NodePlan::Decompose** — 需要新增 policy 吗？
+  3. **NodePolicy 枚举** — 5 个变体只有 2 个有行为，其他是占位符吗？
+  4. **三层架构** — 重组织后顺手吗？
+  5. **M5 方向** — 迭代方向明确吗？
+  6. **development-log** — 记录有人在看吗？
+
+  对每个给出结论：保持、简化、或删除。
+
+  不要改代码。只需要把审查写到一个设计文档或 development-log 里。
+expectation: |
+  一份诚实的设计审查，每个决策有明确结论。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - src/
+    - design/
+    - development-log/
+  write_scope:
+    - development-log/
+  allow_write: true
