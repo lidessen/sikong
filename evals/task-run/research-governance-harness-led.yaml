@@ -1,0 +1,47 @@
+id: research-governance-harness-led
+task: |
+  重新审视治理模型的放置问题。这次的前提是：分层是 harness 主导、提示词主导的。
+  core 不应该知道"治理"这个概念。
+
+  也就是说：
+  - GovernanceLayer、GovernanceGate 不应该在 core 里
+  - 操作对应的"层"（Plan层/Execute层/Verify层）是 harness 在构建 prompt 时决定的
+  - core 只需要做参数校验，不需要给校验贴上 G-PROTOCOL 这样的标签
+  - InvalidPlan 的 gate 字段需要去掉或改成更通用的错误类型
+
+  分析以下问题：
+
+  1. 如果把 GovernanceLayer 从 core 移到 harness，哪些代码会受影响？
+     - src/core/task_run/types.rs 删掉它
+     - NodeOperation::governance_layer() 可以删掉或在 harness 里做映射
+     - 但 NodeOperationOutput::InvalidPlan { gate: Option<GovernanceGate> } 也要改
+
+  2. 如果把 GovernanceGate 从 core 移到 harness：
+     - tools.rs 里 submit_plan_group 的校验现在返回 InvalidPlan { gate: G-PROTOCOL }
+     - 改成返回 InvalidPlan 不带 gate，或者带一个更通用的错误理由
+     - 三个机械校验（空 items、parallel+依赖、accept+hard_violations）保留，
+       但不贴 gate 标签
+
+  3. 核心问题：去掉 GovernanceGate 标签后，校验逻辑放哪里？
+     - 放 tools.rs 里作为纯参数校验（不做 gate 关联）
+     - InvalidPlan 可以保留 { reason: String } 或 { error: String }
+     - NodeOperationOutput 可以简化
+
+  4. 迁移风险：
+     - 取消 gate 标签会影响 eval judge 的判断逻辑吗？
+     - 会影响 dev-log 的可读性吗？
+     - 会影响后续添加新校验的便利性吗？
+
+  输出到 development-log。不要改代码。
+expectation: |
+  一份以 harness 为主导的治理模型分离方案。分析每个 gate 标签移除后的影响。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - src/
+    - design/
+    - development-log/
+  write_scope:
+    - development-log/
+  allow_write: true
+max_steps: 32
