@@ -1,0 +1,40 @@
+id: optimize-cli-output
+task: |
+  优化 siko CLI 的输出体验。
+
+  背景：
+  - siko CLI 的受众既有人（交互使用）也有 agent（脚本/工具调用）
+  - 应该默认输出人类友好的格式，--json 输出结构化格式
+  - 目前各命令的输出参差不齐，有些没有输出，有些输出太冗长
+
+  要求：
+  1. 调研所有命令的当前输出效果：
+     - siko run "task" — 前端执行
+     - siko setup — 交互式配置
+     - siko assistant — ACP / prompt 模式
+     - siko metrics — 统计看板
+     - siko --version
+     - siko --help
+
+  2. 优化点：
+     - JSON输出（--json）应该在任何子命令上都可用，输出一致的结构化格式
+     - 人类输出应该简洁、清晰，用 emoji 和颜色
+     - 错误信息应该清晰可读，不要堆 raw tracing
+     - agent 使用时应能完全依赖 --json
+
+  3. 实现方式：
+     - 用当前的 mock agent 运行测试
+     - 改 src/harness/cli.rs 的输出格式
+     - 确保不改变核心逻辑
+
+  约束：cargo build && cargo test 必须通过。
+expectation: |
+  CLI 输出体验优化。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/harness/cli.rs
+  allow_write: true
+max_steps: 48

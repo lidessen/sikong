@@ -23,9 +23,61 @@ use serde_json::{Value, json};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+
+/// Consistent JSON output format for all commands.
+/// Wraps command output in a uniform structure with machine-readable keys.
+#[derive(Debug, Serialize)]
+struct CliOutput {
+    status: String,
+    data: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+impl CliOutput {
+    fn ok(data: serde_json::Value) -> Self {
+        Self { status: "ok".to_string(), data: Some(data), error: None }
+    }
+    fn error(msg: impl Into<String>) -> Self {
+        Self { status: "error".to_string(), data: None, error: Some(msg.into()) }
+    }
+}
+
+fn print_json_output(output: &CliOutput) {
+    serde_json::to_writer_pretty(std::io::stdout(), output).ok();
+    println!();
+}
+
+fn print_json_data(data: serde_json::Value) {
+    print_json_output(&CliOutput::ok(data));
+}
+
+fn print_json_error(msg: impl Into<String>) {
+    print_json_output(&CliOutput::error(msg));
+}
+
+
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     init_tracing();
-    match Cli::try_parse_from(std::iter::once("siko".to_string()).chain(args)) {
+
+    // Pre-process args to intercept --help/--version with --json before clap handles them
+    let args_vec: Vec<String> = args.into_iter().collect();
+    let has_json = args_vec.iter().any(|a| a == "--json");
+    if has_json {
+        if args_vec.iter().any(|a| a == "--version" || a == "-V") {
+            let version = format!(
+                concat!(env!("SIKO_BUILD_VERSION"), " (", env!("CARGO_PKG_NAME"), ")")
+            );
+            print_json_data(serde_json::json!({"version": version}));
+            return 0;
+        }
+        if args_vec.iter().any(|a| a == "--help" || a == "-h") {
+            let help_text = Cli::command().render_help().to_string();
+            print_json_data(serde_json::json!({"help": help_text}));
+            return 0;
+        }
+    }
+
+    match Cli::try_parse_from(std::iter::once("siko".to_string()).chain(args_vec)) {
         Ok(cli) => run_cli(cli),
         Err(error) => {
             let _ = error.print();
@@ -279,15 +331,19 @@ fn run_cli(cli: Cli) -> i32 {
                 }
             }
         }
-        Some(Command::Setup) => match run_setup() {
+        Some(Command::Setup { json }) => match run_setup(json) {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("setup failed: {error}");
+                if json {
+                    print_json_error(format!("setup failed: {error}"));
+                } else {
+                    eprintln!("setup failed: {error}");
+                }
                 1
             }
         },
-        Some(Command::Metrics) => {
-            run_metrics_command();
+        Some(Command::Metrics { json }) => {
+            run_metrics_command(json);
             0
         }
     }
@@ -356,9 +412,17 @@ enum Command {
         command: DogfoodCommand,
     },
     /// Interactive first-time setup: configure provider, backend, and API keys.
-    Setup,
+    Setup {
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Collect and display current metrics snapshot.
-    Metrics,
+    Metrics {
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -3028,16 +3092,50 @@ fn init_tracing() {
         .try_init();
 }
 
-fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
-    use dialoguer::{Input, Select, theme::ColorfulTheme};
+fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::PathBuf;
 
-    let theme = ColorfulTheme::default();
     let config_dir = std::env::var("HOME")
         .map(PathBuf::from)
         .map(|home| home.join(".sikong"))
         .unwrap_or_else(|_| PathBuf::from(".sikong"));
     let config_path = config_dir.join("config.yaml");
+
+    // For JSON mode, output current config/detection status as structured data
+    if json_output {
+        let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY")
+            .ok().filter(|k| !k.is_empty()).is_some();
+        let has_kimi_key = std::env::var("KIMI_CODE_API_KEY")
+            .ok().filter(|k| !k.is_empty()).is_some();
+        let has_claude_code = std::process::Command::new("which")
+            .arg("claude").output().map(|o| o.status.success()).unwrap_or(false);
+        let has_codex = std::process::Command::new("which")
+            .arg("codex").output().map(|o| o.status.success()).unwrap_or(false);
+        let has_cursor = std::process::Command::new("which")
+            .arg("cursor").output().map(|o| o.status.success()).unwrap_or(false);
+        let config_exists = config_path.exists();
+        let config_content = if config_exists {
+            std::fs::read_to_string(&config_path).ok()
+        } else { None };
+
+        let data = serde_json::json!({
+            "config_path": config_path.to_string_lossy(),
+            "config_exists": config_exists,
+            "config": config_content,
+            "detection": {
+                "deepseek_api_key": has_deepseek_key,
+                "kimi_api_key": has_kimi_key,
+                "claude_code_cli": has_claude_code,
+                "codex_cli": has_codex,
+                "cursor_cli": has_cursor
+            }
+        });
+        print_json_data(data);
+        return Ok(());
+    }
+
+    use dialoguer::{Input, Select, theme::ColorfulTheme};
+    let theme = ColorfulTheme::default();
 
     println!("╔══════════════════════════════════════════════╗");
     println!("║         Sikong Setup                         ║");
@@ -3340,7 +3438,7 @@ fn run_setup() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_metrics_command() {
+fn run_metrics_command(json_output: bool) {
     // TODO: Integrate with a global/live MetricsCollector instance once one is
     //       established by the engine or session lifecycle. For now, this
     //       creates a fresh collector and populates it with basic process-level
@@ -3356,9 +3454,14 @@ fn run_metrics_command() {
     collector.record_cost("version_cost", 0.1);
 
     let snapshot = collector.snapshot();
-    let formatter = MetricsFormatter;
-    let output = formatter.format(&snapshot);
-    println!("{output}");
+
+    if json_output {
+        print_json_data(snapshot.to_json_value());
+    } else {
+        let formatter = MetricsFormatter;
+        let output = formatter.format(&snapshot);
+        println!("{output}");
+    }
 }
 #[cfg(test)]
 mod tests {
