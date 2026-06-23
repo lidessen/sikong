@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,16 +14,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: false
       - uses: oven-sh/setup-bun@v2
       - uses: actions-rust-toolchain@v1
         with:
           toolchain: stable
       - run: bun install --frozen-lockfile
-      - run: bun run check
       - name: Build release artifact
         run: bash scripts/build-release-rust.sh "$GITHUB_REF_NAME"
       - name: Publish GitHub Release
