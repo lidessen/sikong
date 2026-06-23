@@ -20,6 +20,7 @@ use crate::{
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use colored::Colorize;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
@@ -691,7 +692,7 @@ async fn run_assistant_prompt_async(
         },
     );
 
-    println!("🤔 Processing...");
+    println!("{} Processing...", console::style(" >>").bold().green());
     let reply = session.handle_message(&mut store, message).await;
     session
         .wait_for_all(&mut store, Duration::from_secs(300))
@@ -3180,52 +3181,52 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    println!("🔍 Auto-detection:");
+    println!("{} Auto-detection:", console::style("[DETECT]").cyan().bold());
     println!(
         "   DEEPSEEK_API_KEY       {}",
         if has_deepseek_key {
-            "✅ found"
+            format!("{} found", console::style("[OK]").green().bold())
         } else {
-            "⛔ not set"
+            format!("{} not set", console::style("[MISS]").red().bold())
         }
     );
     println!(
         "   KIMI_CODE_API_KEY      {}",
         if has_kimi_key {
-            "✅ found"
+            format!("{} found", console::style("[OK]").green().bold())
         } else {
-            "⛔ not set"
+            format!("{} not set", console::style("[MISS]").red().bold())
         }
     );
     println!(
         "   Claude Code CLI        {}",
         if has_claude_code {
-            "✅ detected"
+            format!("{} detected", console::style("[OK]").green().bold())
         } else {
-            "⛔ not found"
+            format!("{} not found", console::style("[MISS]").red().bold())
         }
     );
     println!(
         "   Codex CLI              {}  {}",
         if has_codex {
-            "✅ detected"
+            format!("{} detected", console::style("[OK]").green().bold())
         } else {
-            "⛔ not found"
+            format!("{} not found", console::style("[MISS]").red().bold())
         },
         if has_codex && codex_logged_in {
-            "🔑 logged in"
+            format!("{} logged in", console::style("[KEY]").yellow().bold())
         } else if has_codex && !codex_logged_in {
-            "⚠️  not logged in"
+            format!("{} not logged in", console::style("[!]").yellow().bold())
         } else {
-            ""
+            "".to_string()
         }
     );
     println!(
         "   Cursor CLI             {}",
         if has_cursor {
-            "✅ detected"
+            format!("{} detected", console::style("[OK]").green().bold())
         } else {
-            "⛔ not found"
+            format!("{} not found", console::style("[MISS]").red().bold())
         }
     );
     println!();
@@ -3268,35 +3269,35 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let (backend, needs_api_key) = match provider {
         "claude" => {
             println!(
-                "   ℹ️  Claude Code backend — uses the `claude` CLI with your existing subscription."
+                "   {} Claude Code backend — uses the `claude` CLI with your existing subscription.", console::style("[INFO]").cyan()
             );
             ("claude-code".to_string(), false)
         }
         "codex" => {
             if codex_logged_in {
                 println!(
-                    "   ℹ️  Codex backend — uses the `codex` CLI with your existing subscription."
+                    "   {} Codex backend — uses the `codex` CLI with your existing subscription.", console::style("[INFO]").cyan()
                 );
             } else {
                 println!(
-                    "⚠️  Codex CLI found but not logged in. Run 'codex login' first, or choose another provider."
+                    "{} Codex CLI found but not logged in. Run 'codex login' first, or choose another provider.", console::style("[!]").yellow().bold()
                 );
             }
             ("codex".to_string(), false)
         }
         "cursor" => {
             println!(
-                "   ℹ️  Cursor backend — uses the `cursor` CLI with your existing subscription."
+                "   {} Cursor backend — uses the `cursor` CLI with your existing subscription.", console::style("[INFO]").cyan()
             );
             ("cursor".to_string(), false)
         }
         "kimi" => {
             if has_claude_code {
-                println!("   ℹ️  Kimi requires Claude Code runtime.");
+                println!("   {} Kimi requires Claude Code runtime.", console::style("[INFO]").cyan());
                 ("claude-code".to_string(), true)
             } else {
                 println!(
-                    "⚠️  Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code"
+                    "{} Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code", console::style("[!]").yellow().bold()
                 );
                 return Ok(());
             }
@@ -3354,7 +3355,7 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
             .is_some();
         if !has_key {
             println!();
-            println!("🔑 {} is not set.", key_var);
+            println!("{} {} is not set.", console::style("[KEY]").yellow().bold(), key_var);
             let api_key: String = Input::with_theme(&theme)
                 .with_prompt("Enter your API key (or leave empty to skip)")
                 .allow_empty(true)
@@ -3367,7 +3368,7 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
                     String::new()
                 };
                 println!(
-                    "   ℹ️  Saved to config. Also add to shell: export {}={}",
+                    "   {} Saved to config. Also add to shell: export {}={}", console::style("[INFO]").cyan(),
                     key_var, masked
                 );
             }
@@ -3404,9 +3405,9 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(&config_path, config_content)?;
 
     println!();
-    println!("✅ Config written to {}", config_path.display());
+    println!("{} Config written to {}", console::style("[OK]").green().bold(), config_path.display());
     println!();
-    println!("📋 Summary:");
+    println!("{} Summary:", console::style("[SUMMARY]").magenta().bold());
     println!("   Provider:   {}", provider);
     println!("   Backend:    {}", backend);
     println!(
@@ -3418,7 +3419,7 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     println!();
-    println!("🚀 Quick start:");
+    println!("{} Quick start:", console::style("[START]").green().bold());
     println!("   siko run \"analyze this\"     # Run a task");
     println!("   siko assistant --acp       # ACP server for external tools");
     println!("   siko dogfood run           # Self-iteration loop");
@@ -3433,7 +3434,7 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
         .is_none()
     {
         println!();
-        println!("⚠️  No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...");
+        println!("{} No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...", console::style("[!]").yellow().bold());
     }
     Ok(())
 }

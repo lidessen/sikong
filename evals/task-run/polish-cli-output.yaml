@@ -1,0 +1,24 @@
+id: polish-cli-output
+task: |
+  优化 siko CLI 的输出效果。
+
+  要求：
+  1. 去掉 emoji（如 🤔、✅、⛔、⚠️、🔑、🔍 等）
+  2. 可以用 terminal 输出库来美化，比如 colored、termcolor、owo-colors、console 等
+  3. 输出要清晰、结构化，适合终端阅读
+  4. setup 命令的交互界面保持 dialoguer 风格（已经很好）
+  5. --json 模式不受影响
+  6. 只改 src/harness/cli.rs，不改核心逻辑
+
+  约束：cargo build && cargo test 必须通过。
+expectation: |
+  CLI 输出去掉 emoji，改用颜色等终端美化方式。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/harness/cli.rs
+    - Cargo.toml
+  allow_write: true
+max_steps: 48

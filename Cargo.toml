@@ -12,6 +12,8 @@ async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", default-features = false, features = ["yaml"] }
 dialoguer = "0.11"
+console = "0.15"
+colored = "2"
 nanoid = "0.5.0"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
