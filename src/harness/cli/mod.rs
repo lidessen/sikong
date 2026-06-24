@@ -1,17 +1,7 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::Instant;
-
-use crate::{
-    AgentTokenUsage, CapabilityProfile, DebugConfig, NodeOperation, NodeStatus, NodeTemplate,
-    PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, SikoConfig, TaskType, WorkSize,
-    WorkspaceRequirement, WorkspaceSurface,
-};
+use crate::{DebugConfig, SikoConfig};
 use clap::{CommandFactory, Parser, Subcommand};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde::Serialize;
 use tracing::error;
-use tracing_subscriber::EnvFilter;
 
 pub mod launch;
 pub mod metrics;
@@ -436,13 +426,18 @@ enum Command {
     },
 }
 
+#[allow(unused_imports)]
 mod tests {
-    use super::assistant;
-    use super::eval;
-    use super::task;
     use super::*;
-    use crate::{AgentRunRecord, AssistantTask, AssistantTaskEvent, EngineReport, FileTaskStore};
+    use crate::{
+        AgentRunRecord, AgentTokenUsage, AssistantTask, AssistantTaskEvent, EngineReport,
+        FileTaskStore, NodeOperation, NodeStatus,
+    };
+    use serde_json::{Value, json};
+    use std::fs;
+    use std::path::Path;
 
+    #[allow(dead_code)]
     fn test_debug_config() -> DebugConfig {
         DebugConfig::default()
     }

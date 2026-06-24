@@ -5,14 +5,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::{
-    AcpServer, AgentAssistantLoop, AgentRunScheduler, AgentTokenUsage, AssistantSession,
-    AssistantSessionConfig, AssistantTaskStatus, CapabilityProfile, DebugConfig, FileTaskStore,
-    ProcessAgentRunScheduler, SikoConfig, TaskStore, WorkspaceProvider, WorkspaceRequirement,
-    run_acp_stdio_server,
+    AcpServer, AgentAssistantLoop, AssistantSession, AssistantSessionConfig, AssistantTaskStatus,
+    CapabilityProfile, DebugConfig, FileTaskStore, ProcessAgentRunScheduler, SikoConfig, TaskStore,
+    WorkspaceRequirement, run_acp_stdio_server,
 };
 use clap::{Subcommand, ValueEnum};
 use serde::Serialize;
-use tracing::error;
 
 use super::launch;
 use super::task;

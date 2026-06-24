@@ -1,0 +1,36 @@
+id: dogfood-next-improvement
+max_steps: 32
+task: |
+  Sikong self-development task: find the most impactful bounded improvement in the current repository, apply it, and verify.
+
+  ## Attention Contract
+  - Mainline: Make one concrete improvement to the Sikong codebase that reduces technical debt or improves code quality. Do not add new features.
+  - Owning layer: harness or fact (whichever fits the improvement).
+  - Parent acceptance evidence: cargo test passes, cargo clippy has fewer warnings than before.
+  - Child autonomy boundary: may modify any file in src/ or tests/. Must not change public API behavior, output formats, or CLI semantics.
+  - Upward artifact: a git diff of the change, plus test/clippy output.
+
+  ## Method
+  1. Scan the repository for the most impactful small improvement: unused code, dead imports, redundant abstractions, missing tests, or stale comments.
+  2. Prioritize fixes that reduce `cargo clippy --all-targets -- -D warnings` error count.
+  3. Apply the fix.
+  4. Run `cargo test` to verify nothing broke.
+  5. Run `cargo clippy --all-targets` and report whether warning count decreased.
+  6. Report the diff, test results, and clippy change.
+
+  ## Constraints
+  - Do not change design docs, development-log, or YAML evals unless the fix directly involves them.
+  - If no improvement can be found that passes tests, report that clearly instead of making unsafe changes.
+expectation: |
+  A concrete, verifiable improvement to the Sikong codebase. The report must include:
+  1. What was changed and why.
+  2. The exact `cargo test` output (all tests pass).
+  3. The `cargo clippy --all-targets` output or a summary showing fewer warnings.
+  4. A link to the specific diff or changed paths.
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/
+  allow_write: true
