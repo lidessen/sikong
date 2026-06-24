@@ -1,0 +1,509 @@
+use std::io::{self, BufReader};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
+
+use crate::{
+    AcpServer, AgentAssistantLoop, AgentRunScheduler, AgentTokenUsage, AssistantSession,
+    AssistantSessionConfig, AssistantTaskStatus, CapabilityProfile, DebugConfig, FileTaskStore,
+    ProcessAgentRunScheduler, SikoConfig, TaskStore, WorkspaceProvider, WorkspaceRequirement,
+    run_acp_stdio_server,
+};
+use clap::{Subcommand, ValueEnum};
+use serde::Serialize;
+use tracing::error;
+
+use super::launch;
+use super::task;
+
+/// Assistant command subcommands.
+#[derive(Debug, Subcommand)]
+pub enum AssistantCommand {
+    /// Send one assistant message, run queued work in this process, and print the result.
+    Prompt {
+        /// Milliseconds to keep this process alive while queued tasks run. Set 0 to only enqueue.
+        #[arg(long, default_value_t = 300_000)]
+        wait_ms: u64,
+
+        /// Root workspace used by tasks created from this prompt.
+        #[arg(long, value_enum, default_value_t = AssistantPromptWorkspace::Memory)]
+        workspace: AssistantPromptWorkspace,
+
+        /// Allow created tasks to write within --write-scope.
+        #[arg(long)]
+        allow_write: bool,
+
+        /// Coarse writable glob for --workspace current-git. Repeatable.
+        #[arg(long = "write-scope")]
+        write_scope: Vec<String>,
+
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+
+        /// Message to send to the assistant.
+        #[arg(required = true, trailing_var_arg = true)]
+        message: Vec<String>,
+    },
+    /// Print persisted task logs in chronological order.
+    Logs {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Print the raw structured log JSON.
+        #[arg(long)]
+        json: bool,
+
+        /// Print the full persisted task record, including engine report and agent-loop events.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Query persisted agent-run events for a task.
+    Events {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Filter by task-run operation, such as Specify, Execute, Verify, or Combine.
+        #[arg(long)]
+        operation: Option<String>,
+
+        /// Filter by event kind, such as tool_call_start, usage, error, or step.
+        #[arg(long)]
+        event: Option<String>,
+
+        /// Filter by tool/event name, such as Read, Grep, WebFetch, or submit_work.
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Filter by event source, such as agent-loop.
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Case-insensitive substring search over the event JSON.
+        #[arg(long)]
+        query: Option<String>,
+
+        /// Print matching events as structured JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List all persisted tasks, showing ID (first 12 chars), status, and first line.
+    List {
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Workspace selection for assistant prompts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AssistantPromptWorkspace {
+    /// In-memory workspace (no file access).
+    Memory,
+    /// Current file system (read files directly, no git worktree).
+    CurrentFileSystem,
+    /// Git worktree workspace (isolated, writable).
+    CurrentGit,
+}
+
+/// Output from a completed assistant prompt.
+#[derive(Debug, Serialize)]
+pub struct AssistantPromptOutput {
+    pub response: String,
+    pub task_id: Option<String>,
+    pub status: Option<AssistantTaskStatus>,
+    pub final_artifact: Option<String>,
+    pub running_tasks: usize,
+    pub queued_tasks: usize,
+    pub persist_error: Option<String>,
+}
+
+/// Run the assistant as an ACP server over stdio.
+pub fn run_assistant_acp() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("siko-assistant")
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_assistant_acp_async())
+}
+
+async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
+    let config = SikoConfig::load()?;
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
+    let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
+        worker_launch.command.clone(),
+        worker_launch.args.clone(),
+    )));
+    let assistant_loop = AgentAssistantLoop::new(shared_scheduler.clone());
+    let session = AssistantSession::with_worker_factory(
+        assistant_loop,
+        {
+            let sched = shared_scheduler.clone();
+            move || Box::new(sched.clone())
+        },
+        AssistantSessionConfig {
+            max_parallel_tasks: config.assistant.max_parallel_tasks,
+            task_board_enabled: true,
+            conversation_message_limit: 200,
+            ..AssistantSessionConfig::default()
+        },
+    );
+    let server = AcpServer::new(store, session);
+    run_acp_stdio_server(server, BufReader::new(io::stdin()), io::stdout()).await?;
+    Ok(())
+}
+
+/// Run one assistant prompt (blocking).
+pub fn run_assistant_prompt(
+    message: Vec<String>,
+    wait_ms: u64,
+    workspace: AssistantPromptWorkspace,
+    allow_write: bool,
+    write_scope: Vec<String>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let message = message.join(" ").trim().to_string();
+    if message.is_empty() {
+        return Err("assistant prompt message must not be empty".into());
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("siko-assistant-prompt")
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_assistant_prompt_async(
+        message,
+        wait_ms,
+        workspace,
+        allow_write,
+        write_scope,
+        json_output,
+    ))
+}
+
+async fn run_assistant_prompt_async(
+    message: String,
+    wait_ms: u64,
+    workspace: AssistantPromptWorkspace,
+    allow_write: bool,
+    write_scope: Vec<String>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = SikoConfig::load()?;
+    let debug = DebugConfig::from_env();
+    let root_workspace = resolve_assistant_prompt_workspace(&debug, workspace, &write_scope)?;
+    let root_capabilities = if allow_write {
+        CapabilityProfile::writable()
+    } else {
+        CapabilityProfile::read_only()
+    };
+    let mut store = FileTaskStore::open(task::assistant_store_path(&debug))?;
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
+    let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
+        worker_launch.command.clone(),
+        worker_launch.args.clone(),
+    )));
+    let assistant_loop = AgentAssistantLoop::new(shared_scheduler.clone());
+    let mut session = AssistantSession::with_worker_factory(
+        assistant_loop,
+        {
+            let sched = shared_scheduler.clone();
+            move || Box::new(sched.clone())
+        },
+        AssistantSessionConfig {
+            max_parallel_tasks: config.assistant.max_parallel_tasks,
+            task_board_enabled: true,
+            conversation_message_limit: 200,
+            root_workspace,
+            root_capabilities,
+        },
+    );
+
+    let started_at = Instant::now();
+
+    let assistant_progress = if json_output {
+        None
+    } else {
+        Some(send_spinner("assistant thinking"))
+    };
+    let reply = session.handle_message(&mut store, message).await;
+    if let Some(ref pb) = assistant_progress {
+        pb.finish_with_message("assistant turn complete ✓");
+    }
+
+    let snapshot = if reply.task_id.is_some() {
+        let task_progress = if json_output {
+            None
+        } else {
+            Some(send_spinner("task running"))
+        };
+        let snapshot = if wait_ms == 0 {
+            session.drain(&mut store).await
+        } else {
+            session
+                .wait_for_all(&mut store, Duration::from_millis(wait_ms))
+                .await
+        };
+        // Keep the tokio runtime alive while background engine tasks are still
+        // running. Without this, the runtime drops when the CLI returns and
+        // spawned tasks are cancelled silently.
+        let snapshot = if snapshot.running_tasks > 0 || snapshot.queued_tasks > 0 {
+            // Poll with short timeout until the task board is idle.
+            // Use 1s intervals so the CLI stays responsive to cancellation.
+            let poll_interval = Duration::from_millis(1000);
+            loop {
+                let s = session
+                    .wait_for_all(&mut store, poll_interval)
+                    .await;
+                if s.running_tasks == 0 && s.queued_tasks == 0 {
+                    break s;
+                }
+                if let Some(ref pb) = task_progress {
+                    pb.set_message(format!(
+                        "task board: {} running, {} queued",
+                        s.running_tasks, s.queued_tasks
+                    ));
+                }
+            }
+        } else {
+            snapshot
+        };
+        if let Some(ref pb) = task_progress {
+            if snapshot.running_tasks == 0 && snapshot.queued_tasks == 0 {
+                pb.finish_with_message("task board idle");
+            } else {
+                pb.finish_with_message(format!(
+                    "task board: {} running, {} queued",
+                    snapshot.running_tasks, snapshot.queued_tasks
+                ));
+            }
+        }
+        snapshot
+    } else {
+        session.drain(&mut store).await
+    };
+
+    let task_status = reply
+        .task_id
+        .as_deref()
+        .and_then(|task_id| store.get_task(task_id))
+        .map(|task| task.status.clone());
+    let final_artifact = reply
+        .task_id
+        .as_deref()
+        .and_then(|task_id| store.get_task(task_id))
+        .and_then(|task| task.last_report.as_ref())
+        .and_then(|report| report.artifact_text.clone());
+    let output = AssistantPromptOutput {
+        response: reply.text,
+        task_id: reply.task_id,
+        status: task_status,
+        final_artifact,
+        running_tasks: snapshot.running_tasks,
+        queued_tasks: snapshot.queued_tasks,
+        persist_error: store.last_persist_error().map(ToString::to_string),
+    };
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &output)?;
+        println!();
+        return Ok(());
+    }
+
+    let elapsed = started_at.elapsed();
+
+    // ── Response ──
+    println!(
+        "{}",
+        console::style("── Response ──────────────────────────────────────").dim()
+    );
+    let skin = termimad::MadSkin::default();
+    skin.print_text(&output.response);
+
+    // ── Result ──
+    println!(
+        "{}",
+        console::style("── Result ─────────────────────────────────────────").dim()
+    );
+    if let Some(task_id) = &output.task_id {
+        println!("  task:   {task_id}");
+    }
+    if let Some(status) = &output.status {
+        let status_label = match status {
+            AssistantTaskStatus::Completed => {
+                console::style("✓ Completed").green().bold().to_string()
+            }
+            AssistantTaskStatus::Failed => console::style("✗ Failed").red().bold().to_string(),
+            AssistantTaskStatus::Cancelled => {
+                console::style("− Cancelled").yellow().bold().to_string()
+            }
+            AssistantTaskStatus::WaitingForInput => {
+                console::style("? Waiting for input")
+                    .blue()
+                    .bold()
+                    .to_string()
+            }
+            AssistantTaskStatus::Running => {
+                console::style("◌ Running").cyan().bold().to_string()
+            }
+            other => console::style(format!("{other:?}")).dim().to_string(),
+        };
+        println!("  status: {status_label}");
+    }
+    println!(
+        "  {} {}",
+        console::style("⚡").dim(),
+        console::style(format_duration(elapsed)).dim()
+    );
+    if let Some(artifact) = &output.final_artifact {
+        println!();
+        println!("{artifact}");
+    }
+    if output.running_tasks > 0 || output.queued_tasks > 0 {
+        println!(
+            "  task board: {} running, {} queued",
+            output.running_tasks, output.queued_tasks
+        );
+    }
+    if let Some(task_id) = &output.task_id {
+        println!(
+            "{}",
+            console::style("── Inspect ────────────────────────────────────────").dim()
+        );
+        println!("  live:   siko task inspect {task_id}");
+        println!("  logs:   siko task logs {task_id}");
+        println!("  result: siko task show {task_id}");
+        println!("  events: siko task events {task_id}");
+    }
+    if let Some(error) = &output.persist_error {
+        eprintln!(
+            "{} failed to persist assistant task store: {error}",
+            console::style("[WARN]").yellow().bold()
+        );
+    }
+    Ok(())
+}
+
+/// Print assistant task logs.
+pub fn print_assistant_logs(
+    task_id: &str,
+    json_output: bool,
+    full_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
+    let task = task::resolve_task_ref(&store, task_id)?;
+
+    if full_output {
+        serde_json::to_writer_pretty(std::io::stdout(), task)?;
+        println!();
+        return Ok(());
+    }
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &task.events)?;
+        println!();
+        return Ok(());
+    }
+
+    println!("task {} {} {:?}", task.id, task.title, task.status);
+    for event in &task.events {
+        println!("{}", task::format_task_log(event));
+    }
+    Ok(())
+}
+
+/// Print a list of assistant tasks.
+pub fn print_assistant_list(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
+    let mut tasks = store.list_tasks();
+    task::sort_tasks_newest_first(&mut tasks);
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
+        println!();
+        return Ok(());
+    }
+
+    for task in &tasks {
+        let id_prefix = task::task_list_id(&task.id);
+        let first_line = task.request.lines().next().unwrap_or("").to_string();
+        println!("{}  {:?}  {}", id_prefix, task.status, first_line);
+    }
+    Ok(())
+}
+
+fn send_spinner(message: &'static str) -> indicatif::ProgressBar {
+    let pb = indicatif::ProgressBar::new_spinner();
+    pb.set_style(
+        indicatif::ProgressStyle::with_template("{spinner} {msg} ({elapsed})")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    );
+    pb.set_message(message);
+    pb.enable_steady_tick(Duration::from_millis(120));
+    pb
+}
+
+fn format_duration(d: Duration) -> String {
+    let secs = d.as_secs_f64();
+    if secs > 60.0 {
+        format!("{:.0}m {:2.0}s", secs / 60.0, secs % 60.0)
+    } else {
+        format!("{:6.1}s", secs)
+    }
+}
+
+pub fn resolve_assistant_prompt_workspace(
+    debug: &DebugConfig,
+    workspace: AssistantPromptWorkspace,
+    write_scope: &[String],
+) -> Result<WorkspaceRequirement, Box<dyn std::error::Error>> {
+    match workspace {
+        AssistantPromptWorkspace::Memory => {
+            if !write_scope.is_empty() {
+                return Err(
+                    "--write-scope requires --workspace current-git or current-file-system".into(),
+                );
+            }
+            Ok(WorkspaceRequirement::memory())
+        }
+        AssistantPromptWorkspace::CurrentFileSystem => Ok(WorkspaceRequirement {
+            provider: crate::WorkspaceProvider::FileSystem,
+            read_scope: vec!["**/*".to_string()],
+            write_scope: write_scope.to_vec(),
+            git: None,
+        }),
+        AssistantPromptWorkspace::CurrentGit => {
+            let repo_root = current_git_root()?;
+            let worktree_root = debug.data_dir().join("worktrees").join("assistant");
+            Ok(WorkspaceRequirement::git_repo(
+                repo_root,
+                worktree_root,
+                "HEAD",
+                write_scope.iter().cloned(),
+            ))
+        }
+    }
+}
+
+fn current_git_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "current directory is not inside a git repository: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let root = String::from_utf8(output.stdout)?.trim().to_string();
+    if root.is_empty() {
+        return Err("git did not report a repository root".into());
+    }
+    Ok(PathBuf::from(root))
+}
