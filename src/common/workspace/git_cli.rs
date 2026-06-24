@@ -145,8 +145,7 @@ impl GitCli {
                 // Try a simple unescape: strip surrounding quotes
                 let unquoted = path_part.trim_matches('"');
                 // Replace common escape sequences
-                let unescaped = unquoted.replace("\\\"", "\"").replace("\\\\", "\\");
-                unescaped
+                unquoted.replace("\\\"", "\"").replace("\\\\", "\\")
             } else {
                 path_part.to_string()
             };

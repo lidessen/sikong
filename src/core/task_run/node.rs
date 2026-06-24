@@ -7,7 +7,9 @@ use std::fmt;
 
 use super::{ArtifactId, Budget, CapabilityProfile, NodeId, NodeStatus, ProblemKey};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Serialize, Deserialize, JsonSchema,
+)]
 #[schemars(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum WorkSize {
@@ -31,7 +33,6 @@ impl fmt::Display for WorkSize {
     }
 }
 
-
 /// The type of work a node performs.
 ///
 /// Task types categorize nodes by their fundamental mode of operation.
@@ -39,11 +40,12 @@ impl fmt::Display for WorkSize {
 /// planning engine's behavior for that type, replacing the old approach
 /// where a single `policy` field directly encoded both the task category
 /// and its planning behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum TaskType {
     /// Investigation, research, or evidence gathering.
+    #[default]
     Explore,
     /// Code or artifact implementation and construction.
     Exploit,
@@ -119,12 +121,6 @@ impl TaskType {
                 auto_plan_threshold: WorkSize::Large,
             },
         }
-    }
-}
-
-impl Default for TaskType {
-    fn default() -> Self {
-        Self::Explore
     }
 }
 

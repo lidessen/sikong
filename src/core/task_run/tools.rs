@@ -136,47 +136,55 @@ fn expected_schema_doc(task_type: &TaskType) -> &'static str {
 
 #[allow(dead_code)]
 fn validate_explore_output(value: &serde_json::Value) -> Result<(), String> {
-    let obj = value.as_object().ok_or_else(|| {
-        "expected top-level JSON object".to_string()
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "expected top-level JSON object".to_string())?;
 
     // Validate findings: required array of objects
-    let findings = obj.get("findings").and_then(|v| v.as_array()).ok_or_else(|| {
-        "missing required field 'findings': expected a non-empty array of { claim, evidence }".to_string()
-    })?;
+    let findings = obj
+        .get("findings")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            "missing required field 'findings': expected a non-empty array of { claim, evidence }"
+                .to_string()
+        })?;
     if findings.is_empty() {
         return Err("'findings' must be a non-empty array".to_string());
     }
     for (i, finding) in findings.iter().enumerate() {
-        let f_obj = finding.as_object().ok_or_else(|| {
-            format!("findings[{}] must be an object", i)
-        })?;
-        let claim = f_obj.get("claim").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("findings[{}].claim must be a string", i)
-        })?;
+        let f_obj = finding
+            .as_object()
+            .ok_or_else(|| format!("findings[{}] must be an object", i))?;
+        let claim = f_obj
+            .get("claim")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("findings[{}].claim must be a string", i))?;
         if claim.is_empty() {
             return Err(format!("findings[{}].claim must not be empty", i));
         }
-        let evidence = f_obj.get("evidence").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("findings[{}].evidence must be a string", i)
-        })?;
+        let evidence = f_obj
+            .get("evidence")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("findings[{}].evidence must be a string", i))?;
         if evidence.is_empty() {
             return Err(format!("findings[{}].evidence must not be empty", i));
         }
     }
 
     // Validate scope: required string
-    let scope = obj.get("scope").and_then(|v| v.as_str()).ok_or_else(|| {
-        "missing required field 'scope': expected a string".to_string()
-    })?;
+    let scope = obj
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required field 'scope': expected a string".to_string())?;
     if scope.is_empty() {
         return Err("'scope' must not be empty".to_string());
     }
 
     // Validate summary: required string
-    let summary = obj.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
-        "missing required field 'summary': expected a string".to_string()
-    })?;
+    let summary = obj
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required field 'summary': expected a string".to_string())?;
     if summary.is_empty() {
         return Err("'summary' must not be empty".to_string());
     }
@@ -186,9 +194,9 @@ fn validate_explore_output(value: &serde_json::Value) -> Result<(), String> {
 
 #[allow(dead_code)]
 fn validate_exploit_output(value: &serde_json::Value) -> Result<(), String> {
-    let obj = value.as_object().ok_or_else(|| {
-        "expected top-level JSON object".to_string()
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "expected top-level JSON object".to_string())?;
 
     // Validate changes: required array of objects
     let changes = obj.get("changes").and_then(|v| v.as_array()).ok_or_else(|| {
@@ -198,33 +206,37 @@ fn validate_exploit_output(value: &serde_json::Value) -> Result<(), String> {
         return Err("'changes' must be a non-empty array".to_string());
     }
     for (i, change) in changes.iter().enumerate() {
-        let c_obj = change.as_object().ok_or_else(|| {
-            format!("changes[{}] must be an object", i)
-        })?;
-        let file = c_obj.get("file").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("changes[{}].file must be a string", i)
-        })?;
+        let c_obj = change
+            .as_object()
+            .ok_or_else(|| format!("changes[{}] must be an object", i))?;
+        let file = c_obj
+            .get("file")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("changes[{}].file must be a string", i))?;
         if file.is_empty() {
             return Err(format!("changes[{}].file must not be empty", i));
         }
-        let action = c_obj.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("changes[{}].action must be a string", i)
-        })?;
+        let action = c_obj
+            .get("action")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("changes[{}].action must be a string", i))?;
         if action.is_empty() {
             return Err(format!("changes[{}].action must not be empty", i));
         }
-        let description = c_obj.get("description").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("changes[{}].description must be a string", i)
-        })?;
+        let description = c_obj
+            .get("description")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("changes[{}].description must be a string", i))?;
         if description.is_empty() {
             return Err(format!("changes[{}].description must not be empty", i));
         }
     }
 
     // Validate summary: required string
-    let summary = obj.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
-        "missing required field 'summary': expected a string".to_string()
-    })?;
+    let summary = obj
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required field 'summary': expected a string".to_string())?;
     if summary.is_empty() {
         return Err("'summary' must not be empty".to_string());
     }
@@ -234,9 +246,9 @@ fn validate_exploit_output(value: &serde_json::Value) -> Result<(), String> {
 
 #[allow(dead_code)]
 fn validate_refine_output(value: &serde_json::Value) -> Result<(), String> {
-    let obj = value.as_object().ok_or_else(|| {
-        "expected top-level JSON object".to_string()
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "expected top-level JSON object".to_string())?;
 
     // Validate improvements: required array of objects
     let improvements = obj.get("improvements").and_then(|v| v.as_array()).ok_or_else(|| {
@@ -246,33 +258,37 @@ fn validate_refine_output(value: &serde_json::Value) -> Result<(), String> {
         return Err("'improvements' must be a non-empty array".to_string());
     }
     for (i, improvement) in improvements.iter().enumerate() {
-        let i_obj = improvement.as_object().ok_or_else(|| {
-            format!("improvements[{}] must be an object", i)
-        })?;
-        let target = i_obj.get("target").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("improvements[{}].target must be a string", i)
-        })?;
+        let i_obj = improvement
+            .as_object()
+            .ok_or_else(|| format!("improvements[{}] must be an object", i))?;
+        let target = i_obj
+            .get("target")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("improvements[{}].target must be a string", i))?;
         if target.is_empty() {
             return Err(format!("improvements[{}].target must not be empty", i));
         }
-        let change = i_obj.get("change").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("improvements[{}].change must be a string", i)
-        })?;
+        let change = i_obj
+            .get("change")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("improvements[{}].change must be a string", i))?;
         if change.is_empty() {
             return Err(format!("improvements[{}].change must not be empty", i));
         }
-        let rationale = i_obj.get("rationale").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("improvements[{}].rationale must be a string", i)
-        })?;
+        let rationale = i_obj
+            .get("rationale")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("improvements[{}].rationale must be a string", i))?;
         if rationale.is_empty() {
             return Err(format!("improvements[{}].rationale must not be empty", i));
         }
     }
 
     // Validate summary: required string
-    let summary = obj.get("summary").and_then(|v| v.as_str()).ok_or_else(|| {
-        "missing required field 'summary': expected a string".to_string()
-    })?;
+    let summary = obj
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing required field 'summary': expected a string".to_string())?;
     if summary.is_empty() {
         return Err("'summary' must not be empty".to_string());
     }
@@ -282,19 +298,23 @@ fn validate_refine_output(value: &serde_json::Value) -> Result<(), String> {
 
 #[allow(dead_code)]
 fn validate_verify_output(value: &serde_json::Value) -> Result<(), String> {
-    let obj = value.as_object().ok_or_else(|| {
-        "expected top-level JSON object".to_string()
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "expected top-level JSON object".to_string())?;
 
     // Validate verdict: required enum value
     let verdict = obj.get("verdict").and_then(|v| v.as_str()).ok_or_else(|| {
-        "missing required field 'verdict': expected \"pass\", \"fail\", or \"needs_revision\"".to_string()
+        "missing required field 'verdict': expected \"pass\", \"fail\", or \"needs_revision\""
+            .to_string()
     })?;
     match verdict {
         "pass" | "fail" | "needs_revision" => {}
-        _ => return Err(format!(
-            "'verdict' must be \"pass\", \"fail\", or \"needs_revision\", got \"{}\"", verdict
-        )),
+        _ => {
+            return Err(format!(
+                "'verdict' must be \"pass\", \"fail\", or \"needs_revision\", got \"{}\"",
+                verdict
+            ));
+        }
     }
 
     // Validate check_results: required array of objects
@@ -305,18 +325,20 @@ fn validate_verify_output(value: &serde_json::Value) -> Result<(), String> {
         return Err("'check_results' must be a non-empty array".to_string());
     }
     for (i, check_result) in check_results.iter().enumerate() {
-        let cr_obj = check_result.as_object().ok_or_else(|| {
-            format!("check_results[{}] must be an object", i)
-        })?;
-        let check = cr_obj.get("check").and_then(|v| v.as_str()).ok_or_else(|| {
-            format!("check_results[{}].check must be a string", i)
-        })?;
+        let cr_obj = check_result
+            .as_object()
+            .ok_or_else(|| format!("check_results[{}] must be an object", i))?;
+        let check = cr_obj
+            .get("check")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("check_results[{}].check must be a string", i))?;
         if check.is_empty() {
             return Err(format!("check_results[{}].check must not be empty", i));
         }
-        let passed = cr_obj.get("passed").and_then(|v| v.as_bool()).ok_or_else(|| {
-            format!("check_results[{}].passed must be a boolean", i)
-        })?;
+        let passed = cr_obj
+            .get("passed")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| format!("check_results[{}].passed must be a boolean", i))?;
         // passed is already a bool, no further validation needed
         let _ = passed;
     }
@@ -794,7 +816,9 @@ mod tests {
 
     #[test]
     fn validate_explore_output_valid() {
-        let v = make_json(r#"{"findings":[{"claim":"Found bug","evidence":"Line 42"}],"scope":"auth","summary":"Done"}"#);
+        let v = make_json(
+            r#"{"findings":[{"claim":"Found bug","evidence":"Line 42"}],"scope":"auth","summary":"Done"}"#,
+        );
         assert!(validate_explore_output(&v).is_ok());
     }
 
@@ -812,13 +836,16 @@ mod tests {
 
     #[test]
     fn validate_explore_output_missing_claim() {
-        let v = make_json(r#"{"findings":[{"evidence":"Line 42"}],"scope":"auth","summary":"Done"}"#);
+        let v =
+            make_json(r#"{"findings":[{"evidence":"Line 42"}],"scope":"auth","summary":"Done"}"#);
         assert!(validate_explore_output(&v).is_err());
     }
 
     #[test]
     fn validate_exploit_output_valid() {
-        let v = make_json(r#"{"changes":[{"file":"src/main.rs","action":"modify","description":"Fix bug"}],"summary":"Fixed"}"#);
+        let v = make_json(
+            r#"{"changes":[{"file":"src/main.rs","action":"modify","description":"Fix bug"}],"summary":"Fixed"}"#,
+        );
         assert!(validate_exploit_output(&v).is_ok());
     }
 
@@ -830,31 +857,41 @@ mod tests {
 
     #[test]
     fn validate_refine_output_valid() {
-        let v = make_json(r#"{"improvements":[{"target":"perf","change":"cache","rationale":"faster"}],"summary":"Optimized"}"#);
+        let v = make_json(
+            r#"{"improvements":[{"target":"perf","change":"cache","rationale":"faster"}],"summary":"Optimized"}"#,
+        );
         assert!(validate_refine_output(&v).is_ok());
     }
 
     #[test]
     fn validate_refine_output_missing_rationale() {
-        let v = make_json(r#"{"improvements":[{"target":"perf","change":"cache"}],"summary":"Optimized"}"#);
+        let v = make_json(
+            r#"{"improvements":[{"target":"perf","change":"cache"}],"summary":"Optimized"}"#,
+        );
         assert!(validate_refine_output(&v).is_err());
     }
 
     #[test]
     fn validate_verify_output_valid_pass() {
-        let v = make_json(r#"{"verdict":"pass","check_results":[{"check":"unit tests","passed":true}]}"#);
+        let v = make_json(
+            r#"{"verdict":"pass","check_results":[{"check":"unit tests","passed":true}]}"#,
+        );
         assert!(validate_verify_output(&v).is_ok());
     }
 
     #[test]
     fn validate_verify_output_valid_fail() {
-        let v = make_json(r#"{"verdict":"fail","check_results":[{"check":"integration","passed":false}]}"#);
+        let v = make_json(
+            r#"{"verdict":"fail","check_results":[{"check":"integration","passed":false}]}"#,
+        );
         assert!(validate_verify_output(&v).is_ok());
     }
 
     #[test]
     fn validate_verify_output_invalid_verdict() {
-        let v = make_json(r#"{"verdict":"maybe","check_results":[{"check":"unit tests","passed":true}]}"#);
+        let v = make_json(
+            r#"{"verdict":"maybe","check_results":[{"check":"unit tests","passed":true}]}"#,
+        );
         assert!(validate_verify_output(&v).is_err());
     }
 
@@ -879,10 +916,6 @@ mod tests {
     }
 
     #[test]
-
-    #[test]
-
-    #[test]
     fn submit_work_validates_exploit_output() {
         let valid = r#"{"changes":[{"file":"a","action":"b","description":"c"}],"summary":"d"}"#;
         let result = EngineTools.submit_work(SubmitWorkArgs {
@@ -898,7 +931,8 @@ mod tests {
 
     #[test]
     fn submit_work_validates_refine_output() {
-        let valid = r#"{"improvements":[{"target":"a","change":"b","rationale":"c"}],"summary":"d"}"#;
+        let valid =
+            r#"{"improvements":[{"target":"a","change":"b","rationale":"c"}],"summary":"d"}"#;
         let result = EngineTools.submit_work(SubmitWorkArgs {
             output: valid.to_string(),
         });

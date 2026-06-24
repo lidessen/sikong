@@ -1,5 +1,6 @@
+use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,9 +12,10 @@ use crate::{
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
     AssistantTask, AssistantTaskEvent, AssistantTaskStatus, Budget, CancellationToken,
     CapabilityProfile, DebugConfig, Engine, FileTaskStore, NodeId, NodeOperation,
-    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness, TaskType,
+    NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness,
     PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig,
-    TaskStore, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface, Workspaces,
+    TaskStore, TaskType, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface,
+    Workspaces,
     common::metrics::{MetricsCollector, MetricsFormatter},
     non_empty_env, run_acp_stdio_server,
 };
@@ -22,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
-
 
 /// Consistent JSON output format for all commands.
 /// Wraps command output in a uniform structure with machine-readable keys.
@@ -35,10 +36,18 @@ struct CliOutput {
 
 impl CliOutput {
     fn ok(data: serde_json::Value) -> Self {
-        Self { status: "ok".to_string(), data: Some(data), error: None }
+        Self {
+            status: "ok".to_string(),
+            data: Some(data),
+            error: None,
+        }
     }
     fn error(msg: impl Into<String>) -> Self {
-        Self { status: "error".to_string(), data: None, error: Some(msg.into()) }
+        Self {
+            status: "error".to_string(),
+            data: None,
+            error: Some(msg.into()),
+        }
     }
 }
 
@@ -55,7 +64,6 @@ fn print_json_error(msg: impl Into<String>) {
     print_json_output(&CliOutput::error(msg));
 }
 
-
 pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     init_tracing();
 
@@ -64,9 +72,13 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     let has_json = args_vec.iter().any(|a| a == "--json");
     if has_json {
         if args_vec.iter().any(|a| a == "--version" || a == "-V") {
-            let version = format!(
-                concat!(env!("SIKO_BUILD_VERSION"), " (", env!("CARGO_PKG_NAME"), ")")
-            );
+            let version = concat!(
+                env!("SIKO_BUILD_VERSION"),
+                " (",
+                env!("CARGO_PKG_NAME"),
+                ")"
+            )
+            .to_string();
             print_json_data(serde_json::json!({"version": version}));
             return 0;
         }
@@ -287,6 +299,14 @@ fn run_cli(cli: Cli) -> i32 {
                 }
             }
         }
+        Some(Command::Task { command }) => match run_task_command(command) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to run task command");
+                eprintln!("failed to run task command: {error}");
+                1
+            }
+        },
         Some(Command::Setup { json }) => match run_setup(json) {
             Ok(()) => 0,
             Err(error) => {
@@ -301,17 +321,15 @@ fn run_cli(cli: Cli) -> i32 {
         Some(Command::Metrics { json }) => {
             run_metrics_command(json);
             0
-        },
-        Some(Command::Log { limit, json }) => {
-            match print_task_logs(limit, json) {
-                Ok(()) => 0,
-                Err(error) => {
-                    error!(%error, "failed to show task logs");
-                    eprintln!("failed to show task logs: {error}");
-                    1
-                }
-            }
         }
+        Some(Command::Log { limit, json }) => match print_task_logs(limit, json) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to show task logs");
+                eprintln!("failed to show task logs: {error}");
+                1
+            }
+        },
     }
 }
 
@@ -365,6 +383,11 @@ enum Command {
         #[arg(long = "write-scope")]
         write_scope: Vec<String>,
     },
+    /// Inspect assistant task records.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
     /// Run evaluation scenarios (internal).
     #[command(hide = true)]
     Eval {
@@ -395,6 +418,83 @@ enum Command {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum TaskCommand {
+    /// List persisted assistant tasks.
+    List {
+        /// Maximum number of tasks to display.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one persisted assistant task summary and final result.
+    Show {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Print the full structured task JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print persisted task lifecycle logs.
+    Logs {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Print the raw structured lifecycle event JSON.
+        #[arg(long)]
+        json: bool,
+
+        /// Print the full persisted task record, including engine report and agent-loop events.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Query persisted agent-run events for a task.
+    Events {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Filter by task-run operation, such as Specify, Execute, Verify, or Combine.
+        #[arg(long)]
+        operation: Option<String>,
+
+        /// Filter by event kind, such as tool_call_start, usage, error, or step.
+        #[arg(long)]
+        event: Option<String>,
+
+        /// Filter by tool/event name, such as Read, Grep, WebFetch, or submit_work.
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Filter by event source, such as agent-loop.
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Case-insensitive substring search over the event JSON.
+        #[arg(long)]
+        query: Option<String>,
+
+        /// Print matching events as structured JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replay existing task events, then follow live updates until terminal status.
+    Inspect {
+        /// Task id to inspect.
+        task_id: String,
+
+        /// Poll interval in milliseconds.
+        #[arg(long, default_value_t = 1_000)]
+        interval_ms: u64,
+
+        /// Print newline-delimited structured JSON records.
+        #[arg(long)]
+        json: bool,
+    },
+}
 
 #[derive(Debug, Subcommand)]
 enum AssistantCommand {
@@ -633,14 +733,7 @@ async fn run_assistant_prompt_async(
     let assistant_progress = if json_output {
         None
     } else {
-        let pb = indicatif::ProgressBar::new_spinner();
-        pb.set_style(
-            indicatif::ProgressStyle::with_template("{spinner} {msg} ({elapsed})")
-                .unwrap()
-                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
-        );
-        pb.set_message("assistant thinking");
-        Some(pb)
+        Some(send_spinner("assistant thinking"))
     };
     let reply = session.handle_message(&mut store, message).await;
     if let Some(ref pb) = assistant_progress {
@@ -651,14 +744,7 @@ async fn run_assistant_prompt_async(
         let task_progress = if json_output {
             None
         } else {
-            let pb = indicatif::ProgressBar::new_spinner();
-            pb.set_style(
-                indicatif::ProgressStyle::with_template("{spinner} {msg} ({elapsed})")
-                    .unwrap()
-                    .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
-            );
-            pb.set_message("task running");
-            Some(pb)
+            Some(send_spinner("task running"))
         };
         let snapshot = if wait_ms == 0 {
             session.drain(&mut store).await
@@ -736,12 +822,11 @@ async fn run_assistant_prompt_async(
             AssistantTaskStatus::Cancelled => {
                 console::style("− Cancelled").yellow().bold().to_string()
             }
-            AssistantTaskStatus::WaitingForInput => {
-                console::style("? Waiting for input").blue().bold().to_string()
-            }
-            AssistantTaskStatus::Running => {
-                console::style("◌ Running").cyan().bold().to_string()
-            }
+            AssistantTaskStatus::WaitingForInput => console::style("? Waiting for input")
+                .blue()
+                .bold()
+                .to_string(),
+            AssistantTaskStatus::Running => console::style("◌ Running").cyan().bold().to_string(),
             other => console::style(format!("{other:?}")).dim().to_string(),
         };
         println!("  status: {status_label}");
@@ -761,6 +846,16 @@ async fn run_assistant_prompt_async(
             output.running_tasks, output.queued_tasks
         );
     }
+    if let Some(task_id) = &output.task_id {
+        println!(
+            "{}",
+            console::style("── Inspect ────────────────────────────────────────").dim()
+        );
+        println!("  live:   siko task inspect {task_id}");
+        println!("  logs:   siko task logs {task_id}");
+        println!("  result: siko task show {task_id}");
+        println!("  events: siko task events {task_id}");
+    }
     if let Some(error) = &output.persist_error {
         eprintln!(
             "{} failed to persist assistant task store: {error}",
@@ -768,6 +863,18 @@ async fn run_assistant_prompt_async(
         );
     }
     Ok(())
+}
+
+fn send_spinner(message: &'static str) -> indicatif::ProgressBar {
+    let pb = indicatif::ProgressBar::new_spinner();
+    pb.set_style(
+        indicatif::ProgressStyle::with_template("{spinner} {msg} ({elapsed})")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    );
+    pb.set_message(message);
+    pb.enable_steady_tick(Duration::from_millis(120));
+    pb
 }
 
 fn format_duration(d: Duration) -> String {
@@ -778,7 +885,6 @@ fn format_duration(d: Duration) -> String {
         format!("{:6.1}s", secs)
     }
 }
-
 
 fn resolve_assistant_prompt_workspace(
     debug: &DebugConfig,
@@ -923,6 +1029,103 @@ fn print_task_logs(limit: usize, json_output: bool) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+fn run_task_command(command: TaskCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        TaskCommand::List { limit, json } => print_task_list(limit, json),
+        TaskCommand::Show { task_id, json } => print_task_show(&task_id, json),
+        TaskCommand::Logs {
+            task_id,
+            json,
+            full,
+        } => print_assistant_logs(&task_id, json, full),
+        TaskCommand::Events {
+            task_id,
+            operation,
+            event,
+            tool,
+            source,
+            query,
+            json,
+        } => print_assistant_events(
+            &task_id,
+            AgentEventFilter::try_new(operation, event, tool, source, query),
+            json,
+        ),
+        TaskCommand::Inspect {
+            task_id,
+            interval_ms,
+            json,
+        } => inspect_task_stream(&task_id, interval_ms, json),
+    }
+}
+
+fn print_task_list(limit: usize, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let mut tasks = store.list_tasks();
+    tasks.reverse();
+    tasks.truncate(limit);
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
+        println!();
+        return Ok(());
+    }
+
+    if tasks.is_empty() {
+        println!("No task records found.");
+        return Ok(());
+    }
+
+    println!("Tasks (newest first):");
+    println!("{:-<80}", "");
+    for task in &tasks {
+        let id_prefix: String = task.id.chars().take(12).collect();
+        let first_line = task.request.lines().next().unwrap_or("").to_string();
+        println!("{}  {:?}  {}", id_prefix, task.status, first_line);
+    }
+    println!("{:-<80}", "");
+    println!("Showing {} tasks", tasks.len());
+    Ok(())
+}
+
+fn print_task_show(task_id: &str, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let task = store
+        .get_task(task_id)
+        .ok_or_else(|| format!("unknown task id {task_id}"))?;
+
+    if json_output {
+        serde_json::to_writer_pretty(std::io::stdout(), task)?;
+        println!();
+        return Ok(());
+    }
+
+    println!("task: {}", task.id);
+    println!("title: {}", task.title);
+    println!("status: {:?}", task.status);
+    if let Some(root_node) = task.root_node {
+        println!("root: {root_node}");
+    }
+    println!("events: {}", task.events.len());
+    if let Some(report) = &task.last_report {
+        println!("agent runs: {}", report.agent_runs.len());
+        if let Some(artifact_text) = report.artifact_text.as_deref() {
+            println!(
+                "{}",
+                console::style("── Result ─────────────────────────────────────────").dim()
+            );
+            println!("{artifact_text}");
+        } else {
+            println!("result: <none>");
+        }
+    } else {
+        println!("result: <not available yet>");
+    }
+    Ok(())
+}
+
 fn print_assistant_events(
     task_id: &str,
     filter: Result<AgentEventFilter, Box<dyn std::error::Error>>,
@@ -953,6 +1156,136 @@ fn print_assistant_events(
         println!("{}", format_agent_event(&entry));
     }
     Ok(())
+}
+
+fn inspect_task_stream(
+    task_id: &str,
+    interval_ms: u64,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let debug = DebugConfig::from_env();
+    let path = assistant_store_path(&debug);
+    let interval = Duration::from_millis(interval_ms.max(100));
+    let mut printed_task_events = BTreeSet::new();
+    let mut printed_agent_events = BTreeSet::new();
+    let mut last_status = None;
+    let mut printed_result = false;
+    let mut first_poll = true;
+
+    loop {
+        let store = FileTaskStore::open(&path)?;
+        let task = store
+            .get_task(task_id)
+            .ok_or_else(|| format!("unknown task id {task_id}"))?;
+
+        if first_poll && !json_output {
+            println!(
+                "{}",
+                console::style("── History ────────────────────────────────────────").dim()
+            );
+        }
+
+        if last_status.as_ref() != Some(&task.status) {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "type": "task_status",
+                        "task_id": task.id,
+                        "status": &task.status,
+                    }))?
+                );
+            } else {
+                println!("task {} {:?}", task.id, task.status);
+            }
+            last_status = Some(task.status.clone());
+        }
+
+        for event in &task.events {
+            if printed_task_events.insert(event.seq) {
+                if json_output {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&json!({
+                            "type": "task_event",
+                            "task_id": task.id,
+                            "event": event,
+                        }))?
+                    );
+                } else {
+                    println!("{}", format_task_log(event));
+                }
+            }
+        }
+
+        for entry in assistant_agent_events(task, &AgentEventFilter::default()) {
+            let key = (entry.run_index, entry.event_index);
+            if printed_agent_events.insert(key) {
+                if json_output {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&json!({
+                            "type": "agent_event",
+                            "task_id": task.id,
+                            "event": entry,
+                        }))?
+                    );
+                } else {
+                    println!("{}", format_agent_event(&entry));
+                }
+            }
+        }
+
+        if !printed_result
+            && let Some(artifact_text) = task
+                .last_report
+                .as_ref()
+                .and_then(|report| report.artifact_text.as_deref())
+        {
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "type": "task_result",
+                        "task_id": task.id,
+                        "artifact_text": artifact_text,
+                    }))?
+                );
+            } else {
+                println!(
+                    "{}",
+                    console::style("── Result ─────────────────────────────────────────").dim()
+                );
+                println!("{artifact_text}");
+            }
+            printed_result = true;
+        }
+        io::stdout().flush().ok();
+
+        if !task_is_active(&task.status) {
+            return Ok(());
+        }
+
+        if first_poll && !json_output {
+            println!(
+                "{}",
+                console::style(format!(
+                    "── Live (polling every {}ms) ───────────────────────",
+                    interval.as_millis()
+                ))
+                .dim()
+            );
+        }
+        first_poll = false;
+        std::thread::sleep(interval);
+    }
+}
+
+fn task_is_active(status: &AssistantTaskStatus) -> bool {
+    matches!(
+        status,
+        AssistantTaskStatus::Created | AssistantTaskStatus::Queued | AssistantTaskStatus::Running
+    )
 }
 
 fn assistant_store_path(debug: &DebugConfig) -> PathBuf {
@@ -1296,7 +1629,6 @@ async fn run_task_run_split_eval_async(
 
     Ok(output.passed)
 }
-
 
 #[allow(dead_code)]
 fn chrono_now_date() -> String {
@@ -2399,7 +2731,7 @@ fn operation_result_summary(result: &AgentRunResult) -> String {
                     truncate_for_eval(reason, 240)
                 )
             }
-        },
+        }
         NodeOperationOutput::Executed { output } => {
             format!("executed output={}", truncate_for_eval(output, 500))
         }
@@ -2841,11 +3173,15 @@ fn resolve_agent_host_launch_from(
         // Check for bundled JS first, then TS source
         let js_entry = sibling_dir.join("runtime-host.js");
         let ts_entry = sibling_dir.join("runtime-host.ts");
-        let entry = if js_entry.exists() { js_entry } else { ts_entry };
+        let entry = if js_entry.exists() {
+            js_entry
+        } else {
+            ts_entry
+        };
         if entry.exists() {
             // Use bun from PATH or known locations
             let bun_cmd = env("BUN")
-                .or_else(|| which_bun())
+                .or_else(which_bun)
                 .unwrap_or_else(|| "bun".to_string());
             return AgentHostLaunch {
                 command: bun_cmd,
@@ -2898,7 +3234,9 @@ fn sibling_agent_host_source_dir(current_exe: Option<&Path>) -> Option<PathBuf> 
 /// Try to find bun executable — check common locations and PATH.
 fn which_bun() -> Option<String> {
     let candidates = [
-        std::env::var("HOME").map(|h| PathBuf::from(h).join(".bun/bin/bun")).ok(),
+        std::env::var("HOME")
+            .map(|h| PathBuf::from(h).join(".bun/bin/bun"))
+            .ok(),
         Some(PathBuf::from("/opt/homebrew/bin/bun")),
         Some(PathBuf::from("/usr/local/bin/bun")),
         Some(PathBuf::from("/usr/bin/bun")),
@@ -2909,24 +3247,23 @@ fn which_bun() -> Option<String> {
         }
     }
     // Try PATH lookup via `which bun`
-    if let Ok(output) = std::process::Command::new("which").arg("bun").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+    if let Ok(output) = std::process::Command::new("which").arg("bun").output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(path);
         }
     }
     // Try `command -v bun` as alternative
     if let Ok(output) = std::process::Command::new("bash")
         .args(["-c", "command -v bun"])
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(path);
         }
     }
     None
@@ -2980,19 +3317,34 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     // For JSON mode, output current config/detection status as structured data
     if json_output {
         let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY")
-            .ok().filter(|k| !k.is_empty()).is_some();
+            .ok()
+            .filter(|k| !k.is_empty())
+            .is_some();
         let has_kimi_key = std::env::var("KIMI_CODE_API_KEY")
-            .ok().filter(|k| !k.is_empty()).is_some();
+            .ok()
+            .filter(|k| !k.is_empty())
+            .is_some();
         let has_claude_code = std::process::Command::new("which")
-            .arg("claude").output().map(|o| o.status.success()).unwrap_or(false);
+            .arg("claude")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         let has_codex = std::process::Command::new("which")
-            .arg("codex").output().map(|o| o.status.success()).unwrap_or(false);
+            .arg("codex")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         let has_cursor = std::process::Command::new("which")
-            .arg("cursor").output().map(|o| o.status.success()).unwrap_or(false);
+            .arg("cursor")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         let config_exists = config_path.exists();
         let config_content = if config_exists {
             std::fs::read_to_string(&config_path).ok()
-        } else { None };
+        } else {
+            None
+        };
 
         let data = serde_json::json!({
             "config_path": config_path.to_string_lossy(),
@@ -3056,7 +3408,10 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    println!("{} Auto-detection:", console::style("[DETECT]").cyan().bold());
+    println!(
+        "{} Auto-detection:",
+        console::style("[DETECT]").cyan().bold()
+    );
     println!(
         "   DEEPSEEK_API_KEY       {}",
         if has_deepseek_key {
@@ -3144,35 +3499,43 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let (backend, needs_api_key) = match provider {
         "claude" => {
             println!(
-                "   {} Claude Code backend — uses the `claude` CLI with your existing subscription.", console::style("[INFO]").cyan()
+                "   {} Claude Code backend — uses the `claude` CLI with your existing subscription.",
+                console::style("[INFO]").cyan()
             );
             ("claude-code".to_string(), false)
         }
         "codex" => {
             if codex_logged_in {
                 println!(
-                    "   {} Codex backend — uses the `codex` CLI with your existing subscription.", console::style("[INFO]").cyan()
+                    "   {} Codex backend — uses the `codex` CLI with your existing subscription.",
+                    console::style("[INFO]").cyan()
                 );
             } else {
                 println!(
-                    "{} Codex CLI found but not logged in. Run 'codex login' first, or choose another provider.", console::style("[!]").yellow().bold()
+                    "{} Codex CLI found but not logged in. Run 'codex login' first, or choose another provider.",
+                    console::style("[!]").yellow().bold()
                 );
             }
             ("codex".to_string(), false)
         }
         "cursor" => {
             println!(
-                "   {} Cursor backend — uses the `cursor` CLI with your existing subscription.", console::style("[INFO]").cyan()
+                "   {} Cursor backend — uses the `cursor` CLI with your existing subscription.",
+                console::style("[INFO]").cyan()
             );
             ("cursor".to_string(), false)
         }
         "kimi" => {
             if has_claude_code {
-                println!("   {} Kimi requires Claude Code runtime.", console::style("[INFO]").cyan());
+                println!(
+                    "   {} Kimi requires Claude Code runtime.",
+                    console::style("[INFO]").cyan()
+                );
                 ("claude-code".to_string(), true)
             } else {
                 println!(
-                    "{} Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code", console::style("[!]").yellow().bold()
+                    "{} Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code",
+                    console::style("[!]").yellow().bold()
                 );
                 return Ok(());
             }
@@ -3230,7 +3593,11 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
             .is_some();
         if !has_key {
             println!();
-            println!("{} {} is not set.", console::style("[KEY]").yellow().bold(), key_var);
+            println!(
+                "{} {} is not set.",
+                console::style("[KEY]").yellow().bold(),
+                key_var
+            );
             let api_key: String = Input::with_theme(&theme)
                 .with_prompt("Enter your API key (or leave empty to skip)")
                 .allow_empty(true)
@@ -3243,8 +3610,10 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
                     String::new()
                 };
                 println!(
-                    "   {} Saved to config. Also add to shell: export {}={}", console::style("[INFO]").cyan(),
-                    key_var, masked
+                    "   {} Saved to config. Also add to shell: export {}={}",
+                    console::style("[INFO]").cyan(),
+                    key_var,
+                    masked
                 );
             }
         }
@@ -3280,7 +3649,11 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(&config_path, config_content)?;
 
     println!();
-    println!("{} Config written to {}", console::style("[OK]").green().bold(), config_path.display());
+    println!(
+        "{} Config written to {}",
+        console::style("[OK]").green().bold(),
+        config_path.display()
+    );
     println!();
     println!("{} Summary:", console::style("[SUMMARY]").magenta().bold());
     println!("   Provider:   {}", provider);
@@ -3308,11 +3681,13 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
         .is_none()
     {
         println!();
-        println!("{} No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...", console::style("[!]").yellow().bold());
+        println!(
+            "{} No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...",
+            console::style("[!]").yellow().bold()
+        );
     }
     Ok(())
 }
-
 
 fn run_metrics_command(json_output: bool) {
     // TODO: Integrate with a global/live MetricsCollector instance once one is
@@ -3437,6 +3812,99 @@ mod tests {
                 && tool == "Read"
                 && source == "agent-loop"
                 && query == "src/cli.rs"
+        ));
+    }
+
+    #[test]
+    fn parses_task_list_command() {
+        let cli = Cli::try_parse_from(["siko", "task", "list", "--limit", "5", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Task {
+                command: TaskCommand::List {
+                    limit: 5,
+                    json: true
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_task_show_command() {
+        let cli = Cli::try_parse_from(["siko", "task", "show", "task_1", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Task {
+                command: TaskCommand::Show {
+                    task_id,
+                    json: true
+                }
+            }) if task_id == "task_1"
+        ));
+    }
+
+    #[test]
+    fn parses_task_events_command() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "task",
+            "events",
+            "task_1",
+            "--operation",
+            "execute",
+            "--event",
+            "tool_call_start",
+            "--tool",
+            "Read",
+            "--source",
+            "agent-loop",
+            "--query",
+            "src/cli.rs",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Task {
+                command: TaskCommand::Events {
+                    task_id,
+                    operation: Some(operation),
+                    event: Some(event),
+                    tool: Some(tool),
+                    source: Some(source),
+                    query: Some(query),
+                    json: true,
+                }
+            }) if task_id == "task_1"
+                && operation == "execute"
+                && event == "tool_call_start"
+                && tool == "Read"
+                && source == "agent-loop"
+                && query == "src/cli.rs"
+        ));
+    }
+
+    #[test]
+    fn parses_task_inspect_command() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "task",
+            "inspect",
+            "task_1",
+            "--interval-ms",
+            "250",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Task {
+                command: TaskCommand::Inspect {
+                    task_id,
+                    interval_ms: 250,
+                    json: true
+                }
+            }) if task_id == "task_1"
         ));
     }
 
@@ -4012,7 +4480,6 @@ workspace:
             }
         );
     }
-
 
     // ── Utility function tests ──────────────────────────────────────────
 

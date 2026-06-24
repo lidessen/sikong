@@ -501,11 +501,6 @@ impl Drop for ProcessAgentRunScheduler {
         std::thread::sleep(Duration::from_millis(100));
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
-            // Wait briefly for the process to exit (best-effort)
-            let _ = std::thread::spawn(move || {
-                let _ = std::thread::sleep(Duration::from_millis(500));
-                let _ = child.kill();
-            });
         }
         self.cleanup_socket();
     }

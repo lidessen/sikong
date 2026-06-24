@@ -17,8 +17,17 @@ impl AgentRunScheduler for AuthSystemPlanner {
         input: AgentRunRequest,
         _cancellation: CancellationToken,
     ) -> AgentRunResponse {
-        let node = input.input.get("node").and_then(|v| v.as_object()).cloned().unwrap_or_default();
-        let key = node.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let node = input
+            .input
+            .get("node")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let key = node
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let terminal_tool = input.terminal_tool_set[0].clone();
         let arguments = match terminal_tool.as_str() {
@@ -196,8 +205,7 @@ async fn eval_large_task_decomposition_plan_quality() {
     // Use stop_after_route_depth(1) so the root plans, creates children,
     // then each child gets specified/planned at depth 1 before stopping.
     // This lets us observe multi-level plan output without full execution.
-    let mut engine = Engine::new(Workspaces::default(), worker)
-        .with_stop_after_route_depth(1);
+    let mut engine = Engine::new(Workspaces::default(), worker).with_stop_after_route_depth(1);
 
     // Create a root node for the massive authentication system task
     let root = engine.insert_root(NodeTemplate {
@@ -214,7 +222,10 @@ async fn eval_large_task_decomposition_plan_quality() {
     });
 
     // Run with plan-only at depth 1 — root Specify→Plan→children Specify→Plan→stop
-    let report = engine.run(root).await.expect("plan-only run should succeed");
+    let report = engine
+        .run(root)
+        .await
+        .expect("plan-only run should succeed");
 
     // ═══════════════════════════════════════════════════════════════════
     //  Metrics Collection
@@ -223,7 +234,9 @@ async fn eval_large_task_decomposition_plan_quality() {
     // ── Metric 1: Root plan group ─────────────────────────────────────
 
     let root_node = engine.node(root).expect("root node should exist");
-    let plan_group = engine.node_plan_group(root).expect("plan group method should work")
+    let plan_group = engine
+        .node_plan_group(root)
+        .expect("plan group method should work")
         .expect("root should have a Group plan");
 
     let child_ids = root_node.children.clone();
@@ -248,7 +261,7 @@ async fn eval_large_task_decomposition_plan_quality() {
     // For an XLarge "authentication system", expect 4-7 top-level children.
     // Too flat (≤2) = under-split; too many (≥10) = over-split.
     assert!(
-        child_count >= 3 && child_count <= 8,
+        (3..=8).contains(&child_count),
         "QUALITY FAIL: child count {child_count} outside [3, 8] for auth system"
     );
     println!("✅ METRIC 1: Child count = {child_count} (expected 3-8)");
@@ -256,13 +269,15 @@ async fn eval_large_task_decomposition_plan_quality() {
     // ═══════════════════════════════════════════════════════════════════
     //  Quality Metric 2: Scope boundaries are clear and non-overlapping
     // ═══════════════════════════════════════════════════════════════════
-    let scope_pairs: Vec<(String, Vec<String>)> = child_keys.iter().cloned()
+    let scope_pairs: Vec<(String, Vec<String>)> = child_keys
+        .iter()
+        .cloned()
         .zip(child_scopes.iter().cloned())
         .collect();
 
     let mut overlap_count = 0;
     for i in 0..scope_pairs.len() {
-        for j in (i+1)..scope_pairs.len() {
+        for j in (i + 1)..scope_pairs.len() {
             let (key_a, scopes_a) = &scope_pairs[i];
             let (key_b, scopes_b) = &scope_pairs[j];
             for sa in scopes_a {
@@ -291,21 +306,33 @@ async fn eval_large_task_decomposition_plan_quality() {
         "QUALITY FAIL: root should be Stage, got {:?}",
         plan_group.mode
     );
-    println!("✅ METRIC 3: Root group mode = {:?} (expected Stage)", plan_group.mode);
+    println!(
+        "✅ METRIC 3: Root group mode = {:?} (expected Stage)",
+        plan_group.mode
+    );
 
     // ═══════════════════════════════════════════════════════════════════
     //  Metric 4: Sub-plan validation (OAuth integration)
     // ═══════════════════════════════════════════════════════════════════
     // OAuth should have a sub-plan (it's size=large → NeedsPlanning)
-    let oauth_child_id = child_ids.iter().find_map(|id| {
-        let node = engine.node(*id).ok()?;
-        if node.key.0 == "oauth-integration" { Some(*id) } else { None }
-    }).expect("oauth-integration child should exist");
+    let oauth_child_id = child_ids
+        .iter()
+        .find_map(|id| {
+            let node = engine.node(*id).ok()?;
+            if node.key.0 == "oauth-integration" {
+                Some(*id)
+            } else {
+                None
+            }
+        })
+        .expect("oauth-integration child should exist");
 
     let oauth_node = engine.node(oauth_child_id).expect("oauth child");
-    let oauth_group = engine.node_plan_group(oauth_child_id).expect("oauth child")
+    let oauth_group = engine
+        .node_plan_group(oauth_child_id)
+        .expect("oauth child")
         .expect("oauth-integration should have a Group plan");
-    
+
     // OAuth providers are independent → should be Parallel
     assert_eq!(
         oauth_group.mode,
@@ -313,7 +340,10 @@ async fn eval_large_task_decomposition_plan_quality() {
         "QUALITY FAIL: OAuth should be Parallel, got {:?}",
         oauth_group.mode
     );
-    println!("✅ METRIC 4: OAuth sub-group mode = {:?} (expected Parallel)", oauth_group.mode);
+    println!(
+        "✅ METRIC 4: OAuth sub-group mode = {:?} (expected Parallel)",
+        oauth_group.mode
+    );
 
     // OAuth should have 3 provider children
     assert_eq!(
@@ -322,12 +352,17 @@ async fn eval_large_task_decomposition_plan_quality() {
         "QUALITY FAIL: OAuth should have 3 providers, got {}",
         oauth_node.children.len()
     );
-    println!("✅ METRIC 4b: OAuth has {} provider children (expected 3)", oauth_node.children.len());
+    println!(
+        "✅ METRIC 4b: OAuth has {} provider children (expected 3)",
+        oauth_node.children.len()
+    );
 
     // ═══════════════════════════════════════════════════════════════════
     //  Metric 5: Event log evidence of planning
     // ═══════════════════════════════════════════════════════════════════
-    let plan_events: Vec<_> = engine.events().iter()
+    let plan_events: Vec<_> = engine
+        .events()
+        .iter()
         .filter(|e| e.operation == NodeOperation::Plan)
         .collect();
     assert!(!plan_events.is_empty(), "QUALITY FAIL: No Plan events");
@@ -339,7 +374,9 @@ async fn eval_large_task_decomposition_plan_quality() {
     // Since stop_after_route_depth(1) stops after child Plan at depth 1,
     // no grandchildren (e.g., google-oauth) are resolved, and no
     // Execute operations occur.
-    let execute_events: Vec<_> = engine.events().iter()
+    let execute_events: Vec<_> = engine
+        .events()
+        .iter()
         .filter(|e| e.operation == NodeOperation::Execute)
         .collect();
     assert!(
