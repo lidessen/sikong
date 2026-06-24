@@ -632,6 +632,9 @@ async fn run_assistant_prompt_async(
     println!("{} Processing...", console::style(" >>").bold().green());
     io::stdout().flush().ok();
     let reply = session.handle_message(&mut store, message).await;
+    if !json_output {
+        println!("{}", console::style(" >> done").dim().to_string());
+    }
     session.wait_for_all(&mut store, Duration::from_secs(300)).await;
     let state = session.state();
     let task_status = reply
