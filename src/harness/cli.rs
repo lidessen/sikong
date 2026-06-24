@@ -955,9 +955,7 @@ fn print_assistant_logs(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let task = store
-        .get_task(task_id)
-        .ok_or_else(|| format!("unknown task id {task_id}"))?;
+    let task = resolve_task_ref(&store, task_id)?;
 
     if full_output {
         serde_json::to_writer_pretty(std::io::stdout(), task)?;
@@ -981,7 +979,8 @@ fn print_assistant_logs(
 fn print_assistant_list(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let tasks = store.list_tasks();
+    let mut tasks = store.list_tasks();
+    sort_tasks_newest_first(&mut tasks);
 
     if json_output {
         serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
@@ -990,7 +989,7 @@ fn print_assistant_list(json_output: bool) -> Result<(), Box<dyn std::error::Err
     }
 
     for task in &tasks {
-        let id_prefix: String = task.id.chars().take(12).collect();
+        let id_prefix = task_list_id(&task.id);
         let first_line = task.request.lines().next().unwrap_or("").to_string();
         println!("{}  {:?}  {}", id_prefix, task.status, first_line);
     }
@@ -1001,9 +1000,7 @@ fn print_task_logs(limit: usize, json_output: bool) -> Result<(), Box<dyn std::e
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let mut tasks = store.list_tasks();
-    // Sort by some ordering - list_tasks may return in arbitrary order.
-    // For now we just take the last `limit` tasks
-    tasks.reverse();
+    sort_tasks_newest_first(&mut tasks);
     tasks.truncate(limit);
 
     if json_output {
@@ -1020,13 +1017,46 @@ fn print_task_logs(limit: usize, json_output: bool) -> Result<(), Box<dyn std::e
     println!("Recent task execution records (last {}):", limit);
     println!("{:-<80}", "");
     for task in &tasks {
-        let id_prefix: String = task.id.chars().take(12).collect();
+        let id_prefix = task_list_id(&task.id);
         let first_line = task.request.lines().next().unwrap_or("").to_string();
         println!("{}  {:?}  {}", id_prefix, task.status, first_line);
     }
     println!("{:-<80}", "");
     println!("Total: {} tasks", tasks.len());
     Ok(())
+}
+
+fn resolve_task_ref<'a>(
+    store: &'a FileTaskStore,
+    task_ref: &str,
+) -> Result<&'a AssistantTask, Box<dyn std::error::Error>> {
+    if let Some(task) = store.get_task(task_ref) {
+        return Ok(task);
+    }
+
+    let matches = store
+        .list_tasks()
+        .into_iter()
+        .filter(|task| task.id.starts_with(task_ref))
+        .collect::<Vec<_>>();
+
+    match matches.len() {
+        0 => Err(format!("unknown task id {task_ref}").into()),
+        1 => {
+            let id = matches[0].id.clone();
+            store
+                .get_task(&id)
+                .ok_or_else(|| format!("unknown task id {task_ref}").into())
+        }
+        _ => {
+            let ids = matches
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(format!("ambiguous task id prefix {task_ref}; matches: {ids}").into())
+        }
+    }
 }
 
 fn run_task_command(command: TaskCommand) -> Result<(), Box<dyn std::error::Error>> {
@@ -1063,7 +1093,7 @@ fn print_task_list(limit: usize, json_output: bool) -> Result<(), Box<dyn std::e
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let mut tasks = store.list_tasks();
-    tasks.reverse();
+    sort_tasks_newest_first(&mut tasks);
     tasks.truncate(limit);
 
     if json_output {
@@ -1080,7 +1110,7 @@ fn print_task_list(limit: usize, json_output: bool) -> Result<(), Box<dyn std::e
     println!("Tasks (newest first):");
     println!("{:-<80}", "");
     for task in &tasks {
-        let id_prefix: String = task.id.chars().take(12).collect();
+        let id_prefix = task_list_id(&task.id);
         let first_line = task.request.lines().next().unwrap_or("").to_string();
         println!("{}  {:?}  {}", id_prefix, task.status, first_line);
     }
@@ -1089,12 +1119,44 @@ fn print_task_list(limit: usize, json_output: bool) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+fn task_list_id(task_id: &str) -> String {
+    if task_id.chars().count() <= 16 {
+        return task_id.to_string();
+    }
+    task_id.chars().take(12).collect()
+}
+
+fn sort_tasks_newest_first(tasks: &mut [AssistantTask]) {
+    tasks.sort_by(|a, b| {
+        task_created_sort_key(b)
+            .cmp(&task_created_sort_key(a))
+            .then_with(|| b.id.cmp(&a.id))
+    });
+}
+
+fn task_created_sort_key(task: &AssistantTask) -> u64 {
+    if task.created_at_ms != 0 {
+        return task.created_at_ms;
+    }
+    legacy_uuid_v7_timestamp_ms(&task.id).unwrap_or_default()
+}
+
+fn legacy_uuid_v7_timestamp_ms(id: &str) -> Option<u64> {
+    let hex = id
+        .chars()
+        .filter(|ch| *ch != '-')
+        .take(12)
+        .collect::<String>();
+    if hex.len() != 12 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    u64::from_str_radix(&hex, 16).ok()
+}
+
 fn print_task_show(task_id: &str, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let task = store
-        .get_task(task_id)
-        .ok_or_else(|| format!("unknown task id {task_id}"))?;
+    let task = resolve_task_ref(&store, task_id)?;
 
     if json_output {
         serde_json::to_writer_pretty(std::io::stdout(), task)?;
@@ -1134,9 +1196,7 @@ fn print_assistant_events(
     let filter = filter?;
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let task = store
-        .get_task(task_id)
-        .ok_or_else(|| format!("unknown task id {task_id}"))?;
+    let task = resolve_task_ref(&store, task_id)?;
     let entries = assistant_agent_events(task, &filter);
 
     if json_output {
@@ -1174,9 +1234,7 @@ fn inspect_task_stream(
 
     loop {
         let store = FileTaskStore::open(&path)?;
-        let task = store
-            .get_task(task_id)
-            .ok_or_else(|| format!("unknown task id {task_id}"))?;
+        let task = resolve_task_ref(&store, task_id)?;
 
         if first_poll && !json_output {
             println!(
@@ -3906,6 +3964,116 @@ mod tests {
                 }
             }) if task_id == "task_1"
         ));
+    }
+
+    #[test]
+    fn resolve_task_ref_accepts_unique_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tasks.json");
+        fs::write(
+            &path,
+            r#"{
+  "tasks": {
+    "019ef7bf-1b03-7000-8000-000000000001": {
+      "id": "019ef7bf-1b03-7000-8000-000000000001",
+      "title": "one",
+      "request": "one",
+      "status": "Running",
+      "root_node": null,
+      "last_report": null,
+      "events": []
+    },
+    "019ef7c0-2222-7000-8000-000000000002": {
+      "id": "019ef7c0-2222-7000-8000-000000000002",
+      "title": "two",
+      "request": "two",
+      "status": "Completed",
+      "root_node": null,
+      "last_report": null,
+      "events": []
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        let store = FileTaskStore::open(path).unwrap();
+
+        let task = resolve_task_ref(&store, "019ef7bf-1b0").unwrap();
+
+        assert_eq!(task.id, "019ef7bf-1b03-7000-8000-000000000001");
+    }
+
+    #[test]
+    fn resolve_task_ref_rejects_ambiguous_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tasks.json");
+        fs::write(
+            &path,
+            r#"{
+  "tasks": {
+    "019ef7bf-1b03-7000-8000-000000000001": {
+      "id": "019ef7bf-1b03-7000-8000-000000000001",
+      "title": "one",
+      "request": "one",
+      "status": "Running",
+      "root_node": null,
+      "last_report": null,
+      "events": []
+    },
+    "019ef7bf-1b04-7000-8000-000000000002": {
+      "id": "019ef7bf-1b04-7000-8000-000000000002",
+      "title": "two",
+      "request": "two",
+      "status": "Completed",
+      "root_node": null,
+      "last_report": null,
+      "events": []
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        let store = FileTaskStore::open(path).unwrap();
+
+        let error = resolve_task_ref(&store, "019ef7bf-1b0").unwrap_err();
+
+        assert!(error.to_string().contains("ambiguous task id prefix"));
+    }
+
+    #[test]
+    fn task_list_id_preserves_short_ids() {
+        assert_eq!(task_list_id("mjo8xq4ab-Cd3_"), "mjo8xq4ab-Cd3_");
+    }
+
+    #[test]
+    fn task_list_id_truncates_legacy_uuid_ids() {
+        assert_eq!(
+            task_list_id("019ef7bf-1b03-7ec2-be4d-f200fb793694"),
+            "019ef7bf-1b0"
+        );
+    }
+
+    #[test]
+    fn sort_tasks_newest_first_uses_created_at_not_id() {
+        let mut older = AssistantTask::new("zzzzzzzz".to_string(), "older".to_string());
+        older.created_at_ms = 10;
+        let mut newer = AssistantTask::new("aaaaaaaa".to_string(), "newer".to_string());
+        newer.created_at_ms = 20;
+        let mut tasks = vec![older, newer];
+
+        sort_tasks_newest_first(&mut tasks);
+
+        assert_eq!(tasks[0].id, "aaaaaaaa");
+        assert_eq!(tasks[1].id, "zzzzzzzz");
+    }
+
+    #[test]
+    fn legacy_uuid_v7_timestamp_ms_reads_time_prefix() {
+        assert_eq!(
+            legacy_uuid_v7_timestamp_ms("019ef7bf-1b03-7ec2-be4d-f200fb793694"),
+            u64::from_str_radix("019ef7bf1b03", 16).ok()
+        );
+        assert_eq!(legacy_uuid_v7_timestamp_ms("short-id"), None);
     }
 
     #[test]

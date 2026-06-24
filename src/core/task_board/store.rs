@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use super::{AssistantTask, AssistantTaskEventRecord, AssistantTaskStatus, TaskId};
 use crate::{EngineReport, NodeId};
@@ -45,7 +45,7 @@ impl MemoryTaskStore {
 
 impl TaskStore for MemoryTaskStore {
     fn create_task(&mut self, request: String) -> TaskId {
-        let id = Uuid::now_v7().to_string();
+        let id = new_task_id(&self.tasks);
         self.tasks
             .insert(id.clone(), AssistantTask::new(id.clone(), request));
         id
@@ -149,7 +149,7 @@ impl FileTaskStore {
 
 impl TaskStore for FileTaskStore {
     fn create_task(&mut self, request: String) -> TaskId {
-        let id = Uuid::now_v7().to_string();
+        let id = new_task_id(&self.tasks);
         self.tasks
             .insert(id.clone(), AssistantTask::new(id.clone(), request));
         self.persist();
@@ -182,6 +182,15 @@ impl TaskStore for FileTaskStore {
         if let Some(task) = self.tasks.get_mut(id) {
             task.apply_report(root, report);
             self.persist();
+        }
+    }
+}
+
+fn new_task_id(existing: &BTreeMap<TaskId, AssistantTask>) -> TaskId {
+    loop {
+        let id = nanoid!(8);
+        if !existing.contains_key(&id) {
+            return id;
         }
     }
 }
@@ -282,5 +291,59 @@ mod tests {
             msg.contains("inner error"),
             "error should contain inner message: {msg}"
         );
+    }
+
+    #[test]
+    fn memory_store_generates_short_task_ids() {
+        let mut store = MemoryTaskStore::new();
+
+        let id = store.create_task("short id".to_string());
+
+        assert!(id.chars().count() == 8, "task id should stay compact: {id}");
+        let task = store.get_task(&id).expect("task should exist");
+        assert!(task.created_at_ms > 0);
+        assert!(store.get_task(&id).is_some());
+    }
+
+    #[test]
+    fn file_store_generates_unique_short_task_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tasks.json");
+        let mut store = FileTaskStore::open(&path).unwrap();
+
+        let first = store.create_task("first".to_string());
+        let second = store.create_task("second".to_string());
+
+        assert_ne!(first, second);
+        assert_eq!(first.chars().count(), 8);
+        assert_eq!(second.chars().count(), 8);
+    }
+
+    #[test]
+    fn legacy_persisted_tasks_without_created_at_default_to_zero() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tasks.json");
+        std::fs::write(
+            &path,
+            r#"{
+  "tasks": {
+    "legacy-task": {
+      "id": "legacy-task",
+      "title": "legacy",
+      "request": "legacy",
+      "status": "Completed",
+      "root_node": null,
+      "last_report": null,
+      "events": []
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let store = FileTaskStore::open(path).unwrap();
+        let task = store.get_task("legacy-task").expect("legacy task");
+
+        assert_eq!(task.created_at_ms, 0);
     }
 }

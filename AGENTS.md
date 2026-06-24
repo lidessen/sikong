@@ -67,6 +67,21 @@ messages as steer input: inspect or create assistant task-board items, let the
 Rust task-run engine produce reviewable artifacts, then use those artifacts to
 decide the next bounded slice.
 
+For day-to-day Sikong self-development, use the project skill
+`.reasonix/skills/sikong-iterate/SKILL.md`. It is the current `siko send`-based
+operating guide for creating bounded development tasks, inspecting full
+historical and live task events, accepting or rejecting artifacts, and recording
+feedback. The older scenario/eval dogfood surfaces are reference and evaluation
+tools; they are not the default intake path for normal Sikong project work.
+
+When starting a non-trivial self-development task, create one bounded assistant
+task through `siko send` and include the dogfood attention contract: mainline,
+owning layer (`goal`, `design`, `fact`, `reframe`, or `harness`), parent
+acceptance evidence, child autonomy boundary, and upward artifact. Use
+`siko task list` and `siko task inspect <task-id>` to review the task. `inspect`
+must be treated as the place to replay prior events and follow new events from
+whatever point the operator joins the task.
+
 Do not directly edit implementation code as the first response to self-improvement
 requests. Intervene manually only when the dogfood loop cannot make progress
 because of missing infrastructure, a runtime failure, an invalid protocol

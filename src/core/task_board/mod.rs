@@ -31,6 +31,8 @@ pub struct AssistantTask {
     pub id: TaskId,
     pub title: String,
     pub request: String,
+    #[serde(default)]
+    pub created_at_ms: u64,
     pub status: AssistantTaskStatus,
     pub root_node: Option<NodeId>,
     pub last_report: Option<EngineReport>,
@@ -67,6 +69,7 @@ impl AssistantTask {
             id,
             title: title_from_request(&request),
             request,
+            created_at_ms: timestamp_ms(),
             status: AssistantTaskStatus::Created,
             root_node: None,
             last_report: None,
