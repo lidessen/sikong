@@ -17,6 +17,7 @@ pub mod eval;
 pub use eval::EvalCommand;
 
 pub use launch::AgentHostLaunch;
+pub mod util;
 
 /// Consistent JSON output format for all commands.
 /// Wraps command output in a uniform structure with machine-readable keys.
