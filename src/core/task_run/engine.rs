@@ -693,7 +693,10 @@ where
                 self.node_mut(node_id)?.status = NodeStatus::WaitingForInfo;
                 Ok(None)
             }
-            VerificationVerdict::Reject { failure_class, .. } => {
+            VerificationVerdict::Reject {
+                failure_class,
+                reason,
+            } => {
                 if matches!(
                     failure_class,
                     FailureClass::MissingInfo | FailureClass::SpecAmbiguity
@@ -706,7 +709,7 @@ where
                     self.node_mut(node_id)?.status = NodeStatus::WaitingForInfo;
                     return Ok(None);
                 }
-                self.handle_reject(node_id, failure_class, cancellation)
+                self.handle_reject(node_id, failure_class, reason, cancellation)
                     .await
             }
         }
@@ -814,6 +817,7 @@ where
         &mut self,
         node_id: NodeId,
         failure_class: FailureClass,
+        reason: String,
         cancellation: &CancellationToken,
     ) -> Result<Option<ArtifactId>, EngineError> {
         let attempts = self.node(node_id)?.execution_attempts;
@@ -836,13 +840,16 @@ where
             return Ok(None);
         }
 
-        // execution-quality failure: skip Specify, route directly back to Execute
+        // Ralph loop: preserve the candidate artifact and inject verifier
+        // feedback so the retry Execute can repair gaps instead of starting
+        // fresh. The candidate stays accessible via Operation Context and the
+        // verdict reason is stored on the node for the next Execute prompt.
+        self.node_mut(node_id)?.last_verdict_reason = Some(reason);
         self.record(
             node_id,
             NodeOperation::Execute,
             format!("retrying execute after {failure_class:?}"),
         );
-        self.node_mut(node_id)?.candidate = None;
         self.execute(node_id, cancellation).await?;
         self.verify_and_maybe_commit(node_id, cancellation).await
     }
@@ -881,6 +888,7 @@ where
                 accepted_artifact: None,
                 execution_attempts: 0,
                 verification_attempts: 0,
+                last_verdict_reason: None,
             },
         );
         id

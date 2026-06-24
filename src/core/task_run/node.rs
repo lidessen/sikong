@@ -267,6 +267,7 @@ pub struct ProblemNode {
     pub accepted_artifact: Option<ArtifactId>,
     pub execution_attempts: u32,
     pub verification_attempts: u32,
+    pub last_verdict_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

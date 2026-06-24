@@ -1078,5 +1078,6 @@ fn problem_node(plan: NodePlan) -> ProblemNode {
         accepted_artifact: None,
         execution_attempts: 0,
         verification_attempts: 0,
+        last_verdict_reason: None,
     }
 }

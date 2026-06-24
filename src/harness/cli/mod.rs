@@ -2140,6 +2140,7 @@ fn problem_node(id: NodeId, key: &str, intent: &str, plan: NodePlan) -> ProblemN
         accepted_artifact: None,
         execution_attempts: 0,
         verification_attempts: 0,
+        last_verdict_reason: None,
         policy: NodePolicy::Explore,
         task_type: TaskType::Explore,
     }
