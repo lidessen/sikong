@@ -384,10 +384,38 @@ impl TaskBoard {
         );
 
         tokio::spawn(async move {
+            // Guard sends a Failed event if the future is dropped (panic,
+            // cancellation, or runtime shutdown) without completing normally.
+            struct SpawnGuard {
+                task_id: String,
+                tx: UnboundedSender<TaskRunEvent>,
+                sent_event: bool,
+            }
+
+            impl Drop for SpawnGuard {
+                fn drop(&mut self) {
+                    if !self.sent_event {
+                        let _ = self.tx.send(TaskRunEvent::Failed {
+                            task_id: self.task_id.clone(),
+                            error: EngineError::AgentProtocol(
+                                "task panicked or was cancelled".into(),
+                            ),
+                        });
+                    }
+                }
+            }
+
+            let mut guard = SpawnGuard {
+                task_id: queued.task_id.clone(),
+                tx: tx.clone(),
+                sent_event: false,
+            };
+
             if cancellation.is_cancelled() {
                 let _ = tx.send(TaskRunEvent::Cancelled {
                     task_id: queued.task_id,
                 });
+                guard.sent_event = true;
                 return;
             }
 
@@ -413,6 +441,7 @@ impl TaskBoard {
                 },
             };
             let _ = tx.send(event);
+            guard.sent_event = true;
         });
     }
 

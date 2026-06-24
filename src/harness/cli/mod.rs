@@ -756,6 +756,30 @@ async fn run_assistant_prompt_async(
                 .wait_for_all(&mut store, Duration::from_millis(wait_ms))
                 .await
         };
+        // Keep the tokio runtime alive while background engine tasks are still
+        // running. Without this, the runtime drops when the CLI returns and
+        // spawned tasks are cancelled silently.
+        let snapshot = if snapshot.running_tasks > 0 || snapshot.queued_tasks > 0 {
+            // Poll with short timeout until the task board is idle.
+            // Use 1s intervals so the CLI stays responsive to cancellation.
+            let poll_interval = Duration::from_millis(1000);
+            loop {
+                let s = session
+                    .wait_for_all(&mut store, poll_interval)
+                    .await;
+                if s.running_tasks == 0 && s.queued_tasks == 0 {
+                    break s;
+                }
+                if let Some(ref pb) = task_progress {
+                    pb.set_message(format!(
+                        "task board: {} running, {} queued",
+                        s.running_tasks, s.queued_tasks
+                    ));
+                }
+            }
+        } else {
+            snapshot
+        };
         if let Some(ref pb) = task_progress {
             if snapshot.running_tasks == 0 && snapshot.queued_tasks == 0 {
                 pb.finish_with_message("task board idle");
