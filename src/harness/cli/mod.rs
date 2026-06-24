@@ -1,6 +1,5 @@
-use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, BufReader, Write};
+use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -10,7 +9,7 @@ use crate::{
     AcpServer, AgentAssistantLoop, AgentPromptSection, AgentRunRequest, AgentRunResponse,
     AgentRunResult, AgentRunScheduler, AgentRuntimeProfile, AgentTokenUsage, AgentToolCall,
     AgentToolSpec, Artifact, ArtifactContentKind, AssistantSession, AssistantSessionConfig,
-    AssistantTask, AssistantTaskEvent, AssistantTaskStatus, Budget, CancellationToken,
+    AssistantTaskStatus, Budget, CancellationToken,
     CapabilityProfile, DebugConfig, Engine, FileTaskStore, NodeId, NodeOperation,
     NodeOperationOutput, NodePlan, NodePolicy, NodeStatus, NodeTemplate, OperationHarness,
     PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig,
@@ -27,6 +26,9 @@ use tracing_subscriber::EnvFilter;
 
 pub mod launch;
 pub mod metrics;
+pub mod setup;
+pub mod task;
+pub use task::TaskCommand;
 
 pub use launch::AgentHostLaunch;
 
@@ -189,9 +191,9 @@ fn run_cli(cli: Cli) -> i32 {
                     query,
                     json,
                 }),
-        }) => match print_assistant_events(
+        }) => match task::print_assistant_events(
             &task_id,
-            AgentEventFilter::try_new(operation, event, tool, source, query),
+            task::AgentEventFilter::try_new(operation, event, tool, source, query),
             json,
         ) {
             Ok(()) => 0,
@@ -304,7 +306,7 @@ fn run_cli(cli: Cli) -> i32 {
                 }
             }
         }
-        Some(Command::Task { command }) => match run_task_command(command) {
+        Some(Command::Task { command }) => match task::run_task_command(command) {
             Ok(()) => 0,
             Err(error) => {
                 error!(%error, "failed to run task command");
@@ -312,7 +314,7 @@ fn run_cli(cli: Cli) -> i32 {
                 1
             }
         },
-        Some(Command::Setup { json }) => match run_setup(json) {
+        Some(Command::Setup { json }) => match setup::run_setup(json) {
             Ok(()) => 0,
             Err(error) => {
                 if json {
@@ -327,7 +329,7 @@ fn run_cli(cli: Cli) -> i32 {
             metrics::run_metrics_command(json);
             0
         }
-        Some(Command::Log { limit, json }) => match print_task_logs(limit, json) {
+        Some(Command::Log { limit, json }) => match task::print_task_logs(limit, json) {
             Ok(()) => 0,
             Err(error) => {
                 error!(%error, "failed to show task logs");
@@ -423,83 +425,7 @@ enum Command {
     },
 }
 
-#[derive(Debug, Subcommand)]
-enum TaskCommand {
-    /// List persisted assistant tasks.
-    List {
-        /// Maximum number of tasks to display.
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
 
-        /// Print structured JSON output.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show one persisted assistant task summary and final result.
-    Show {
-        /// Task id to inspect.
-        task_id: String,
-
-        /// Print the full structured task JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Print persisted task lifecycle logs.
-    Logs {
-        /// Task id to inspect.
-        task_id: String,
-
-        /// Print the raw structured lifecycle event JSON.
-        #[arg(long)]
-        json: bool,
-
-        /// Print the full persisted task record, including engine report and agent-loop events.
-        #[arg(long)]
-        full: bool,
-    },
-    /// Query persisted agent-run events for a task.
-    Events {
-        /// Task id to inspect.
-        task_id: String,
-
-        /// Filter by task-run operation, such as Specify, Execute, Verify, or Combine.
-        #[arg(long)]
-        operation: Option<String>,
-
-        /// Filter by event kind, such as tool_call_start, usage, error, or step.
-        #[arg(long)]
-        event: Option<String>,
-
-        /// Filter by tool/event name, such as Read, Grep, WebFetch, or submit_work.
-        #[arg(long)]
-        tool: Option<String>,
-
-        /// Filter by event source, such as agent-loop.
-        #[arg(long)]
-        source: Option<String>,
-
-        /// Case-insensitive substring search over the event JSON.
-        #[arg(long)]
-        query: Option<String>,
-
-        /// Print matching events as structured JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Replay existing task events, then follow live updates until terminal status.
-    Inspect {
-        /// Task id to inspect.
-        task_id: String,
-
-        /// Poll interval in milliseconds.
-        #[arg(long, default_value_t = 1_000)]
-        interval_ms: u64,
-
-        /// Print newline-delimited structured JSON records.
-        #[arg(long)]
-        json: bool,
-    },
-}
 
 #[derive(Debug, Subcommand)]
 enum AssistantCommand {
@@ -644,7 +570,7 @@ pub fn run_assistant_acp() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let config = SikoConfig::load()?;
     let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
     let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
@@ -711,7 +637,7 @@ async fn run_assistant_prompt_async(
     } else {
         CapabilityProfile::read_only()
     };
-    let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let mut store = FileTaskStore::open(task::assistant_store_path(&debug))?;
     let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
@@ -983,8 +909,8 @@ fn print_assistant_logs(
     full_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let task = resolve_task_ref(&store, task_id)?;
+    let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
+    let task = task::resolve_task_ref(&store, task_id)?;
 
     if full_output {
         serde_json::to_writer_pretty(std::io::stdout(), task)?;
@@ -1000,16 +926,16 @@ fn print_assistant_logs(
 
     println!("task {} {} {:?}", task.id, task.title, task.status);
     for event in &task.events {
-        println!("{}", format_task_log(event));
+        println!("{}", task::format_task_log(event));
     }
     Ok(())
 }
 
 fn print_assistant_list(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(assistant_store_path(&debug))?;
+    let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
     let mut tasks = store.list_tasks();
-    sort_tasks_newest_first(&mut tasks);
+    task::sort_tasks_newest_first(&mut tasks);
 
     if json_output {
         serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
@@ -1018,558 +944,13 @@ fn print_assistant_list(json_output: bool) -> Result<(), Box<dyn std::error::Err
     }
 
     for task in &tasks {
-        let id_prefix = task_list_id(&task.id);
+        let id_prefix = task::task_list_id(&task.id);
         let first_line = task.request.lines().next().unwrap_or("").to_string();
         println!("{}  {:?}  {}", id_prefix, task.status, first_line);
     }
     Ok(())
 }
 
-fn print_task_logs(limit: usize, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let mut tasks = store.list_tasks();
-    sort_tasks_newest_first(&mut tasks);
-    tasks.truncate(limit);
-
-    if json_output {
-        serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
-        println!();
-        return Ok(());
-    }
-
-    if tasks.is_empty() {
-        println!("No task execution records found.");
-        return Ok(());
-    }
-
-    println!("Recent task execution records (last {}):", limit);
-    println!("{:-<80}", "");
-    for task in &tasks {
-        let id_prefix = task_list_id(&task.id);
-        let first_line = task.request.lines().next().unwrap_or("").to_string();
-        println!("{}  {:?}  {}", id_prefix, task.status, first_line);
-    }
-    println!("{:-<80}", "");
-    println!("Total: {} tasks", tasks.len());
-    Ok(())
-}
-
-fn resolve_task_ref<'a>(
-    store: &'a FileTaskStore,
-    task_ref: &str,
-) -> Result<&'a AssistantTask, Box<dyn std::error::Error>> {
-    if let Some(task) = store.get_task(task_ref) {
-        return Ok(task);
-    }
-
-    let matches = store
-        .list_tasks()
-        .into_iter()
-        .filter(|task| task.id.starts_with(task_ref))
-        .collect::<Vec<_>>();
-
-    match matches.len() {
-        0 => Err(format!("unknown task id {task_ref}").into()),
-        1 => {
-            let id = matches[0].id.clone();
-            store
-                .get_task(&id)
-                .ok_or_else(|| format!("unknown task id {task_ref}").into())
-        }
-        _ => {
-            let ids = matches
-                .iter()
-                .map(|task| task.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(format!("ambiguous task id prefix {task_ref}; matches: {ids}").into())
-        }
-    }
-}
-
-fn run_task_command(command: TaskCommand) -> Result<(), Box<dyn std::error::Error>> {
-    match command {
-        TaskCommand::List { limit, json } => print_task_list(limit, json),
-        TaskCommand::Show { task_id, json } => print_task_show(&task_id, json),
-        TaskCommand::Logs {
-            task_id,
-            json,
-            full,
-        } => print_assistant_logs(&task_id, json, full),
-        TaskCommand::Events {
-            task_id,
-            operation,
-            event,
-            tool,
-            source,
-            query,
-            json,
-        } => print_assistant_events(
-            &task_id,
-            AgentEventFilter::try_new(operation, event, tool, source, query),
-            json,
-        ),
-        TaskCommand::Inspect {
-            task_id,
-            interval_ms,
-            json,
-        } => inspect_task_stream(&task_id, interval_ms, json),
-    }
-}
-
-fn print_task_list(limit: usize, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let mut tasks = store.list_tasks();
-    sort_tasks_newest_first(&mut tasks);
-    tasks.truncate(limit);
-
-    if json_output {
-        serde_json::to_writer_pretty(std::io::stdout(), &tasks)?;
-        println!();
-        return Ok(());
-    }
-
-    if tasks.is_empty() {
-        println!("No task records found.");
-        return Ok(());
-    }
-
-    println!("Tasks (newest first):");
-    println!("{:-<80}", "");
-    for task in &tasks {
-        let id_prefix = task_list_id(&task.id);
-        let first_line = task.request.lines().next().unwrap_or("").to_string();
-        println!("{}  {:?}  {}", id_prefix, task.status, first_line);
-    }
-    println!("{:-<80}", "");
-    println!("Showing {} tasks", tasks.len());
-    Ok(())
-}
-
-fn task_list_id(task_id: &str) -> String {
-    if task_id.chars().count() <= 16 {
-        return task_id.to_string();
-    }
-    task_id.chars().take(12).collect()
-}
-
-fn sort_tasks_newest_first(tasks: &mut [AssistantTask]) {
-    tasks.sort_by(|a, b| {
-        task_created_sort_key(b)
-            .cmp(&task_created_sort_key(a))
-            .then_with(|| b.id.cmp(&a.id))
-    });
-}
-
-fn task_created_sort_key(task: &AssistantTask) -> u64 {
-    if task.created_at_ms != 0 {
-        return task.created_at_ms;
-    }
-    legacy_uuid_v7_timestamp_ms(&task.id).unwrap_or_default()
-}
-
-fn legacy_uuid_v7_timestamp_ms(id: &str) -> Option<u64> {
-    let hex = id
-        .chars()
-        .filter(|ch| *ch != '-')
-        .take(12)
-        .collect::<String>();
-    if hex.len() != 12 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return None;
-    }
-    u64::from_str_radix(&hex, 16).ok()
-}
-
-fn print_task_show(task_id: &str, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let task = resolve_task_ref(&store, task_id)?;
-
-    if json_output {
-        serde_json::to_writer_pretty(std::io::stdout(), task)?;
-        println!();
-        return Ok(());
-    }
-
-    println!("task: {}", task.id);
-    println!("title: {}", task.title);
-    println!("status: {:?}", task.status);
-    if let Some(root_node) = task.root_node {
-        println!("root: {root_node}");
-    }
-    println!("events: {}", task.events.len());
-    if let Some(report) = &task.last_report {
-        println!("agent runs: {}", report.agent_runs.len());
-        if let Some(artifact_text) = report.artifact_text.as_deref() {
-            println!(
-                "{}",
-                console::style("── Result ─────────────────────────────────────────").dim()
-            );
-            println!("{artifact_text}");
-        } else {
-            println!("result: <none>");
-        }
-    } else {
-        println!("result: <not available yet>");
-    }
-    Ok(())
-}
-
-fn print_assistant_events(
-    task_id: &str,
-    filter: Result<AgentEventFilter, Box<dyn std::error::Error>>,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let filter = filter?;
-    let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let task = resolve_task_ref(&store, task_id)?;
-    let entries = assistant_agent_events(task, &filter);
-
-    if json_output {
-        serde_json::to_writer_pretty(std::io::stdout(), &entries)?;
-        println!();
-        return Ok(());
-    }
-
-    println!(
-        "task {} {} {:?} events={}",
-        task.id,
-        task.title,
-        task.status,
-        entries.len()
-    );
-    for entry in entries {
-        println!("{}", format_agent_event(&entry));
-    }
-    Ok(())
-}
-
-fn inspect_task_stream(
-    task_id: &str,
-    interval_ms: u64,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let debug = DebugConfig::from_env();
-    let path = assistant_store_path(&debug);
-    let interval = Duration::from_millis(interval_ms.max(100));
-    let mut printed_task_events = BTreeSet::new();
-    let mut printed_agent_events = BTreeSet::new();
-    let mut last_status = None;
-    let mut printed_result = false;
-    let mut first_poll = true;
-
-    loop {
-        let store = FileTaskStore::open(&path)?;
-        let task = resolve_task_ref(&store, task_id)?;
-
-        if first_poll && !json_output {
-            println!(
-                "{}",
-                console::style("── History ────────────────────────────────────────").dim()
-            );
-        }
-
-        if last_status.as_ref() != Some(&task.status) {
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "type": "task_status",
-                        "task_id": task.id,
-                        "status": &task.status,
-                    }))?
-                );
-            } else {
-                println!("task {} {:?}", task.id, task.status);
-            }
-            last_status = Some(task.status.clone());
-        }
-
-        for event in &task.events {
-            if printed_task_events.insert(event.seq) {
-                if json_output {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&json!({
-                            "type": "task_event",
-                            "task_id": task.id,
-                            "event": event,
-                        }))?
-                    );
-                } else {
-                    println!("{}", format_task_log(event));
-                }
-            }
-        }
-
-        for entry in assistant_agent_events(task, &AgentEventFilter::default()) {
-            let key = (entry.run_index, entry.event_index);
-            if printed_agent_events.insert(key) {
-                if json_output {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&json!({
-                            "type": "agent_event",
-                            "task_id": task.id,
-                            "event": entry,
-                        }))?
-                    );
-                } else {
-                    println!("{}", format_agent_event(&entry));
-                }
-            }
-        }
-
-        if !printed_result
-            && let Some(artifact_text) = task
-                .last_report
-                .as_ref()
-                .and_then(|report| report.artifact_text.as_deref())
-        {
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string(&json!({
-                        "type": "task_result",
-                        "task_id": task.id,
-                        "artifact_text": artifact_text,
-                    }))?
-                );
-            } else {
-                println!(
-                    "{}",
-                    console::style("── Result ─────────────────────────────────────────").dim()
-                );
-                println!("{artifact_text}");
-            }
-            printed_result = true;
-        }
-        io::stdout().flush().ok();
-
-        if !task_is_active(&task.status) {
-            return Ok(());
-        }
-
-        if first_poll && !json_output {
-            println!(
-                "{}",
-                console::style(format!(
-                    "── Live (polling every {}ms) ───────────────────────",
-                    interval.as_millis()
-                ))
-                .dim()
-            );
-        }
-        first_poll = false;
-        std::thread::sleep(interval);
-    }
-}
-
-fn task_is_active(status: &AssistantTaskStatus) -> bool {
-    matches!(
-        status,
-        AssistantTaskStatus::Created | AssistantTaskStatus::Queued | AssistantTaskStatus::Running
-    )
-}
-
-fn assistant_store_path(debug: &DebugConfig) -> PathBuf {
-    debug.data_dir().join("assistant").join("tasks.json")
-}
-
-fn format_task_log(event: &AssistantTaskEvent) -> String {
-    let node = event
-        .node_id
-        .map(|id| format!(" node={id}"))
-        .unwrap_or_default();
-    let operation = event
-        .operation
-        .map(|operation| format!(" op={operation:?}"))
-        .unwrap_or_default();
-    let payload = if event.payload.is_null() {
-        String::new()
-    } else {
-        format!(" payload={}", compact_json(&event.payload))
-    };
-    format!(
-        "#{:04} {} {} {} source={}{}{} - {}{}",
-        event.seq,
-        event.timestamp_ms,
-        event.level,
-        event.kind,
-        event.source,
-        node,
-        operation,
-        event.message,
-        payload
-    )
-}
-
-fn compact_json(value: &serde_json::Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".to_string())
-}
-
-fn truncate_text(input: &str, max_chars: usize) -> String {
-    let mut chars = input.chars();
-    let truncated = chars.by_ref().take(max_chars).collect::<String>();
-    if chars.next().is_some() {
-        format!("{truncated}...")
-    } else {
-        truncated
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct AgentEventFilter {
-    operation: Option<NodeOperation>,
-    event: Option<String>,
-    tool: Option<String>,
-    source: Option<String>,
-    query: Option<String>,
-}
-
-impl AgentEventFilter {
-    fn try_new(
-        operation: Option<String>,
-        event: Option<String>,
-        tool: Option<String>,
-        source: Option<String>,
-        query: Option<String>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self {
-            operation: operation.as_deref().map(parse_node_operation).transpose()?,
-            event,
-            tool,
-            source,
-            query,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AgentEventEntry {
-    task_id: String,
-    run_index: usize,
-    event_index: usize,
-    node_id: NodeId,
-    operation: NodeOperation,
-    source: Option<String>,
-    event: Option<String>,
-    name: Option<String>,
-    elapsed_ms: Option<u64>,
-    objective: Option<String>,
-    record: Value,
-}
-
-fn assistant_agent_events(task: &AssistantTask, filter: &AgentEventFilter) -> Vec<AgentEventEntry> {
-    let Some(report) = &task.last_report else {
-        return Vec::new();
-    };
-
-    report
-        .agent_runs
-        .iter()
-        .enumerate()
-        .flat_map(|(run_index, run)| {
-            run.events
-                .iter()
-                .enumerate()
-                .map(move |(event_index, record)| AgentEventEntry {
-                    task_id: task.id.clone(),
-                    run_index: run_index + 1,
-                    event_index: event_index + 1,
-                    node_id: run.node_id,
-                    operation: run.operation,
-                    source: json_string(record, "source"),
-                    event: json_string(record, "event"),
-                    name: json_string(record, "name"),
-                    elapsed_ms: json_u64(record, "elapsedMs"),
-                    objective: json_string(record, "objective"),
-                    record: record.clone(),
-                })
-        })
-        .filter(|entry| agent_event_matches(entry, filter))
-        .collect()
-}
-
-fn agent_event_matches(entry: &AgentEventEntry, filter: &AgentEventFilter) -> bool {
-    if filter
-        .operation
-        .is_some_and(|operation| entry.operation != operation)
-    {
-        return false;
-    }
-    if !optional_eq(filter.event.as_deref(), entry.event.as_deref()) {
-        return false;
-    }
-    if !optional_eq(filter.tool.as_deref(), entry.name.as_deref()) {
-        return false;
-    }
-    if !optional_eq(filter.source.as_deref(), entry.source.as_deref()) {
-        return false;
-    }
-    if let Some(query) = &filter.query {
-        let haystack = compact_json(&entry.record).to_lowercase();
-        if !haystack.contains(&query.to_lowercase()) {
-            return false;
-        }
-    }
-    true
-}
-
-fn optional_eq(expected: Option<&str>, actual: Option<&str>) -> bool {
-    let Some(expected) = expected else {
-        return true;
-    };
-    actual.is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
-}
-
-fn format_agent_event(entry: &AgentEventEntry) -> String {
-    let source = entry.source.as_deref().unwrap_or("-");
-    let event = entry.event.as_deref().unwrap_or("-");
-    let name = entry.name.as_deref().unwrap_or("-");
-    let objective = entry.objective.as_deref().unwrap_or("-");
-    let elapsed = entry
-        .elapsed_ms
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    let record = truncate_text(&compact_json(&entry.record), 500);
-    format!(
-        "run={} event={} node={} op={:?} source={} kind={} name={} elapsed={}ms objective={} record={}",
-        entry.run_index,
-        entry.event_index,
-        entry.node_id,
-        entry.operation,
-        source,
-        event,
-        name,
-        elapsed,
-        objective,
-        record
-    )
-}
-
-fn json_string(value: &Value, key: &str) -> Option<String> {
-    value.get(key)?.as_str().map(str::to_string)
-}
-
-fn json_u64(value: &Value, key: &str) -> Option<u64> {
-    value.get(key)?.as_u64()
-}
-
-fn parse_node_operation(input: &str) -> Result<NodeOperation, Box<dyn std::error::Error>> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "specify" => Ok(NodeOperation::Specify),
-        "plan" => Ok(NodeOperation::Plan),
-        "execute" => Ok(NodeOperation::Execute),
-        "combine" => Ok(NodeOperation::Combine),
-        "verify" => Ok(NodeOperation::Verify),
-        "commit" => Ok(NodeOperation::Commit),
-        other => Err(format!("unknown operation '{other}'; expected one of: specify, plan, execute, combine, verify, commit").into()),
-    }
-}
 
 fn run_task_run_split_eval(
     task: Option<String>,
@@ -3156,394 +2537,11 @@ fn init_tracing() {
         .try_init();
 }
 
-fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
-    use std::path::PathBuf;
-
-    let config_dir = std::env::var("HOME")
-        .map(PathBuf::from)
-        .map(|home| home.join(".sikong"))
-        .unwrap_or_else(|_| PathBuf::from(".sikong"));
-    let config_path = config_dir.join("config.yaml");
-
-    // For JSON mode, output current config/detection status as structured data
-    if json_output {
-        let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY")
-            .ok()
-            .filter(|k| !k.is_empty())
-            .is_some();
-        let has_kimi_key = std::env::var("KIMI_CODE_API_KEY")
-            .ok()
-            .filter(|k| !k.is_empty())
-            .is_some();
-        let has_claude_code = std::process::Command::new("which")
-            .arg("claude")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        let has_codex = std::process::Command::new("which")
-            .arg("codex")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        let has_cursor = std::process::Command::new("which")
-            .arg("cursor")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        let config_exists = config_path.exists();
-        let config_content = if config_exists {
-            std::fs::read_to_string(&config_path).ok()
-        } else {
-            None
-        };
-
-        let data = serde_json::json!({
-            "config_path": config_path.to_string_lossy(),
-            "config_exists": config_exists,
-            "config": config_content,
-            "detection": {
-                "deepseek_api_key": has_deepseek_key,
-                "kimi_api_key": has_kimi_key,
-                "claude_code_cli": has_claude_code,
-                "codex_cli": has_codex,
-                "cursor_cli": has_cursor
-            }
-        });
-        print_json_data(data);
-        return Ok(());
-    }
-
-    use dialoguer::{Input, Select, theme::ColorfulTheme};
-    let theme = ColorfulTheme::default();
-
-    println!("╔══════════════════════════════════════════════╗");
-    println!("║         Sikong Setup                         ║");
-    println!("╚══════════════════════════════════════════════╝");
-    println!();
-
-    let has_deepseek_key = std::env::var("DEEPSEEK_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .is_some();
-    let has_kimi_key = std::env::var("KIMI_CODE_API_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .is_some();
-    let has_claude_code = std::process::Command::new("which")
-        .arg("claude")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    let _has_bun = std::process::Command::new("which")
-        .arg("bun")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    let has_codex = std::process::Command::new("which")
-        .arg("codex")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    let codex_logged_in = if has_codex {
-        std::process::Command::new("codex")
-            .args(["login", "status"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    } else {
-        false
-    };
-    let has_cursor = std::process::Command::new("which")
-        .arg("cursor")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    println!(
-        "{} Auto-detection:",
-        console::style("[DETECT]").cyan().bold()
-    );
-    println!(
-        "   DEEPSEEK_API_KEY       {}",
-        if has_deepseek_key {
-            format!("{} found", console::style("[OK]").green().bold())
-        } else {
-            format!("{} not set", console::style("[MISS]").red().bold())
-        }
-    );
-    println!(
-        "   KIMI_CODE_API_KEY      {}",
-        if has_kimi_key {
-            format!("{} found", console::style("[OK]").green().bold())
-        } else {
-            format!("{} not set", console::style("[MISS]").red().bold())
-        }
-    );
-    println!(
-        "   Claude Code CLI        {}",
-        if has_claude_code {
-            format!("{} detected", console::style("[OK]").green().bold())
-        } else {
-            format!("{} not found", console::style("[MISS]").red().bold())
-        }
-    );
-    println!(
-        "   Codex CLI              {}  {}",
-        if has_codex {
-            format!("{} detected", console::style("[OK]").green().bold())
-        } else {
-            format!("{} not found", console::style("[MISS]").red().bold())
-        },
-        if has_codex && codex_logged_in {
-            format!("{} logged in", console::style("[KEY]").yellow().bold())
-        } else if has_codex && !codex_logged_in {
-            format!("{} not logged in", console::style("[!]").yellow().bold())
-        } else {
-            "".to_string()
-        }
-    );
-    println!(
-        "   Cursor CLI             {}",
-        if has_cursor {
-            format!("{} detected", console::style("[OK]").green().bold())
-        } else {
-            format!("{} not found", console::style("[MISS]").red().bold())
-        }
-    );
-    println!();
-
-    // Step 1: Select provider
-    let mut provider_opts: Vec<(&str, &str)> = Vec::new();
-    if has_deepseek_key {
-        provider_opts.push(("DeepSeek v4 Flash (needs API key)", "deepseek"));
-    }
-    if has_kimi_key {
-        provider_opts.push(("Kimi (needs API key)", "kimi"));
-    }
-    if has_claude_code {
-        provider_opts.push((
-            "Claude Code (uses your subscription, no API key needed)",
-            "claude",
-        ));
-    }
-    if has_codex {
-        provider_opts.push(("Codex (uses your subscription, no API key needed)", "codex"));
-    }
-    if has_cursor {
-        provider_opts.push((
-            "Cursor (uses your subscription, no API key needed)",
-            "cursor",
-        ));
-    }
-    if provider_opts.is_empty() {
-        provider_opts.push(("No API keys or tools detected — configure later", "none"));
-    }
-
-    let prov_idx = Select::with_theme(&theme)
-        .with_prompt("Select LLM provider")
-        .default(0)
-        .items(&provider_opts.iter().map(|(l, _)| *l).collect::<Vec<_>>())
-        .interact()?;
-    let provider = provider_opts[prov_idx].1;
-
-    // Step 2: Determine backend (some providers have fixed backends)
-    let (backend, needs_api_key) = match provider {
-        "claude" => {
-            println!(
-                "   {} Claude Code backend — uses the `claude` CLI with your existing subscription.",
-                console::style("[INFO]").cyan()
-            );
-            ("claude-code".to_string(), false)
-        }
-        "codex" => {
-            if codex_logged_in {
-                println!(
-                    "   {} Codex backend — uses the `codex` CLI with your existing subscription.",
-                    console::style("[INFO]").cyan()
-                );
-            } else {
-                println!(
-                    "{} Codex CLI found but not logged in. Run 'codex login' first, or choose another provider.",
-                    console::style("[!]").yellow().bold()
-                );
-            }
-            ("codex".to_string(), false)
-        }
-        "cursor" => {
-            println!(
-                "   {} Cursor backend — uses the `cursor` CLI with your existing subscription.",
-                console::style("[INFO]").cyan()
-            );
-            ("cursor".to_string(), false)
-        }
-        "kimi" => {
-            if has_claude_code {
-                println!(
-                    "   {} Kimi requires Claude Code runtime.",
-                    console::style("[INFO]").cyan()
-                );
-                ("claude-code".to_string(), true)
-            } else {
-                println!(
-                    "{} Kimi requires Claude Code CLI. Install: npm i -g @anthropic-ai/claude-code",
-                    console::style("[!]").yellow().bold()
-                );
-                return Ok(());
-            }
-        }
-        _ => {
-            // deepseek — let user choose backend
-            let mut backend_opts: Vec<(&str, &str)> = Vec::new();
-            backend_opts.push(("ai-sdk (fast, cost-effective)", "ai-sdk"));
-            if has_claude_code {
-                backend_opts.push(("Claude Code runtime (richer tool access)", "claude-code"));
-            }
-            let b_idx = Select::with_theme(&theme)
-                .with_prompt("Select execution backend")
-                .default(0)
-                .items(&backend_opts.iter().map(|(l, _)| *l).collect::<Vec<_>>())
-                .interact()?;
-            (backend_opts[b_idx].1.to_string(), true)
-        }
-    };
-
-    // Step 3: Model selection (if provider has choices)
-    let model = match provider {
-        "deepseek" => {
-            let models = vec!["deepseek-v4-flash", "deepseek-v4", "deepseek-r1"];
-            let m_idx = Select::with_theme(&theme)
-                .with_prompt("Select model")
-                .default(0)
-                .items(&models)
-                .interact()?;
-            models[m_idx].to_string()
-        }
-        "claude" => {
-            let models = vec!["claude-sonnet-4-20250514", "claude-4-20250514"];
-            let m_idx = Select::with_theme(&theme)
-                .with_prompt("Select model")
-                .default(0)
-                .items(&models)
-                .interact()?;
-            models[m_idx].to_string()
-        }
-        _ => String::new(),
-    };
-
-    // Step 4: API key prompt if needed
-    let mut env_entries: Vec<(String, String)> = Vec::new();
-    if needs_api_key {
-        let key_var = match provider {
-            "deepseek" => "DEEPSEEK_API_KEY",
-            "kimi" => "KIMI_CODE_API_KEY",
-            _ => "DEEPSEEK_API_KEY",
-        };
-        let has_key = std::env::var(key_var)
-            .ok()
-            .filter(|k| !k.is_empty())
-            .is_some();
-        if !has_key {
-            println!();
-            println!(
-                "{} {} is not set.",
-                console::style("[KEY]").yellow().bold(),
-                key_var
-            );
-            let api_key: String = Input::with_theme(&theme)
-                .with_prompt("Enter your API key (or leave empty to skip)")
-                .allow_empty(true)
-                .interact_text()?;
-            if !api_key.is_empty() {
-                env_entries.push((key_var.to_string(), api_key.clone()));
-                let masked = if api_key.len() > 4 {
-                    format!("{}...", &api_key[..4])
-                } else {
-                    String::new()
-                };
-                println!(
-                    "   {} Saved to config. Also add to shell: export {}={}",
-                    console::style("[INFO]").cyan(),
-                    key_var,
-                    masked
-                );
-            }
-        }
-    }
-
-    // Step 5: Write config
-    let use_real_agent = has_claude_code || has_codex || backend == "claude-code";
-    std::fs::create_dir_all(&config_dir)?;
-    let mut config_lines = vec![
-        "version: 1".to_string(),
-        format!("provider: {}", provider),
-        format!("backend: {}", backend),
-    ];
-    // Per-provider config
-    let has_model = !model.is_empty();
-    let has_env = !env_entries.is_empty();
-    if has_model || has_env {
-        config_lines.push("providers:".to_string());
-        config_lines.push(format!("  {}:", provider));
-        if has_model {
-            config_lines.push(format!("    model: {}", model));
-        }
-        if has_env {
-            config_lines.push("    env:".to_string());
-            for (k, v) in &env_entries {
-                config_lines.push(format!("      {}: \"{}\"", k, v));
-            }
-        }
-    }
-    config_lines.push("assistant:".to_string());
-    config_lines.push("  max_parallel_tasks: 2".to_string());
-    let config_content = config_lines.join("\n") + "\n";
-    std::fs::write(&config_path, config_content)?;
-
-    println!();
-    println!(
-        "{} Config written to {}",
-        console::style("[OK]").green().bold(),
-        config_path.display()
-    );
-    println!();
-    println!("{} Summary:", console::style("[SUMMARY]").magenta().bold());
-    println!("   Provider:   {}", provider);
-    println!("   Backend:    {}", backend);
-    println!(
-        "   Worker:     {}",
-        if use_real_agent {
-            "agent-loop (real agents)"
-        } else {
-            "mock (default)"
-        }
-    );
-    println!();
-    println!("{} Quick start:", console::style("[START]").green().bold());
-    println!("   siko send \"analyze this\"     # Send a task");
-    println!("   siko assistant --acp       # ACP server for external tools");
-    if needs_api_key
-        && std::env::var(match provider {
-            "deepseek" => "DEEPSEEK_API_KEY",
-            "kimi" => "KIMI_CODE_API_KEY",
-            _ => "",
-        })
-        .ok()
-        .filter(|k| !k.is_empty())
-        .is_none()
-    {
-        println!();
-        println!(
-            "{} No API key configured. Set it: export DEEPSEEK_API_KEY=sk-...",
-            console::style("[!]").yellow().bold()
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AgentRunRecord, EngineReport};
+    use super::task;
+    use crate::{AgentRunRecord, AssistantTask, AssistantTaskEvent, EngineReport};
 
     fn test_debug_config() -> DebugConfig {
         DebugConfig::default()
@@ -3760,7 +2758,7 @@ mod tests {
         .unwrap();
         let store = FileTaskStore::open(path).unwrap();
 
-        let task = resolve_task_ref(&store, "019ef7bf-1b0").unwrap();
+        let task = task::resolve_task_ref(&store, "019ef7bf-1b0").unwrap();
 
         assert_eq!(task.id, "019ef7bf-1b03-7000-8000-000000000001");
     }
@@ -3797,20 +2795,20 @@ mod tests {
         .unwrap();
         let store = FileTaskStore::open(path).unwrap();
 
-        let error = resolve_task_ref(&store, "019ef7bf-1b0").unwrap_err();
+        let error = task::resolve_task_ref(&store, "019ef7bf-1b0").unwrap_err();
 
         assert!(error.to_string().contains("ambiguous task id prefix"));
     }
 
     #[test]
     fn task_list_id_preserves_short_ids() {
-        assert_eq!(task_list_id("mjo8xq4ab-Cd3_"), "mjo8xq4ab-Cd3_");
+        assert_eq!(task::task_list_id("mjo8xq4ab-Cd3_"), "mjo8xq4ab-Cd3_");
     }
 
     #[test]
     fn task_list_id_truncates_legacy_uuid_ids() {
         assert_eq!(
-            task_list_id("019ef7bf-1b03-7ec2-be4d-f200fb793694"),
+            task::task_list_id("019ef7bf-1b03-7ec2-be4d-f200fb793694"),
             "019ef7bf-1b0"
         );
     }
@@ -3823,7 +2821,7 @@ mod tests {
         newer.created_at_ms = 20;
         let mut tasks = vec![older, newer];
 
-        sort_tasks_newest_first(&mut tasks);
+        task::sort_tasks_newest_first(&mut tasks);
 
         assert_eq!(tasks[0].id, "aaaaaaaa");
         assert_eq!(tasks[1].id, "zzzzzzzz");
@@ -3832,10 +2830,10 @@ mod tests {
     #[test]
     fn legacy_uuid_v7_timestamp_ms_reads_time_prefix() {
         assert_eq!(
-            legacy_uuid_v7_timestamp_ms("019ef7bf-1b03-7ec2-be4d-f200fb793694"),
+            task::legacy_uuid_v7_timestamp_ms("019ef7bf-1b03-7ec2-be4d-f200fb793694"),
             u64::from_str_radix("019ef7bf1b03", 16).ok()
         );
-        assert_eq!(legacy_uuid_v7_timestamp_ms("short-id"), None);
+        assert_eq!(task::legacy_uuid_v7_timestamp_ms("short-id"), None);
     }
 
     #[test]
@@ -3894,7 +2892,7 @@ mod tests {
                 ],
             },
         );
-        let filter = AgentEventFilter::try_new(
+        let filter = task::AgentEventFilter::try_new(
             Some("execute".to_string()),
             Some("tool_call_start".to_string()),
             Some("read".to_string()),
@@ -3903,7 +2901,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = assistant_agent_events(&task, &filter);
+        let entries = task::assistant_agent_events(&task, &filter);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].run_index, 2);
@@ -4238,7 +3236,7 @@ workspace:
 
     #[test]
     fn formats_structured_task_log_with_node_context() {
-        let line = format_task_log(&AssistantTaskEvent {
+        let line = task::format_task_log(&AssistantTaskEvent {
             seq: 7,
             timestamp_ms: 1_719_000_000_000,
             level: tracing::Level::INFO.to_string(),
@@ -4468,50 +3466,50 @@ workspace:
 
     #[test]
     fn truncate_text_preserves_short_input() {
-        assert_eq!(truncate_text("hello", 10), "hello");
+        assert_eq!(task::truncate_text("hello", 10), "hello");
     }
 
     #[test]
     fn truncate_text_exact_fit() {
-        assert_eq!(truncate_text("hello", 5), "hello");
+        assert_eq!(task::truncate_text("hello", 5), "hello");
     }
 
     #[test]
     fn truncate_text_appends_ellipsis_when_exceeding() {
-        assert_eq!(truncate_text("hello world", 5), "hello...");
+        assert_eq!(task::truncate_text("hello world", 5), "hello...");
     }
 
     #[test]
     fn truncate_text_handles_empty_string() {
-        assert_eq!(truncate_text("", 10), "");
+        assert_eq!(task::truncate_text("", 10), "");
     }
 
     #[test]
     fn truncate_text_handles_multi_byte_chars() {
-        assert_eq!(truncate_text("日本語", 2), "日本...");
+        assert_eq!(task::truncate_text("日本語", 2), "日本...");
     }
 
     #[test]
     fn truncate_text_handles_zero_max_chars() {
-        assert_eq!(truncate_text("hello", 0), "...");
+        assert_eq!(task::truncate_text("hello", 0), "...");
     }
 
     #[test]
     fn compact_json_formats_value() {
         let value = serde_json::json!({"a": 1, "b": "two"});
-        let result = compact_json(&value);
+        let result = task::compact_json(&value);
         assert_eq!(result, r#"{"a":1,"b":"two"}"#);
     }
 
     #[test]
     fn compact_json_handles_null() {
-        assert_eq!(compact_json(&serde_json::Value::Null), "null");
+        assert_eq!(task::compact_json(&serde_json::Value::Null), "null");
     }
 
     #[test]
     fn compact_json_handles_array() {
         let value = serde_json::json!([1, 2, 3]);
-        assert_eq!(compact_json(&value), "[1,2,3]");
+        assert_eq!(task::compact_json(&value), "[1,2,3]");
     }
 
     #[test]
@@ -4546,32 +3544,32 @@ workspace:
     fn optional_eq_both_none_returns_true() {
         let a: Option<&str> = None;
         let b: Option<&str> = None;
-        assert!(optional_eq(a, b));
+        assert!(task::optional_eq(a, b));
     }
 
     #[test]
     fn optional_eq_filter_none_always_passes() {
         let filter: Option<&str> = None;
-        assert!(optional_eq(filter, Some("anything")));
-        assert!(optional_eq(filter, None));
+        assert!(task::optional_eq(filter, Some("anything")));
+        assert!(task::optional_eq(filter, None));
     }
 
     #[test]
     fn optional_eq_case_insensitive_match() {
-        assert!(optional_eq(Some("Hello"), Some("hello")));
-        assert!(optional_eq(Some("WORLD"), Some("world")));
-        assert!(optional_eq(Some("MiXeD"), Some("mixed")));
+        assert!(task::optional_eq(Some("Hello"), Some("hello")));
+        assert!(task::optional_eq(Some("WORLD"), Some("world")));
+        assert!(task::optional_eq(Some("MiXeD"), Some("mixed")));
     }
 
     #[test]
     fn optional_eq_mismatch_returns_false() {
-        assert!(!optional_eq(Some("hello"), Some("world")));
-        assert!(!optional_eq(Some("abc"), Some("xyz")));
+        assert!(!task::optional_eq(Some("hello"), Some("world")));
+        assert!(!task::optional_eq(Some("abc"), Some("xyz")));
     }
 
     #[test]
     fn optional_eq_filter_none_with_actual_none_returns_true() {
-        assert!(optional_eq(None, None));
+        assert!(task::optional_eq(None, None));
     }
 
     // ── Additional utility function tests ─────────────────────────────────
@@ -4615,8 +3613,8 @@ workspace:
     #[test]
     fn assistant_agent_events_returns_empty_when_no_report() {
         let task = AssistantTask::new("task_empty".to_string(), "no report yet".to_string());
-        let filter = AgentEventFilter::try_new(None, None, None, None, None).unwrap();
-        let entries = assistant_agent_events(&task, &filter);
+        let filter = task::AgentEventFilter::try_new(None, None, None, None, None).unwrap();
+        let entries = task::assistant_agent_events(&task, &filter);
         assert!(entries.is_empty());
     }
 
@@ -4665,19 +3663,19 @@ workspace:
     }
     #[test]
     fn parse_node_operation_specify() {
-        let result = parse_node_operation("specify");
+        let result = task::parse_node_operation("specify");
         assert_eq!(result.unwrap(), NodeOperation::Specify);
     }
 
     #[test]
     fn parse_node_operation_case_insensitive() {
-        let result = parse_node_operation("EXECUTE");
+        let result = task::parse_node_operation("EXECUTE");
         assert_eq!(result.unwrap(), NodeOperation::Execute);
     }
 
     #[test]
     fn parse_node_operation_trims_whitespace() {
-        let result = parse_node_operation("  plan  ");
+        let result = task::parse_node_operation("  plan  ");
         assert_eq!(result.unwrap(), NodeOperation::Plan);
     }
 
@@ -4691,14 +3689,14 @@ workspace:
             ("verify", NodeOperation::Verify),
             ("commit", NodeOperation::Commit),
         ] {
-            let result = parse_node_operation(input);
+            let result = task::parse_node_operation(input);
             assert_eq!(result.unwrap(), expected, "failed for input: {input}");
         }
     }
 
     #[test]
     fn parse_node_operation_unknown_returns_error() {
-        let result = parse_node_operation("invalid_op");
+        let result = task::parse_node_operation("invalid_op");
         assert!(result.is_err());
         let error = result.unwrap_err().to_string();
         assert!(
