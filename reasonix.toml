@@ -49,14 +49,7 @@ enabled = true   # language server tools; servers launch lazily when used
 # disabled_skills = ["review"]   # hide noisy or unwanted skills
 
 [permissions]
-# Per-call gating. mode = writer fallback when no rule matches: ask|allow|deny.
-# Readers always default to allow. Precedence: deny > ask > allow > fallback.
-# Rules are "Tool" or "Tool(specifier)"; e.g. Bash(go test:*), Edit(src/**).
-mode  = "ask"
-# deny = ["Bash(rm -rf*)", "Bash(git push*)"]   # hard-blocked in every mode
-allow = ["explore", "Bash(cd /Users/lidessen/workspaces/sikong && git status)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --cached --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && echo \"=== Untracked files ===\" && for f in $(git ls-files --others --exclude-standard); do echo \"--- $f ---\"; head -5 \"$f\"; echo; done)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- src/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- packages/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- design/ development-log/ evals/)", "Edit", "Bash(tmux list-sessions 2>&1 || echo \"tmux 未运行或无法连接\")", "Bash(ps aux | grep -i tmux | grep -v grep)", "Bash(tmux kill-session:*)", "Bash(tmux list-sessions 2>&1)", "Bash(cd /Users/lidessen/workspaces/sikong && cargo build 2>&1 | tail -5)"]
-# ask = ["Edit(src/**)"]   # force a prompt even if otherwise allowed
-
+allow = ["explore", "Bash(cd /Users/lidessen/workspaces/sikong && git status)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --cached --stat)", "Bash(cd /Users/lidessen/workspaces/sikong && echo \"=== Untracked files ===\" && for f in $(git ls-files --others --exclude-standard); do echo \"--- $f ---\"; head -5 \"$f\"; echo; done)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- src/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- packages/)", "Bash(cd /Users/lidessen/workspaces/sikong && git diff --stat -- design/ development-log/ evals/)", "Edit", "Bash(tmux list-sessions 2>&1 || echo \"tmux 未运行或无法连接\")", "Bash(ps aux | grep -i tmux | grep -v grep)", "Bash(tmux kill-session:*)", "Bash(tmux list-sessions 2>&1)", "Bash(cd /Users/lidessen/workspaces/sikong && cargo build 2>&1 | tail -5)", "Bash(cd /Users/lidessen/workspaces/sikong && grep -n 'fn run_assistant_prompt' src/harness/cli.rs)"]
 [sandbox]
 # Confine tool blast radius. File-writers (write_file/edit_file/multi_edit/move_file)
 # may only write under workspace_root (empty = current dir) and allow_write extras.

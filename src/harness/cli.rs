@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{self, BufReader, Write};
+use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,7 +20,6 @@ use crate::{
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use colored::Colorize;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
@@ -629,14 +628,60 @@ async fn run_assistant_prompt_async(
         },
     );
 
-    println!("{} Processing...", console::style(" >>").bold().green());
-    io::stdout().flush().ok();
+    let started_at = Instant::now();
+
+    let assistant_progress = if json_output {
+        None
+    } else {
+        let pb = indicatif::ProgressBar::new_spinner();
+        pb.set_style(
+            indicatif::ProgressStyle::with_template("{spinner} {msg} ({elapsed})")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        );
+        pb.set_message("assistant thinking");
+        Some(pb)
+    };
     let reply = session.handle_message(&mut store, message).await;
-    if !json_output {
-        println!("{}", console::style(" >> done").dim().to_string());
+    if let Some(ref pb) = assistant_progress {
+        pb.finish_with_message("assistant turn complete ✓");
     }
-    session.wait_for_all(&mut store, Duration::from_secs(300)).await;
-    let state = session.state();
+
+    let snapshot = if reply.task_id.is_some() {
+        let task_progress = if json_output {
+            None
+        } else {
+            let pb = indicatif::ProgressBar::new_spinner();
+            pb.set_style(
+                indicatif::ProgressStyle::with_template("{spinner} {msg} ({elapsed})")
+                    .unwrap()
+                    .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+            );
+            pb.set_message("task running");
+            Some(pb)
+        };
+        let snapshot = if wait_ms == 0 {
+            session.drain(&mut store).await
+        } else {
+            session
+                .wait_for_all(&mut store, Duration::from_millis(wait_ms))
+                .await
+        };
+        if let Some(ref pb) = task_progress {
+            if snapshot.running_tasks == 0 && snapshot.queued_tasks == 0 {
+                pb.finish_with_message("task board idle");
+            } else {
+                pb.finish_with_message(format!(
+                    "task board: {} running, {} queued",
+                    snapshot.running_tasks, snapshot.queued_tasks
+                ));
+            }
+        }
+        snapshot
+    } else {
+        session.drain(&mut store).await
+    };
+
     let task_status = reply
         .task_id
         .as_deref()
@@ -653,8 +698,8 @@ async fn run_assistant_prompt_async(
         task_id: reply.task_id,
         status: task_status,
         final_artifact,
-        running_tasks: state.running_tasks,
-        queued_tasks: state.queued_tasks,
+        running_tasks: snapshot.running_tasks,
+        queued_tasks: snapshot.queued_tasks,
         persist_error: store.last_persist_error().map(ToString::to_string),
     };
 
@@ -664,26 +709,76 @@ async fn run_assistant_prompt_async(
         return Ok(());
     }
 
-    println!("{}", output.response);
+    let elapsed = started_at.elapsed();
+
+    // ── Response ──
+    println!(
+        "{}",
+        console::style("── Response ──────────────────────────────────────").dim()
+    );
+    let skin = termimad::MadSkin::default();
+    skin.print_text(&output.response);
+
+    // ── Result ──
+    println!(
+        "{}",
+        console::style("── Result ─────────────────────────────────────────").dim()
+    );
     if let Some(task_id) = &output.task_id {
-        println!("task: {task_id}");
+        println!("  task:   {task_id}");
     }
     if let Some(status) = &output.status {
-        println!("status: {status:?}");
+        let status_label = match status {
+            AssistantTaskStatus::Completed => {
+                console::style("✓ Completed").green().bold().to_string()
+            }
+            AssistantTaskStatus::Failed => console::style("✗ Failed").red().bold().to_string(),
+            AssistantTaskStatus::Cancelled => {
+                console::style("− Cancelled").yellow().bold().to_string()
+            }
+            AssistantTaskStatus::WaitingForInput => {
+                console::style("? Waiting for input").blue().bold().to_string()
+            }
+            AssistantTaskStatus::Running => {
+                console::style("◌ Running").cyan().bold().to_string()
+            }
+            other => console::style(format!("{other:?}")).dim().to_string(),
+        };
+        println!("  status: {status_label}");
     }
+    println!(
+        "  {} {}",
+        console::style("⚡").dim(),
+        console::style(format_duration(elapsed)).dim()
+    );
     if let Some(artifact) = &output.final_artifact {
         println!();
         println!("{artifact}");
     }
-    println!(
-        "task board: {} running, {} queued",
-        output.running_tasks, output.queued_tasks
-    );
+    if output.running_tasks > 0 || output.queued_tasks > 0 {
+        println!(
+            "  task board: {} running, {} queued",
+            output.running_tasks, output.queued_tasks
+        );
+    }
     if let Some(error) = &output.persist_error {
-        eprintln!("warning: failed to persist assistant task store: {error}");
+        eprintln!(
+            "{} failed to persist assistant task store: {error}",
+            console::style("[WARN]").yellow().bold()
+        );
     }
     Ok(())
 }
+
+fn format_duration(d: Duration) -> String {
+    let secs = d.as_secs_f64();
+    if secs > 60.0 {
+        format!("{:.0}m {:2.0}s", secs / 60.0, secs % 60.0)
+    } else {
+        format!("{:6.1}s", secs)
+    }
+}
+
 
 fn resolve_assistant_prompt_workspace(
     debug: &DebugConfig,
@@ -1203,16 +1298,19 @@ async fn run_task_run_split_eval_async(
 }
 
 
+#[allow(dead_code)]
 fn chrono_now_date() -> String {
     let (y, m, d) = chrono_now_ymd();
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
+#[allow(dead_code)]
 fn chrono_now_month() -> String {
     let (y, m, _d) = chrono_now_ymd();
     format!("{:04}-{:02}", y, m)
 }
 
+#[allow(dead_code)]
 fn chrono_now_ymd() -> (i64, i32, i32) {
     // Simple YYYY-MM-DD from system time without pulling in chrono
     let secs = std::time::SystemTime::now()
@@ -1259,6 +1357,7 @@ fn chrono_now_ymd() -> (i64, i32, i32) {
     (y, m, d as i32)
 }
 
+#[allow(dead_code)]
 fn is_leap(year: i64) -> bool {
     year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
@@ -2730,23 +2829,11 @@ fn resolve_agent_host_launch_from(
         return bun_script_launch(env, debug, script);
     }
 
-    // Prefer compiled agent-host binary (no Bun dependency)
-    // But first verify it actually works — compile output may not be truly self-contained
+    // Prefer compiled agent-host binary (no Bun dependency). Do not run a
+    // synchronous probe here: release host binaries own the socket protocol and
+    // may not implement a quick CLI help path.
     if let Some(path) = sibling_agent_host_binary(current_exe) {
-        // Quick smoke test: run --help to verify the binary starts
-        match std::process::Command::new(&path)
-            .arg("--help")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-        {
-            Ok(status) if status.success() => {
-                return binary_launch(path);
-            }
-            _ => {
-                // Binary doesn't start — fall through to JS bundle
-            }
-        }
+        return binary_launch(path);
     }
 
     // Fall back to agent-host JS bundle (requires Bun)
@@ -2765,10 +2852,6 @@ fn resolve_agent_host_launch_from(
                 args: vec!["run".to_string(), entry.to_string_lossy().to_string()],
             };
         }
-    }
-
-    if let Some(path) = sibling_agent_host_binary(current_exe) {
-        return binary_launch(path);
     }
 
     if let Some(runtime_dir) = debug
@@ -2948,7 +3031,7 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    let has_bun = std::process::Command::new("which")
+    let _has_bun = std::process::Command::new("which")
         .arg("bun")
         .output()
         .map(|o| o.status.success())
@@ -3229,6 +3312,7 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+
 
 fn run_metrics_command(json_output: bool) {
     // TODO: Integrate with a global/live MetricsCollector instance once one is

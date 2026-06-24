@@ -84,6 +84,7 @@ impl EngineTools {
 // ── Schema Validation ─────────────────────────────────────────────────────
 
 /// Validate a JSON value against the expected schema for the given TaskType.
+#[allow(dead_code)]
 fn validate_output(task_type: &TaskType, value: &serde_json::Value) -> Result<(), String> {
     match task_type {
         TaskType::Explore => validate_explore_output(value),
@@ -94,6 +95,7 @@ fn validate_output(task_type: &TaskType, value: &serde_json::Value) -> Result<()
 }
 
 /// Return a human-readable description of the expected schema.
+#[allow(dead_code)]
 fn expected_schema_doc(task_type: &TaskType) -> &'static str {
     match task_type {
         TaskType::Explore => {
@@ -132,6 +134,7 @@ fn expected_schema_doc(task_type: &TaskType) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn validate_explore_output(value: &serde_json::Value) -> Result<(), String> {
     let obj = value.as_object().ok_or_else(|| {
         "expected top-level JSON object".to_string()
@@ -181,6 +184,7 @@ fn validate_explore_output(value: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn validate_exploit_output(value: &serde_json::Value) -> Result<(), String> {
     let obj = value.as_object().ok_or_else(|| {
         "expected top-level JSON object".to_string()
@@ -228,6 +232,7 @@ fn validate_exploit_output(value: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn validate_refine_output(value: &serde_json::Value) -> Result<(), String> {
     let obj = value.as_object().ok_or_else(|| {
         "expected top-level JSON object".to_string()
@@ -275,6 +280,7 @@ fn validate_refine_output(value: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn validate_verify_output(value: &serde_json::Value) -> Result<(), String> {
     let obj = value.as_object().ok_or_else(|| {
         "expected top-level JSON object".to_string()

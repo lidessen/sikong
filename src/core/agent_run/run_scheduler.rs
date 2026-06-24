@@ -43,6 +43,7 @@ pub struct ProcessAgentRunScheduler {
     reader: Option<BufReader<OwnedReadHalf>>,
 }
 
+#[allow(dead_code)]
 fn create_temp_socket_dir() -> Result<(PathBuf, TempDir), ProcessAgentRunSchedulerError> {
     let dir = tempfile::Builder::new()
         .prefix("siko-agent-host-")

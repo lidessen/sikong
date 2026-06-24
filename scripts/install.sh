@@ -40,11 +40,17 @@ if ! curl -fsSL "$DOWNLOAD_URL" -o "$TAR_PATH" 2>/dev/null; then
   curl -fsSL "$DOWNLOAD_URL" -o "$TAR_PATH"
 fi
 
-tar -xzf "$TAR_PATH" -C "$TMP_DIR"
+mkdir -p "$TMP_DIR/siko-install"
+tar -xzf "$TAR_PATH" -C "$TMP_DIR/siko-install"
 
 # Install binaries
-install -m 755 "$TMP_DIR/siko" "$INSTALL_DIR/siko"
-install -m 755 "$TMP_DIR/siko-agent-host" "$INSTALL_DIR/siko-agent-host"
+install -m 755 "$TMP_DIR/siko-install/siko" "$INSTALL_DIR/siko"
+install -m 755 "$TMP_DIR/siko-install/siko-agent-host" "$INSTALL_DIR/siko-agent-host"
+if [ -d "$TMP_DIR/siko-install/agent-host" ]; then
+  rm -rf "$INSTALL_DIR/agent-host"
+  mkdir -p "$INSTALL_DIR/agent-host"
+  cp -R "$TMP_DIR/siko-install/agent-host/." "$INSTALL_DIR/agent-host/"
+fi
 
 rm -rf "$TMP_DIR"
 
@@ -72,4 +78,3 @@ echo "  siko dogfood run          # Self-iteration loop"
 echo ""
 echo "Set your API key:"
 echo "  export DEEPSEEK_API_KEY=sk-..."
-echo "  export SIKONG_AGENT_HOST_WORKER=agent-loop  # Enable real agents"
