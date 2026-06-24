@@ -732,8 +732,7 @@ fn node_operations_report_governance_layer_and_active_gates() {
     );
     assert_eq!(governance_layer_for(NodeOperation::Commit), None);
     assert!(
-        active_hard_gates_for(NodeOperation::Plan)
-            .contains(&GovernanceGate::ParallelDependency)
+        active_hard_gates_for(NodeOperation::Plan).contains(&GovernanceGate::ParallelDependency)
     );
     assert!(
         active_hard_gates_for(NodeOperation::Verify)

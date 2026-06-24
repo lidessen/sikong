@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::common::config::non_empty_env;
-use crate::SikoConfig;
 use super::DebugConfig;
+use crate::SikoConfig;
+use crate::common::config::non_empty_env;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentHostLaunch {
@@ -248,8 +248,7 @@ mod tests {
             agent_host_command: Some("/custom/host".to_string()),
             ..DebugConfig::default()
         };
-        let launch =
-            resolve_agent_host_launch_from(&|_| None, None, Path::new("/missing"), &debug);
+        let launch = resolve_agent_host_launch_from(&|_| None, None, Path::new("/missing"), &debug);
         assert_eq!(launch.command, "/custom/host");
     }
 
@@ -294,9 +293,17 @@ mod tests {
 
     #[test]
     fn agent_host_launch_falls_back_to_dev_script() {
-        let launch = resolve_agent_host_launch_from(&|_| None, None, Path::new("/missing"), &DebugConfig::default());
+        let launch = resolve_agent_host_launch_from(
+            &|_| None,
+            None,
+            Path::new("/missing"),
+            &DebugConfig::default(),
+        );
         assert!(launch.command == "bun");
-        assert_eq!(launch.args, vec!["packages/agent-host/src/runtime-host.ts".to_string()]);
+        assert_eq!(
+            launch.args,
+            vec!["packages/agent-host/src/runtime-host.ts".to_string()]
+        );
     }
 
     #[test]
@@ -358,7 +365,10 @@ mod tests {
             &DebugConfig::default(),
         );
         assert_eq!(launch.command, "/custom/bun");
-        assert_eq!(launch.args, vec!["packages/agent-host/src/runtime-host.ts".to_string()]);
+        assert_eq!(
+            launch.args,
+            vec!["packages/agent-host/src/runtime-host.ts".to_string()]
+        );
     }
 
     #[test]
@@ -391,11 +401,7 @@ mod tests {
 
     #[test]
     fn bun_script_launch_falls_back_to_bun() {
-        let launch = bun_script_launch(
-            &|_| None,
-            &DebugConfig::default(),
-            "test.ts".to_string(),
-        );
+        let launch = bun_script_launch(&|_| None, &DebugConfig::default(), "test.ts".to_string());
         assert_eq!(launch.command, "bun");
         assert_eq!(launch.args, vec!["test.ts".to_string()]);
     }

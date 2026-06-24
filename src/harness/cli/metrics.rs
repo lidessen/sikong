@@ -1,5 +1,5 @@
-use crate::common::metrics::{MetricsCollector, MetricsFormatter};
 use super::print_json_data;
+use crate::common::metrics::{MetricsCollector, MetricsFormatter};
 
 /// Collect and display current metrics snapshot.
 pub fn run_metrics_command(json_output: bool) {

@@ -125,10 +125,7 @@ pub fn run_task_command(command: TaskCommand) -> Result<(), Box<dyn std::error::
 
 // ── Log command (shows recent task execution records) ────────────────────
 
-pub fn print_task_logs(
-    limit: usize,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn print_task_logs(limit: usize, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let mut tasks = store.list_tasks();
@@ -160,10 +157,7 @@ pub fn print_task_logs(
 
 // ── Task display helpers ─────────────────────────────────────────────────
 
-fn print_task_list(
-    limit: usize,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn print_task_list(limit: usize, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let mut tasks = store.list_tasks();
@@ -193,10 +187,7 @@ fn print_task_list(
     Ok(())
 }
 
-fn print_task_show(
-    task_id: &str,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn print_task_show(task_id: &str, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let task = resolve_task_ref(&store, task_id)?;

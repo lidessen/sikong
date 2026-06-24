@@ -254,9 +254,7 @@ async fn run_assistant_prompt_async(
             // Use 1s intervals so the CLI stays responsive to cancellation.
             let poll_interval = Duration::from_millis(1000);
             loop {
-                let s = session
-                    .wait_for_all(&mut store, poll_interval)
-                    .await;
+                let s = session.wait_for_all(&mut store, poll_interval).await;
                 if s.running_tasks == 0 && s.queued_tasks == 0 {
                     break s;
                 }
@@ -339,15 +337,11 @@ async fn run_assistant_prompt_async(
             AssistantTaskStatus::Cancelled => {
                 console::style("− Cancelled").yellow().bold().to_string()
             }
-            AssistantTaskStatus::WaitingForInput => {
-                console::style("? Waiting for input")
-                    .blue()
-                    .bold()
-                    .to_string()
-            }
-            AssistantTaskStatus::Running => {
-                console::style("◌ Running").cyan().bold().to_string()
-            }
+            AssistantTaskStatus::WaitingForInput => console::style("? Waiting for input")
+                .blue()
+                .bold()
+                .to_string(),
+            AssistantTaskStatus::Running => console::style("◌ Running").cyan().bold().to_string(),
             other => console::style(format!("{other:?}")).dim().to_string(),
         };
         println!("  status: {status_label}");

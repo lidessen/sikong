@@ -48,23 +48,10 @@ pub struct AgentRunDecodeError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeOperationOutput {
-    Specified {
-        scope_assessment: ScopeAssessment,
-    },
-    Planned {
-        group: PlanGroup,
-    },
-    InvalidPlan {
-        code: String,
-        reason: String,
-    },
-    Executed {
-        output: String,
-    },
-    Combined {
-        output: String,
-    },
-    Verified {
-        verdict: VerificationVerdict,
-    },
+    Specified { scope_assessment: ScopeAssessment },
+    Planned { group: PlanGroup },
+    InvalidPlan { code: String, reason: String },
+    Executed { output: String },
+    Combined { output: String },
+    Verified { verdict: VerificationVerdict },
 }

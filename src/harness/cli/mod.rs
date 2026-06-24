@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use crate::{
     AgentTokenUsage, CapabilityProfile, DebugConfig, NodeOperation, NodeStatus, NodeTemplate,
-    PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, SikoConfig,
-    TaskType, WorkSize, WorkspaceRequirement, WorkspaceSurface,
+    PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, SikoConfig, TaskType, WorkSize,
+    WorkspaceRequirement, WorkspaceSurface,
 };
 use clap::{CommandFactory, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -20,12 +20,11 @@ pub mod task;
 pub use task::TaskCommand;
 pub mod assistant;
 pub use assistant::AssistantCommand;
-pub use assistant::AssistantPromptWorkspace;
 pub use assistant::AssistantPromptOutput;
-pub mod eval;
+pub use assistant::AssistantPromptWorkspace;
 pub mod chrono;
+pub mod eval;
 pub use eval::EvalCommand;
-
 
 pub use launch::AgentHostLaunch;
 
@@ -67,7 +66,6 @@ fn print_json_data(data: serde_json::Value) {
 fn print_json_error(msg: impl Into<String>) {
     print_json_output(&CliOutput::error(msg));
 }
-
 
 fn init_tracing() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -160,8 +158,14 @@ fn run_cli(cli: Cli) -> i32 {
                     json,
                 }),
         }) => {
-            match assistant::run_assistant_prompt(message, wait_ms, workspace, allow_write, write_scope, json)
-            {
+            match assistant::run_assistant_prompt(
+                message,
+                wait_ms,
+                workspace,
+                allow_write,
+                write_scope,
+                json,
+            ) {
                 Ok(()) => 0,
                 Err(error) => {
                     error!(%error, "failed to run assistant prompt");
@@ -432,15 +436,11 @@ enum Command {
     },
 }
 
-
-
-
-
 mod tests {
-    use super::*;
     use super::assistant;
     use super::eval;
     use super::task;
+    use super::*;
     use crate::{AgentRunRecord, AssistantTask, AssistantTaskEvent, EngineReport, FileTaskStore};
 
     fn test_debug_config() -> DebugConfig {
@@ -986,14 +986,20 @@ workspace:
     fn scenario_file_cannot_be_combined_with_task_or_scenario() {
         let path = Path::new("evals/task-run/dogfood-doc-review.yaml");
 
-        let task_error =
-            eval::select_task_run_split_eval_scenarios(Some("review docs".to_string()), None, Some(path))
-                .unwrap_err();
+        let task_error = eval::select_task_run_split_eval_scenarios(
+            Some("review docs".to_string()),
+            None,
+            Some(path),
+        )
+        .unwrap_err();
         assert!(task_error.to_string().contains("cannot be combined"));
 
-        let scenario_error =
-            eval::select_task_run_split_eval_scenarios(None, Some("simple-qa".to_string()), Some(path))
-                .unwrap_err();
+        let scenario_error = eval::select_task_run_split_eval_scenarios(
+            None,
+            Some("simple-qa".to_string()),
+            Some(path),
+        )
+        .unwrap_err();
         assert!(scenario_error.to_string().contains("cannot be combined"));
     }
 

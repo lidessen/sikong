@@ -12,8 +12,8 @@ use tracing::{Level, error, info};
 use crate::{
     AgentRunRequest, AgentRunResponse, AgentRunScheduler, AssistantTaskEventRecord,
     AssistantTaskStatus, Budget, CancellationToken, CapabilityProfile, Engine, EngineError,
-    EngineReport, NodeId, NodePlan, NodePolicy, NodeTemplate, ProblemKey, TaskId, TaskStore, TaskType,
-    WorkSize, Workspaces,
+    EngineReport, NodeId, NodePlan, NodePolicy, NodeTemplate, ProblemKey, TaskId, TaskStore,
+    TaskType, WorkSize, Workspaces,
 };
 
 type WorkerFactory = dyn Fn() -> Box<dyn AgentRunScheduler + Send> + Send + Sync;
