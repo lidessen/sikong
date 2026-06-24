@@ -16,7 +16,7 @@ use crate::{
     PlanGroup, PlanGroupMode, ProblemKey, ProblemNode, ProcessAgentRunScheduler, SikoConfig,
     TaskStore, TaskType, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface,
     Workspaces,
-    common::metrics::{MetricsCollector, MetricsFormatter},
+
     run_acp_stdio_server,
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -26,6 +26,8 @@ use tracing::error;
 use tracing_subscriber::EnvFilter;
 
 pub mod launch;
+pub mod metrics;
+
 pub use launch::AgentHostLaunch;
 
 /// Consistent JSON output format for all commands.
@@ -322,7 +324,7 @@ fn run_cli(cli: Cli) -> i32 {
             }
         },
         Some(Command::Metrics { json }) => {
-            run_metrics_command(json);
+            metrics::run_metrics_command(json);
             0
         }
         Some(Command::Log { limit, json }) => match print_task_logs(limit, json) {
@@ -3538,31 +3540,6 @@ fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_metrics_command(json_output: bool) {
-    // TODO: Integrate with a global/live MetricsCollector instance once one is
-    //       established by the engine or session lifecycle. For now, this
-    //       creates a fresh collector and populates it with basic process-level
-    //       metrics as a demonstration of the pipeline.
-    let mut collector = MetricsCollector::new();
-
-    // Record some basic process-level metrics
-    let uptime = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    collector.increment_counter("uptime_seconds", uptime.as_secs());
-    collector.record_timing("uptime", uptime);
-    collector.record_cost("version_cost", 0.1);
-
-    let snapshot = collector.snapshot();
-
-    if json_output {
-        print_json_data(snapshot.to_json_value());
-    } else {
-        let formatter = MetricsFormatter;
-        let output = formatter.format(&snapshot);
-        println!("{output}");
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;

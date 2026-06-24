@@ -302,6 +302,14 @@ export function runtimeOptionsForWorker(
   request: AgentRunRequest,
   runtime: "ai-sdk" | "claude-code" | "codex" | "cursor",
 ): Record<string, unknown> | undefined {
+  if (runtime === "ai-sdk") {
+    // Force tool calling when terminal tools are present. Without this the
+    // model may respond with plain text instead of calling the required tool.
+    return {
+      toolChoice: "required" as const,
+    };
+  }
+
   if (runtime !== "claude-code") {
     return undefined;
   }
