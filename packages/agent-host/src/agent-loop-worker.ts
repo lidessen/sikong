@@ -303,11 +303,9 @@ export function runtimeOptionsForWorker(
   runtime: "ai-sdk" | "claude-code" | "codex" | "cursor",
 ): Record<string, unknown> | undefined {
   if (runtime === "ai-sdk") {
-    // Force tool calling when terminal tools are present. Without this the
-    // model may respond with plain text instead of calling the required tool.
-    return {
-      toolChoice: "required" as const,
-    };
+    // Do not force toolChoice — some ai-sdk providers (DeepSeek) reject it.
+    // The engine's Ralph loop handles missing terminal tools via retry.
+    return undefined;
   }
 
   if (runtime !== "claude-code") {

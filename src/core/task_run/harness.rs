@@ -233,40 +233,40 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                 String::new()
             };
             with_operation_context(
-                context,
-                operation_prompt! {
-                    "Role" {
-                        "You are the atomic execution pass for one recursive engine node."
-                    }
-                    "Work Item" {
-                        format!(
-                            "Solve node {} inside the allowed workspace and capability scope. Node intent: {}",
-                            context.node.id, context.node.intent
-                        )
-                    }
-                    "Workspace Rules" {
-                        format!(
-                            "If workspace_surface is present, treat it as the concrete execution surface. Respect read_scope, write_scope, provider details, and allow_write exactly. read_scope controls what files may be read. allow_write controls mutation only; do not report a write-permission blocker for read-only inspection work. Submit only the work result; the workspace provider captures file changes and side effects. If the work asks you to inspect files or external state but read_scope is empty and the context provides no readable surface, say exactly that no readable file or external evidence surface is available.\n\nWrite permission: {} (allow_write={})",
-                            if context.node.capabilities.allow_write { "enabled" } else { "disabled" },
-                            context.node.capabilities.allow_write,
-                        )
-                    }
-                    "Constraints" {
-                        format!(
-                            "{}\n\n{}\n\n{}\n\n{}{}",
-                            "If the node asks for a self-contained analysis, design proposal, readiness package, test plan, explanation, or memory-only artifact, do the work from the supplied task text and operation context. Empty read_scope is not a blocker for that kind of work. Keep unknown details at the appropriate abstraction level; submit a blocker only when the node explicitly requires evidence that is unavailable.",
-                            "If the node asks you to inspect, cite, compare, or make factual claims about external URLs, repositories, docs, current releases, or other outside state, use available web or retrieval tools to observe that evidence before submitting factual claims. If no retrieval tool or supplied evidence is available, submit that evidence gap as the work result instead of reconstructing details from model memory.",
-                            "Produce the smallest complete artifact that satisfies this node from Operation Context and the allowed workspace surface. Work like a competent owner of this local slice: inspect the relevant context, make the local change or answer, and run focused checks when the workspace and capability scope allow it. Include the useful evidence in the submitted result. Do not split the work, claim final task acceptance, or decide global completion from this pass.",
-                            "Own local execution inside this node. Choose the concrete inspection path, implementation tactic, and focused evidence that best satisfies the node. If you discover that the parent intent, workspace boundary, or acceptance evidence is wrong, submit that as the result or blocker instead of silently changing the parent contract.",
-                            retry_help,
-                        )
-                    }
-                    "Completion" {
-                        finish_prompt(&[EngineTool::SubmitWork.name()])
-                    }
-                },
-            )
-        }
+            context,
+            operation_prompt! {
+                "Role" {
+                    "You are the atomic execution pass for one recursive engine node."
+                }
+                "Work Item" {
+                    format!(
+                        "Solve node {} inside the allowed workspace and capability scope. Node intent: {}",
+                        context.node.id, context.node.intent
+                    )
+                }
+                "Workspace Rules" {
+                    format!(
+                        "If workspace_surface is present, treat it as the concrete execution surface. Respect read_scope, write_scope, provider details, and allow_write exactly. read_scope controls what files may be read. allow_write controls mutation only; do not report a write-permission blocker for read-only inspection work. Submit only the work result; the workspace provider captures file changes and side effects. If the work asks you to inspect files or external state but read_scope is empty and the context provides no readable surface, say exactly that no readable file or external evidence surface is available.\n\nWrite permission: {} (allow_write={})",
+                        if context.node.capabilities.allow_write { "enabled" } else { "disabled" },
+                        context.node.capabilities.allow_write,
+                    )
+                }
+                "Constraints" {
+                    format!(
+                        "{}\n\n{}\n\n{}\n\n{}{}",
+                        "If the node asks for a self-contained analysis, design proposal, readiness package, test plan, explanation, or memory-only artifact, do the work from the supplied task text and operation context. Empty read_scope is not a blocker for that kind of work. Keep unknown details at the appropriate abstraction level; submit a blocker only when the node explicitly requires evidence that is unavailable.",
+                        "If the node asks you to inspect, cite, compare, or make factual claims about external URLs, repositories, docs, current releases, or other outside state, use available web or retrieval tools to observe that evidence before submitting factual claims. If no retrieval tool or supplied evidence is available, submit that evidence gap as the work result instead of reconstructing details from model memory.",
+                        "Produce the smallest complete artifact that satisfies this node from Operation Context and the allowed workspace surface. Work like a competent owner of this local slice: inspect the relevant context, make the local change or answer, and run focused checks when the workspace and capability scope allow it. Include the useful evidence in the submitted result. Do not split the work, claim final task acceptance, or decide global completion from this pass.",
+                        "Own local execution inside this node. Choose the concrete inspection path, implementation tactic, and focused evidence that best satisfies the node. If you discover that the parent intent, workspace boundary, or acceptance evidence is wrong, submit that as the result or blocker instead of silently changing the parent contract.",
+                        retry_help,
+                    )
+                }
+                "Completion" {
+                    finish_prompt(&[EngineTool::SubmitWork.name()])
+                }
+            },
+        )
+    },
         NodeOperation::Combine => with_operation_context(
             context,
             operation_prompt! {
@@ -329,6 +329,7 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
         }
     }
 }
+
 
 fn tools_for_operation(operation: NodeOperation) -> Vec<EngineTool> {
     match operation {

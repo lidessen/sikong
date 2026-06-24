@@ -45,7 +45,7 @@ pub async fn run_daemon(
     let root_workspace = WorkspaceRequirement::memory();
     let root_capabilities = CapabilityProfile::read_only();
 
-    let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 0);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
         worker_launch.args.clone(),

@@ -130,7 +130,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let config = SikoConfig::load()?;
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
-    let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 0);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
         worker_launch.args.clone(),
@@ -198,7 +198,7 @@ async fn run_assistant_prompt_async(
         CapabilityProfile::read_only()
     };
     let mut store = FileTaskStore::open(task::assistant_store_path(&debug))?;
-    let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 0);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
         worker_launch.args.clone(),
