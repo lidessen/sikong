@@ -331,6 +331,22 @@ fn run_cli(cli: Cli) -> i32 {
             metrics::run_metrics_command(json);
             0
         }
+        Some(Command::Daemon { json }) => {
+            let debug = DebugConfig::from_env();
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .thread_name("siko-daemon")
+                .enable_all()
+                .build()
+                .unwrap();
+            match rt.block_on(crate::run_daemon(debug, json)) {
+                Ok(()) => 0,
+                Err(error) => {
+                    error!(%error, "daemon failed");
+                    eprintln!("daemon failed: {error}");
+                    1
+                }
+            }
+        }
         Some(Command::Log { limit, json }) => match task::print_task_logs(limit, json) {
             Ok(()) => 0,
             Err(error) => {
@@ -411,6 +427,12 @@ enum Command {
     },
     /// Collect and display current metrics snapshot.
     Metrics {
+        /// Print structured JSON output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Start the persistent daemon for background task processing.
+    Daemon {
         /// Print structured JSON output.
         #[arg(long)]
         json: bool,

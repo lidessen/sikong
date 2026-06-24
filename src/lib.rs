@@ -33,6 +33,7 @@ pub use harness::assistant::{
     AssistantTaskBoardContext, AssistantTurn, AssistantTurnError, JsonRpcError, SessionReply,
     SessionState, run_acp_stdio_server,
 };
+pub use harness::daemon::run_daemon;
 pub use harness::governance::{
     GovernanceGate, GovernanceLayer, active_hard_gates_for, governance_layer_for,
 };

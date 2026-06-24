@@ -641,7 +641,8 @@ pub fn format_agent_event(entry: &AgentEventEntry) -> String {
         objective,
         record
     )
-}pub fn parse_node_operation(input: &str) -> Result<NodeOperation, Box<dyn std::error::Error>> {
+}
+pub fn parse_node_operation(input: &str) -> Result<NodeOperation, Box<dyn std::error::Error>> {
     match input.trim().to_ascii_lowercase().as_str() {
         "specify" => Ok(NodeOperation::Specify),
         "plan" => Ok(NodeOperation::Plan),
