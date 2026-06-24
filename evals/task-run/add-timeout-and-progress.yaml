@@ -1,0 +1,26 @@
+id: add-timeout-and-progress
+task: |
+  给 siko send 添加超时和进度反馈。
+
+  问题：
+  1. siko send 在 agent 响应慢或卡住时没有任何输出，用户不知道发生了什么
+  2. 卡住的时间可能长达几十秒甚至永久
+  3. 失败时没有清晰的错误信息和解决建议
+
+  要求：
+  1. handle_message 加超时（默认 30 秒），超过则取消并返回超时错误
+  2. 等待 agent 响应时显示进度提示，比如每 5 秒显示一个 "."
+  3. 失败时显示清晰的错误信息和解决建议
+  4. 只改 src/harness/cli.rs
+
+  约束：cargo build && cargo test 必须通过。
+expectation: |
+  send 命令有超时和进度反馈。
+workspace:
+  provider: current-file-system
+  read_scope:
+    - '**/*'
+  write_scope:
+    - src/harness/cli.rs
+  allow_write: true
+max_steps: 48
