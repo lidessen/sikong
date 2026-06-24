@@ -10,7 +10,9 @@ use crate::{
 };
 
 use super::context::{AssistantContext, AssistantConversationMessage, AssistantConversationRole};
-use super::tools::{CancelTaskArgs, CreateTaskArgs, FinishTurnArgs, InspectTaskArgs};
+use super::tools::{
+    CancelTaskArgs, CreateTaskArgs, FinishTurnArgs, InspectTaskArgs, RetrieveEvalTranscriptArgs,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionState {
@@ -408,6 +410,68 @@ impl<L: AssistantLoop> AssistantSession<L> {
                     if let Some(task_id) = reply.task_id {
                         push_unique(&mut touched_task_ids, task_id);
                     }
+                }
+                "query_dogfood_tasks" => {
+                    let tasks = store.list_tasks();
+                    let lines: Vec<String> = tasks
+                        .iter()
+                        .map(|t| format!("{}: {} — {:?}", t.id, t.title, t.status))
+                        .collect();
+                    return SessionReply {
+                        text: if lines.is_empty() {
+                            "No tasks found.".to_string()
+                        } else {
+                            lines.join("\n")
+                        },
+                        task_id: None,
+                    };
+                }
+                "retrieve_eval_transcript" => {
+                    let args = match decode_tool_args::<RetrieveEvalTranscriptArgs>(&call) {
+                        Ok(args) => args,
+                        Err(error) => return tool_sequence_error(error),
+                    };
+                    let path = std::path::Path::new(&args.artifact_dir);
+                    let entries = match std::fs::read_dir(path) {
+                        Ok(entries) => entries,
+                        Err(e) => {
+                            return SessionReply {
+                                text: format!(
+                                    "Cannot read artifact dir {}: {e}",
+                                    args.artifact_dir
+                                ),
+                                task_id: None,
+                            };
+                        }
+                    };
+                    let mut results = Vec::new();
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+
+                        // Skip entries that don't match task_id or scenario filters
+                        if args
+                            .task_id
+                            .as_ref()
+                            .is_some_and(|tid| !name.contains(tid.as_str()))
+                            || args
+                                .scenario
+                                .as_ref()
+                                .is_some_and(|sc| !name.contains(sc.as_str()))
+                        {
+                            continue;
+                        }
+                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                            results.push(format!("--- {name} ---\n{content}"));
+                        }
+                    }
+                    return SessionReply {
+                        text: if results.is_empty() {
+                            format!("No matching artifacts found in {}", args.artifact_dir)
+                        } else {
+                            results.join("\n")
+                        },
+                        task_id: None,
+                    };
                 }
                 "finish_turn" => {
                     saw_terminal = true;

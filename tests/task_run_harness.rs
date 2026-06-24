@@ -791,6 +791,8 @@ fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
         "inspect_task",
         "create_task",
         "cancel_task",
+        "query_dogfood_tasks",
+        "retrieve_eval_transcript",
         "finish_turn",
     ];
     let request = harness.build_agent_run();
@@ -804,7 +806,7 @@ fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
     assert!(prompt_section_exists(&request.prompt, "Task Board"));
     assert!(prompt_section_exists(
         &request.prompt,
-        "Dogfood Development"
+        "Dogfood Attention Contract"
     ));
     assert!(prompt_section_exists(
         &request.prompt,
@@ -813,10 +815,7 @@ fn assistant_harness_builds_assistant_turn_prompt_tools_and_config() {
     assert!(prompt_section_exists(&request.prompt, "Latest Message"));
     assert!(prompt_section_exists(&request.prompt, "Completion"));
     assert!(prompt_contains(&request.prompt, "assistant-level operator"));
-    assert!(prompt_contains(
-        &request.prompt,
-        "Sikong's self-development loop"
-    ));
+    assert!(prompt_contains(&request.prompt, "Attention Contract"));
     assert!(prompt_contains(&request.prompt, "query_messages"));
     assert!(prompt_contains(&request.prompt, "finish_turn"));
     assert_eq!(request.terminal_tool_set, vec!["finish_turn"]);

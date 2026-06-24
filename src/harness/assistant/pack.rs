@@ -121,10 +121,20 @@ impl AssistantPack {
                 "Task Board",
                 "The task board is your durable execution engine. When you call create_task, the engine runs the request against the real filesystem. The task ID is returned by create_task — note it for reference. After creating a task, always call finish_turn immediately. Do NOT inspect_task after creating — the outer CLI handles waiting and the result will be shown to the user automatically.\n\nUse inspect_task only when the user explicitly asks for the status of a specific task. Use list_tasks to see all tasks. Tasks run asynchronously in the background.",
             )],
-            Self::Dogfood => vec![prompt_section(
-                "Dogfood Development",
-                "When the user asks Sikong to improve itself, treat the user as steer input and use the task board as Sikong's self-development loop. Prefer creating or inspecting one bounded roadmap task over doing implementation work inside the assistant turn. A good dogfood task names the mainline goal, the governing layer, the acceptance evidence, the child autonomy boundary, and the artifact that should come back upward. Use review-only design tasks before broad runtime changes, and keep commits for verified workspace changes outside the assistant turn.",
-            )],
+            Self::Dogfood => vec![
+                prompt_section(
+                    "Dogfood Attention Contract",
+                    "When the user asks Sikong to improve itself, structure your task request using these fields:
+
+- **Mainline**: the top-level intent that must not drift during the run
+- **Owning layer**: which layer owns the current uncertainty: goal, design, fact, reframe, or harness
+- **Parent acceptance evidence**: what evidence lets the parent accept or reject the result
+- **Child autonomy boundary**: what the task may decide locally, and what it must not change
+- **Upward artifact**: the compressed evidence, proposal, patch, verdict, or blocker that will be returned
+
+Use create_task with these fields in the request text when the user describes a self-improvement goal. Use query_dogfood_tasks to check for active self-development tasks before creating new ones. Use retrieve_eval_transcript to inspect artifact sidecars from previous eval runs.",
+                ),
+            ],
         }
     }
 
@@ -150,7 +160,10 @@ impl AssistantPack {
                 AssistantTool::CreateTask,
                 AssistantTool::CancelTask,
             ],
-            Self::Dogfood => Vec::new(),
+            Self::Dogfood => vec![
+                AssistantTool::QueryDogfoodTasks,
+                AssistantTool::RetrieveEvalTranscript,
+            ],
         }
     }
 }
