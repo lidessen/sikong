@@ -1,6 +1,6 @@
 # sikong
 
-Sikong is a **Rust-based** recursive agent engine for self-improving autonomous task execution. The Rust implementation in `src/` is the active mainline; an older Go/Bun workspace/client track remains in the repository as pre-cleanup reference material.
+Sikong is a **Rust-based** recursive agent engine for self-improving autonomous task execution.
 
 ## Rust Mainline
 
@@ -33,16 +33,6 @@ Release builds:
 cargo build --release --bin siko
 ```
 
-## Legacy Go/Bun Track (Reference Only)
-
-The Go CLI (`cmd/sikong`, `cmd/sikongd`) and Bun workspace packages (`packages/agent-loop`, `packages/client`, `packages/workspace`) are preserved as reference material from an earlier implementation track. They are not actively maintained.
-
-```bash
-# Legacy development commands (Go/Bun)
-bun run dev:cli
-bun run dev:daemon
-```
-
 ## Design
 
 Start with [design/README.md](design/README.md).
@@ -57,13 +47,10 @@ Start with [design/README.md](design/README.md).
 │   └── common/         # Workspace providers, config, types, metrics
 ├── tests/              # Rust integration tests
 ├── design/             # Architecture & design documentation
-├── cmd/                # Legacy Go CLI (reference only)
-├── internal/           # Legacy Go packages (reference only)
-└── packages/           # Legacy Bun workspaces (reference only)
-    ├── agent-loop/
-    ├── agent-host/
-    ├── client/
-    └── workspace/
+├── packages/
+│   ├── agent-host/     # External agent process (Bun)
+│   └── agent-loop/     # Agent loop and tool abstraction (Bun)
+└── evals/              # Task-run eval scenarios
 ```
 
 ## Setup (Rust)
@@ -85,9 +72,7 @@ cargo check
 cargo clippy
 cargo fmt --check
 
-# Legacy Go/Bun checks
+# TypeScript checks (using Bun workspace)
 bun run check
 bun run typecheck
-bun run lint
-bun run fmt:check
 ```

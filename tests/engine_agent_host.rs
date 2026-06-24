@@ -328,8 +328,8 @@ async fn host_git_merge_conflict_is_given_to_agent_instead_of_pruning_parent() {
     }
 
     let mut engine = workspace_engine();
-    let child_a = scoped_git_leaf("host-a", "patch a", "packages/client/src/api.ts");
-    let child_b = scoped_git_leaf("host-b", "patch b", "packages/client/src/api.ts");
+    let child_a = scoped_git_leaf("host-a", "patch a", "src/lib.rs");
+    let child_b = scoped_git_leaf("host-b", "patch b", "src/lib.rs");
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
         task_type: TaskType::Explore,
@@ -337,7 +337,7 @@ async fn host_git_merge_conflict_is_given_to_agent_instead_of_pruning_parent() {
         intent: "combined patch".to_string(),
         size: WorkSize::Small,
         scope_assessment: None,
-        workspace: WorkspaceRequirement::git(["packages/client/src/api.ts"]),
+        workspace: WorkspaceRequirement::git(["src/lib.rs"]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
         plan: NodePlan::Group(PlanGroup {

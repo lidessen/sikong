@@ -17,13 +17,16 @@ use crate::{
     TaskStore, TaskType, WorkSize, WorkspaceProvider, WorkspaceRequirement, WorkspaceSurface,
     Workspaces,
     common::metrics::{MetricsCollector, MetricsFormatter},
-    non_empty_env, run_acp_stdio_server,
+    run_acp_stdio_server,
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
+
+pub mod launch;
+pub use launch::AgentHostLaunch;
 
 /// Consistent JSON output format for all commands.
 /// Wraps command output in a uniform structure with machine-readable keys.
@@ -640,7 +643,7 @@ async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
     let config = SikoConfig::load()?;
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let worker_launch = resolve_agent_loop_launch(&debug, 32);
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
         worker_launch.args.clone(),
@@ -707,7 +710,7 @@ async fn run_assistant_prompt_async(
         CapabilityProfile::read_only()
     };
     let mut store = FileTaskStore::open(assistant_store_path(&debug))?;
-    let worker_launch = resolve_agent_loop_launch(&debug, 32);
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 32);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
         worker_launch.args.clone(),
@@ -1576,7 +1579,7 @@ async fn run_task_run_split_eval_async(
 
     for scenario in scenarios {
         let run_started = Instant::now();
-        let launch = resolve_agent_loop_launch(&debug, scenario.actor_max_steps());
+        let launch = launch::resolve_agent_loop_launch(&debug, scenario.actor_max_steps());
         let (root_workspace, allow_write) = eval_task_workspace_requirement(&scenario)?;
         let mut engine = Engine::new(
             Workspaces::default(),
@@ -1621,7 +1624,7 @@ async fn run_task_run_split_eval_async(
             write_task_run_artifacts(artifact_dir, &scenario, root, &engine, &report)?;
         let actor_usage = sum_agent_run_usage(&report.agent_runs);
 
-        let judge_launch = resolve_agent_loop_launch(&debug, 6);
+        let judge_launch = launch::resolve_agent_loop_launch(&debug, 6);
         let mut judge = ProcessAgentRunScheduler::new(judge_launch.command, judge_launch.args);
         let judge_response = judge
             .run(judge_request(&transcript), CancellationToken::new())
@@ -1791,8 +1794,8 @@ async fn run_task_run_operation_eval_async(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let scenarios = select_operation_eval_scenarios(operation.as_deref(), scenario.as_deref())?;
     let debug = DebugConfig::from_env();
-    let worker_launch = resolve_agent_loop_launch(&debug, 6);
-    let judge_launch = resolve_agent_loop_launch(&debug, 4);
+    let worker_launch = launch::resolve_agent_loop_launch(&debug, 6);
+    let judge_launch = launch::resolve_agent_loop_launch(&debug, 4);
     let mut worker =
         ProcessAgentRunScheduler::new(worker_launch.command.clone(), worker_launch.args.clone());
     let mut judge = ProcessAgentRunScheduler::new(judge_launch.command, judge_launch.args);
@@ -3119,242 +3122,6 @@ fn decode_operation_judgement(
     Ok(serde_json::from_value(call.arguments)?)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AgentHostLaunch {
-    command: String,
-    args: Vec<String>,
-}
-
-fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHostLaunch {
-    let mut launch = resolve_agent_host_launch(debug);
-    let config = SikoConfig::load().ok();
-
-    let provider = std::env::var("SIKONG_AGENT_HOST_PROVIDER")
-        .ok()
-        .filter(|value| {
-            value == "deepseek"
-                || value == "kimi"
-                || value == "claude"
-                || value == "codex"
-                || value == "cursor"
-        })
-        .unwrap_or_else(|| {
-            config
-                .as_ref()
-                .map(|c| c.worker_provider())
-                .unwrap_or_else(|| "deepseek".to_string())
-        });
-    let runtime = std::env::var("SIKONG_AGENT_HOST_RUNTIME")
-        .ok()
-        .filter(|value| {
-            value == "ai-sdk" || value == "claude-code" || value == "codex" || value == "cursor"
-        })
-        .unwrap_or_else(|| {
-            config
-                .as_ref()
-                .map(|c| c.worker_backend())
-                .unwrap_or_else(|| "ai-sdk".to_string())
-        });
-    let model = std::env::var("SIKONG_AGENT_HOST_MODEL")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .or_else(|| {
-            config
-                .as_ref()
-                .and_then(|c| c.current_model())
-                .map(|m| m.to_string())
-        });
-    launch.args.extend(
-        [
-            "--worker",
-            "agent-loop",
-            "--provider",
-            provider.as_str(),
-            "--runtime",
-            runtime.as_str(),
-        ]
-        .into_iter()
-        .map(str::to_string),
-    );
-    if let Some(m) = &model {
-        launch.args.push("--model".to_string());
-        launch.args.push(m.clone());
-    }
-    launch.args.push("--max-steps".to_string());
-    launch.args.push(max_steps.to_string());
-    launch
-}
-
-fn resolve_agent_host_launch(debug: &DebugConfig) -> AgentHostLaunch {
-    resolve_agent_host_launch_from(
-        &|name| std::env::var(name).ok(),
-        std::env::current_exe().ok().as_deref(),
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        debug,
-    )
-}
-
-fn resolve_agent_host_launch_from(
-    env: &dyn Fn(&str) -> Option<String>,
-    current_exe: Option<&Path>,
-    manifest_dir: &Path,
-    debug: &DebugConfig,
-) -> AgentHostLaunch {
-    if let Some(command) = debug
-        .agent_host_command
-        .clone()
-        .or_else(|| non_empty_env(env, "SIKONG_AGENT_HOST_COMMAND"))
-    {
-        return AgentHostLaunch {
-            command,
-            args: Vec::new(),
-        };
-    }
-
-    if let Some(script) = debug
-        .agent_host_script
-        .clone()
-        .or_else(|| non_empty_env(env, "SIKONG_AGENT_HOST_SCRIPT"))
-    {
-        return bun_script_launch(env, debug, script);
-    }
-
-    // Prefer compiled agent-host binary (no Bun dependency). Do not run a
-    // synchronous probe here: release host binaries own the socket protocol and
-    // may not implement a quick CLI help path.
-    if let Some(path) = sibling_agent_host_binary(current_exe) {
-        return binary_launch(path);
-    }
-
-    // Fall back to agent-host JS bundle (requires Bun)
-    if let Some(sibling_dir) = sibling_agent_host_source_dir(current_exe) {
-        // Check for bundled JS first, then TS source
-        let js_entry = sibling_dir.join("runtime-host.js");
-        let ts_entry = sibling_dir.join("runtime-host.ts");
-        let entry = if js_entry.exists() {
-            js_entry
-        } else {
-            ts_entry
-        };
-        if entry.exists() {
-            // Use bun from PATH or known locations
-            let bun_cmd = env("BUN")
-                .or_else(which_bun)
-                .unwrap_or_else(|| "bun".to_string());
-            return AgentHostLaunch {
-                command: bun_cmd,
-                args: vec!["run".to_string(), entry.to_string_lossy().to_string()],
-            };
-        }
-    }
-
-    if let Some(runtime_dir) = debug
-        .runtime_dir
-        .clone()
-        .or_else(|| non_empty_env(env, "SIKONG_RUNTIME_DIR").map(PathBuf::from))
-    {
-        let path = Path::new(&runtime_dir)
-            .join("bin")
-            .join(agent_host_binary_name());
-        if path.exists() {
-            return binary_launch(path);
-        }
-    }
-
-    let dev_script = manifest_dir
-        .join("packages")
-        .join("agent-host")
-        .join("src")
-        .join("runtime-host.ts");
-    if dev_script.exists() {
-        return bun_script_launch(env, debug, dev_script.to_string_lossy().to_string());
-    }
-
-    bun_script_launch(
-        env,
-        debug,
-        "packages/agent-host/src/runtime-host.ts".to_string(),
-    )
-}
-
-fn sibling_agent_host_binary(current_exe: Option<&Path>) -> Option<PathBuf> {
-    let exe = current_exe?;
-    let sibling = exe.parent()?.join(agent_host_binary_name());
-    sibling.exists().then_some(sibling)
-}
-
-fn sibling_agent_host_source_dir(current_exe: Option<&Path>) -> Option<PathBuf> {
-    let exe = current_exe?;
-    let dir = exe.parent()?.join("agent-host");
-    dir.is_dir().then_some(dir)
-}
-
-/// Try to find bun executable — check common locations and PATH.
-fn which_bun() -> Option<String> {
-    let candidates = [
-        std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(".bun/bin/bun"))
-            .ok(),
-        Some(PathBuf::from("/opt/homebrew/bin/bun")),
-        Some(PathBuf::from("/usr/local/bin/bun")),
-        Some(PathBuf::from("/usr/bin/bun")),
-    ];
-    for c in candidates.into_iter().flatten() {
-        if c.exists() {
-            return Some(c.to_string_lossy().to_string());
-        }
-    }
-    // Try PATH lookup via `which bun`
-    if let Ok(output) = std::process::Command::new("which").arg("bun").output()
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Some(path);
-        }
-    }
-    // Try `command -v bun` as alternative
-    if let Ok(output) = std::process::Command::new("bash")
-        .args(["-c", "command -v bun"])
-        .output()
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn binary_launch(path: impl Into<PathBuf>) -> AgentHostLaunch {
-    AgentHostLaunch {
-        command: path.into().to_string_lossy().to_string(),
-        args: Vec::new(),
-    }
-}
-
-fn bun_script_launch(
-    env: &dyn Fn(&str) -> Option<String>,
-    debug: &DebugConfig,
-    script: String,
-) -> AgentHostLaunch {
-    AgentHostLaunch {
-        command: non_empty_env(env, "SIKONG_BUN_COMMAND")
-            .or_else(|| debug.bun_command.clone())
-            .unwrap_or_else(|| "bun".to_string()),
-        args: vec![script],
-    }
-}
-
-fn agent_host_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "siko-agent-host.exe"
-    } else {
-        "siko-agent-host"
-    }
-}
-
 fn init_tracing() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
     let _ = tracing_subscriber::fmt()
@@ -3776,12 +3543,6 @@ fn run_metrics_command(json_output: bool) {
 mod tests {
     use super::*;
     use crate::{AgentRunRecord, EngineReport};
-    use std::collections::BTreeMap;
-    use std::fs;
-
-    fn env_lookup<'a>(env: &'a BTreeMap<&'a str, &'a str>) -> impl Fn(&str) -> Option<String> + 'a {
-        |name| env.get(name).map(|value| value.to_string())
-    }
 
     fn test_debug_config() -> DebugConfig {
         DebugConfig::default()
@@ -4495,158 +4256,6 @@ workspace:
         assert!(line.contains("node=3"));
         assert!(line.contains("op=Execute"));
         assert!(line.contains("submit_work"));
-    }
-
-    #[test]
-    fn agent_host_launch_uses_command_override() {
-        let env = BTreeMap::from([("SIKONG_AGENT_HOST_COMMAND", "/tmp/siko-agent-host")]);
-
-        let launch = resolve_agent_host_launch_from(
-            &env_lookup(&env),
-            None,
-            Path::new("/missing"),
-            &test_debug_config(),
-        );
-
-        assert_eq!(
-            launch,
-            AgentHostLaunch {
-                command: "/tmp/siko-agent-host".to_string(),
-                args: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn agent_host_launch_uses_script_override_with_bun_command() {
-        let env = BTreeMap::from([
-            ("SIKONG_AGENT_HOST_SCRIPT", "/tmp/runtime-host.ts"),
-            ("SIKONG_BUN_COMMAND", "/opt/bun"),
-        ]);
-
-        let launch = resolve_agent_host_launch_from(
-            &env_lookup(&env),
-            None,
-            Path::new("/missing"),
-            &test_debug_config(),
-        );
-
-        assert_eq!(
-            launch,
-            AgentHostLaunch {
-                command: "/opt/bun".to_string(),
-                args: vec!["/tmp/runtime-host.ts".to_string()],
-            }
-        );
-    }
-
-    #[test]
-    fn agent_host_launch_prefers_sibling_release_binary() {
-        let temp = tempfile::tempdir().unwrap();
-        let exe = temp.path().join("siko");
-        let host = temp.path().join(agent_host_binary_name());
-        fs::write(&exe, "").unwrap();
-        fs::write(&host, "").unwrap();
-        let env = BTreeMap::new();
-
-        let launch = resolve_agent_host_launch_from(
-            &env_lookup(&env),
-            Some(&exe),
-            Path::new("/missing"),
-            &test_debug_config(),
-        );
-
-        assert_eq!(launch, binary_launch(host));
-    }
-
-    #[test]
-    fn agent_host_launch_uses_runtime_bundle_binary() {
-        let temp = tempfile::tempdir().unwrap();
-        let bin = temp.path().join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let host = bin.join(agent_host_binary_name());
-        fs::write(&host, "").unwrap();
-        let runtime_dir = temp.path().to_string_lossy().to_string();
-        let env = BTreeMap::from([("SIKONG_RUNTIME_DIR", runtime_dir.as_str())]);
-
-        let launch = resolve_agent_host_launch_from(
-            &env_lookup(&env),
-            None,
-            Path::new("/missing"),
-            &test_debug_config(),
-        );
-
-        assert_eq!(launch, binary_launch(host));
-    }
-
-    #[test]
-    fn agent_host_launch_falls_back_to_dev_script() {
-        let temp = tempfile::tempdir().unwrap();
-        let script = temp
-            .path()
-            .join("packages")
-            .join("agent-host")
-            .join("src")
-            .join("runtime-host.ts");
-        fs::create_dir_all(script.parent().unwrap()).unwrap();
-        fs::write(&script, "").unwrap();
-        let env = BTreeMap::new();
-
-        let launch = resolve_agent_host_launch_from(
-            &env_lookup(&env),
-            None,
-            temp.path(),
-            &test_debug_config(),
-        );
-
-        assert_eq!(
-            launch,
-            AgentHostLaunch {
-                command: "bun".to_string(),
-                args: vec![script.to_string_lossy().to_string()],
-            }
-        );
-    }
-
-    #[test]
-    fn agent_host_launch_uses_debug_command() {
-        let debug = DebugConfig {
-            agent_host_command: Some("/configured/siko-agent-host".to_string()),
-            ..DebugConfig::default()
-        };
-        let env = BTreeMap::new();
-
-        let launch =
-            resolve_agent_host_launch_from(&env_lookup(&env), None, Path::new("/missing"), &debug);
-
-        assert_eq!(
-            launch,
-            AgentHostLaunch {
-                command: "/configured/siko-agent-host".to_string(),
-                args: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn agent_host_launch_uses_debug_script_and_bun_command() {
-        let debug = DebugConfig {
-            bun_command: Some("/configured/bun".to_string()),
-            agent_host_script: Some("/configured/runtime-host.ts".to_string()),
-            ..DebugConfig::default()
-        };
-        let env = BTreeMap::new();
-
-        let launch =
-            resolve_agent_host_launch_from(&env_lookup(&env), None, Path::new("/missing"), &debug);
-
-        assert_eq!(
-            launch,
-            AgentHostLaunch {
-                command: "/configured/bun".to_string(),
-                args: vec!["/configured/runtime-host.ts".to_string()],
-            }
-        );
     }
 
     // ── Utility function tests ──────────────────────────────────────────

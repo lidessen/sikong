@@ -138,8 +138,8 @@ async fn engine_harness_includes_candidate_child_and_workspace_surface_context()
     let worker = RecordingAgentRunScheduler::default();
     let recorder = worker.clone();
     let mut engine = Engine::new(Workspaces::default(), worker);
-    let child_a = scoped_git_leaf("a", "patch a", "packages/client/src/api.ts");
-    let child_b = scoped_git_leaf("b", "patch b", "packages/client/src/api.ts");
+    let child_a = scoped_git_leaf("a", "patch a", "src/lib.rs");
+    let child_b = scoped_git_leaf("b", "patch b", "src/lib.rs");
     let root = engine.insert_root(NodeTemplate {
         policy: NodePolicy::Explore,
         task_type: TaskType::Explore,
@@ -147,7 +147,7 @@ async fn engine_harness_includes_candidate_child_and_workspace_surface_context()
         intent: "combined patch".to_string(),
         size: WorkSize::Small,
         scope_assessment: None,
-        workspace: WorkspaceRequirement::git(["packages/client/src/api.ts"]),
+        workspace: WorkspaceRequirement::git(["src/lib.rs"]),
         capabilities: CapabilityProfile::writable(),
         budget: Budget::default(),
         plan: NodePlan::Group(PlanGroup {
