@@ -23,6 +23,7 @@ pub use assistant::AssistantCommand;
 pub use assistant::AssistantPromptWorkspace;
 pub use assistant::AssistantPromptOutput;
 pub mod eval;
+pub mod chrono;
 pub use eval::EvalCommand;
 
 
@@ -1007,7 +1008,7 @@ workspace:
 
     #[test]
     fn chrono_now_month_format() {
-        let month = eval::chrono_now_month();
+        let month = chrono::chrono_now_month();
         // Should match YYYY-MM format
         assert_eq!(month.len(), 7);
         assert_eq!(month.chars().filter(|&c| c == '-').count(), 1);
@@ -1160,28 +1161,28 @@ workspace:
 
     #[test]
     fn is_leap_returns_true_for_typical_leap_years() {
-        assert!(eval::is_leap(2000));
-        assert!(eval::is_leap(2024));
-        assert!(eval::is_leap(1996));
-        assert!(eval::is_leap(2400));
+        assert!(chrono::is_leap(2000));
+        assert!(chrono::is_leap(2024));
+        assert!(chrono::is_leap(1996));
+        assert!(chrono::is_leap(2400));
     }
 
     #[test]
     fn is_leap_returns_false_for_common_years() {
-        assert!(!eval::is_leap(2023));
-        assert!(!eval::is_leap(1900));
-        assert!(!eval::is_leap(2100));
-        assert!(!eval::is_leap(2025));
+        assert!(!chrono::is_leap(2023));
+        assert!(!chrono::is_leap(1900));
+        assert!(!chrono::is_leap(2100));
+        assert!(!chrono::is_leap(2025));
     }
 
     #[test]
     fn is_leap_handles_century_rule() {
-        assert!(!eval::is_leap(1700));
-        assert!(!eval::is_leap(1800));
-        assert!(!eval::is_leap(1900));
-        assert!(eval::is_leap(1600));
-        assert!(eval::is_leap(2000));
-        assert!(eval::is_leap(2400));
+        assert!(!chrono::is_leap(1700));
+        assert!(!chrono::is_leap(1800));
+        assert!(!chrono::is_leap(1900));
+        assert!(chrono::is_leap(1600));
+        assert!(chrono::is_leap(2000));
+        assert!(chrono::is_leap(2400));
     }
 
     #[test]
@@ -1546,7 +1547,7 @@ workspace:
 
     #[test]
     fn chrono_now_date_has_correct_format() {
-        let date = eval::chrono_now_date();
+        let date = chrono::chrono_now_date();
         // Should match YYYY-MM-DD format
         assert_eq!(date.len(), 10);
         assert_eq!(date.chars().filter(|&c| c == '-').count(), 2);
