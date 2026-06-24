@@ -53,9 +53,11 @@ pub fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> Agent
     // Claude-code runtime needs more steps for built-in tool chains (Read,
     // Write, Bash, Grep, etc.) before calling the terminal tool. The ai-sdk
     // runtime completes in 1-3 tool calls per agent run.
+    // Each runtime has its own native default (Claude Code ~100, ai-sdk 20);
+    // we only cap when explicitly configured via env or config.
     let max_steps = if max_steps == 0 {
         match runtime.as_str() {
-            "claude-code" => 64,
+            "claude-code" => 100,
             "codex" | "cursor" => 48,
             _ => 24,
         }
