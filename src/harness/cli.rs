@@ -630,66 +630,9 @@ async fn run_assistant_prompt_async(
     );
 
     println!("{} Processing...", console::style(" >>").bold().green());
-    let timeout_duration = Duration::from_millis(wait_ms);
-    let start = Instant::now();
-
-    // Start progress indicator in non-JSON mode
-    let progress_handle = if !json_output {
-        Some(tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            loop {
-                print!(".");
-                io::stdout().flush().ok();
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        }))
-    } else {
-        None
-    };
-
-    // Wait for assistant response with configurable timeout
-    let reply = match tokio::time::timeout(
-        timeout_duration,
-        session.handle_message(&mut store, message),
-    )
-    .await
-    {
-        Ok(reply) => {
-            // Stop progress indicator
-            if let Some(ref handle) = progress_handle {
-                handle.abort();
-            }
-            if !json_output {
-                println!();
-            }
-            reply
-        }
-        Err(_elapsed) => {
-            if let Some(ref handle) = progress_handle {
-                handle.abort();
-            }
-            if !json_output {
-                println!();
-            }
-            session.cancel(&mut store).await;
-            let error_msg = format!(
-                "The assistant did not respond within {:.1} seconds. This may happen if the model is slow or the request is too complex. Try simplifying your request or increase the timeout with --wait-ms.",
-                timeout_duration.as_secs_f64()
-            );
-            if json_output {
-                print_json_error(error_msg);
-            } else {
-                eprintln!("error: {error_msg}");
-            }
-            return Err("assistant timeout".into());
-        }
-    };
-
-    // Wait for remaining tasks with remaining timeout budget
-    let remaining = timeout_duration
-        .checked_sub(start.elapsed())
-        .unwrap_or(Duration::ZERO);
-    session.wait_for_all(&mut store, remaining).await;
+    io::stdout().flush().ok();
+    let reply = session.handle_message(&mut store, message).await;
+    session.wait_for_all(&mut store, Duration::from_secs(300)).await;
     let state = session.state();
     let task_status = reply
         .task_id
