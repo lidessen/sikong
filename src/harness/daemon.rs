@@ -8,7 +8,7 @@ use tracing::{error, info};
 
 use crate::{
     AssistantSession, AssistantSessionConfig, CapabilityProfile, DebugConfig, FileTaskStore,
-    ProcessAgentRunScheduler, SikoConfig, TaskStore, WorkspaceRequirement,
+    ProcessAgentRunScheduler, SikoConfig, TaskStore, WorkspaceProvider, WorkspaceRequirement,
 };
 
 use super::cli::launch;
@@ -27,6 +27,11 @@ pub async fn run_daemon(
     // Remove stale socket file
     let _ = tokio::fs::remove_file(&socket_path).await;
 
+    // Ensure socket parent directory exists
+    if let Some(parent) = socket_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
     let listener = UnixListener::bind(&socket_path)?;
     info!(path = ?socket_path, "daemon listening");
 
@@ -42,7 +47,12 @@ pub async fn run_daemon(
 
     // Build shared session state
     let config = SikoConfig::load().unwrap_or_default();
-    let root_workspace = WorkspaceRequirement::memory();
+    let root_workspace = WorkspaceRequirement {
+        provider: WorkspaceProvider::FileSystem,
+        read_scope: vec!["**/*".to_string()],
+        write_scope: Vec::new(),
+        git: None,
+    };
     let root_capabilities = CapabilityProfile::read_only();
 
     let worker_launch = launch::resolve_agent_loop_launch(&debug, 0);
