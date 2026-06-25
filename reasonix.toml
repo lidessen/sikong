@@ -30,7 +30,7 @@ cold_resume_prune   = true   # elide stale tool results when reopening a session
 
 [tools]
 enabled = []   # empty = all built-in tools
-bash_timeout_seconds = 120   # foreground safety cap; set 0 for no tool-local cap
+bash_timeout_seconds = 0        # 0 = no tool-local timeout
 
 [tools.background_jobs]
 stalled_warning_seconds = 900   # warn once per background job after this many quiet seconds; 0 disables
