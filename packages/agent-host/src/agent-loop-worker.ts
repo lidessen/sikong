@@ -88,6 +88,40 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
           } catch (e) { return { ok: false, error: errorMessage(e) }; }
         },
       });
+      execTools.Read = defineTool({
+        description: "Read a file. Returns the file contents as text.",
+        inputSchema: { type: "object", properties: {
+          path: { type: "string", description: "Path to the file to read" },
+        }, required: ["path"] } as Record<string, unknown>,
+        execute: async (args: Record<string, unknown>) => {
+          const path = stringOr(args.path, "");
+          try {
+            const file = Bun.file(path);
+            const exists = await file.exists();
+            if (!exists) return { ok: false, error: "File not found: " + path };
+            const text = await file.text();
+            return { ok: true, content: text.slice(0, 50000) };
+          } catch (e) { return { ok: false, error: errorMessage(e) }; }
+        },
+      });
+      execTools.Glob = defineTool({
+        description: "List files matching a glob pattern. Returns file paths.",
+        inputSchema: { type: "object", properties: {
+          pattern: { type: "string", description: "Glob pattern (e.g. **/*.go)" },
+        }, required: ["pattern"] } as Record<string, unknown>,
+        execute: async (args: Record<string, unknown>) => {
+          const pattern = stringOr(args.pattern, "");
+          try {
+            const glob = new Bun.Glob(pattern);
+            const paths: string[] = [];
+            for await (const path of glob.scan()) {
+              paths.push(path);
+              if (paths.length >= 200) break;
+            }
+            return { ok: true, paths };
+          } catch (e) { return { ok: false, error: errorMessage(e) }; }
+        },
+      });
     }
     const tools = { ...specTools, ...execTools };
 

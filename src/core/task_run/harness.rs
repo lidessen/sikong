@@ -253,11 +253,12 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                 }
                 "Constraints" {
                     format!(
-                        "{}\n\n{}\n\n{}\n\n{}{}",
+                        "{}\n\n{}\n\n{}\n\n{}\n\n{}{}",
                         "If the node asks for a self-contained analysis, design proposal, readiness package, test plan, explanation, or memory-only artifact, do the work from the supplied task text and operation context. Empty read_scope is not a blocker for that kind of work. Keep unknown details at the appropriate abstraction level; submit a blocker only when the node explicitly requires evidence that is unavailable.",
                         "If the node asks you to inspect, cite, compare, or make factual claims about external URLs, repositories, docs, current releases, or other outside state, use available web or retrieval tools to observe that evidence before submitting factual claims. If no retrieval tool or supplied evidence is available, submit that evidence gap as the work result instead of reconstructing details from model memory.",
                         "Produce the smallest complete artifact that satisfies this node from Operation Context and the allowed workspace surface. Work like a competent owner of this local slice: inspect the relevant context, make the local change or answer, and run focused checks when the workspace and capability scope allow it. Include the useful evidence in the submitted result. Do not split the work, claim final task acceptance, or decide global completion from this pass.",
                         "Own local execution inside this node. Choose the concrete inspection path, implementation tactic, and focused evidence that best satisfies the node. If you discover that the parent intent, workspace boundary, or acceptance evidence is wrong, submit that as the result or blocker instead of silently changing the parent contract.",
+                        "When your task is to write code, return the file content by calling submit_work. Bash, Read, and Glob are for exploration and inspection only — they are not the way to output results. Do not try to compile, run, or execute code through shell tools.",
                         retry_help,
                     )
                 }
