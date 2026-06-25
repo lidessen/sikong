@@ -18,10 +18,7 @@ fn daemon_socket_path(debug: &DebugConfig) -> PathBuf {
     debug.data_dir().join("daemon.sock")
 }
 
-pub async fn run_daemon(
-    debug: DebugConfig,
-    json_output: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_daemon(debug: DebugConfig, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = daemon_socket_path(&debug);
 
     // Remove stale socket file
@@ -65,7 +62,7 @@ pub async fn run_daemon(
     let store_path = task::assistant_store_path(&debug);
     let store = Arc::new(Mutex::new(FileTaskStore::open(&store_path)?));
 
-    let mut session = AssistantSession::with_worker_factory(
+    let session = Arc::new(Mutex::new(AssistantSession::with_worker_factory(
         assistant_loop,
         {
             let sched = shared_scheduler.clone();
@@ -78,9 +75,11 @@ pub async fn run_daemon(
             root_workspace,
             root_capabilities,
         },
-    );
+    )));
 
-    // Accept connections
+    // Accept connections concurrently — each connection gets its own tokio task.
+    // If a client disconnects mid-request, only that task is cancelled; the
+    // daemon keeps accepting new connections.
     loop {
         let (stream, _addr) = match listener.accept().await {
             Ok(conn) => conn,
@@ -90,115 +89,121 @@ pub async fn run_daemon(
             }
         };
 
-        let mut reader = BufReader::new(stream).lines();
+        let session = session.clone();
         let store = store.clone();
 
-        while let Ok(Some(line)) = reader.next_line().await {
-            let line = line.trim().to_string();
-            if line.is_empty() {
-                continue;
-            }
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(stream).lines();
 
-            let request: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    let _ = reader
-                        .get_mut()
-                        .write_all(
-                            format!(r#"{{"error":"invalid request: {}"}}{}"#, e, "\n").as_bytes(),
-                        )
-                        .await;
+            while let Ok(Some(line)) = reader.next_line().await {
+                let line = line.trim().to_string();
+                if line.is_empty() {
                     continue;
                 }
-            };
 
-            let kind = request["kind"].as_str().unwrap_or("").to_string();
-            let req_id = request["id"].as_str().unwrap_or("0").to_string();
-
-            match kind.as_str() {
-                "send" => {
-                    let message = request["message"].as_str().unwrap_or("").to_string();
-                    if message.is_empty() {
-                        let _ =
-                            writeresp(&mut reader, &req_id, "error", "message is required").await;
+                let request: serde_json::Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = reader
+                            .get_mut()
+                            .write_all(
+                                format!(r#"{{"error":"invalid request: {}"}}{}"#, e, "\n").as_bytes(),
+                            )
+                            .await;
                         continue;
                     }
+                };
 
-                    let mut store = store.lock().await;
-                    let reply = session.handle_message(&mut *store, message).await;
-                    session.drain(&mut *store).await;
+                let kind = request["kind"].as_str().unwrap_or("").to_string();
+                let req_id = request["id"].as_str().unwrap_or("0").to_string();
 
-                    // Wait for all tasks to complete
-                    loop {
-                        let snapshot = session
-                            .wait_for_all(&mut *store, Duration::from_millis(1000))
-                            .await;
-                        if snapshot.running_tasks == 0 && snapshot.queued_tasks == 0 {
-                            break;
+                match kind.as_str() {
+                    "send" => {
+                        let message = request["message"].as_str().unwrap_or("").to_string();
+                        if message.is_empty() {
+                            let _ = writeresp(&mut reader, &req_id, "error", "message is required").await;
+                            continue;
                         }
+
+                        let mut session = session.lock().await;
+                        let mut store = store.lock().await;
+
+                        let reply = session.handle_message(&mut *store, message).await;
+                        session.drain(&mut *store).await;
+
+                        // Wait for all tasks to complete
+                        loop {
+                            let snapshot = session
+                                .wait_for_all(&mut *store, Duration::from_millis(1000))
+                                .await;
+                            if snapshot.running_tasks == 0 && snapshot.queued_tasks == 0 {
+                                break;
+                            }
+                        }
+
+                        let task_info = reply.task_id.as_deref().and_then(|tid| {
+                            store.get_task(tid).map(|t| {
+                                (
+                                    tid.to_string(),
+                                    t.status.clone(),
+                                    t.last_report.as_ref().and_then(|r| r.artifact_text.clone()),
+                                )
+                            })
+                        });
+                        drop(store);
+                        drop(session);
+
+                        let resp = if let Some((tid, status, artifact)) = task_info {
+                            format!(
+                                r#"{{"kind":"result","id":"{}","text":"{}","task_id":"{}","status":"{:?}","artifact":{}}}"#,
+                                req_id,
+                                serde_json::to_string(&reply.text).unwrap_or_default(),
+                                tid,
+                                status,
+                                serde_json::to_string(&artifact).unwrap_or("null".to_string()),
+                            )
+                        } else {
+                            format!(
+                                r#"{{"kind":"result","id":"{}","text":{}}}"#,
+                                req_id,
+                                serde_json::to_string(&reply.text).unwrap_or_default(),
+                            )
+                        };
+
+                        let _ = reader.get_mut().write_all(resp.as_bytes()).await;
+                        let _ = reader.get_mut().write_all(b"\n").await;
                     }
 
-                    // Read task info while store lock is held
-                    let task_info = reply.task_id.as_deref().and_then(|tid| {
-                        store.get_task(tid).map(|t| {
-                            (
-                                tid.to_string(),
-                                t.status.clone(),
-                                t.last_report.as_ref().and_then(|r| r.artifact_text.clone()),
-                            )
-                        })
-                    });
-                    drop(store);
+                    "task_list" => {
+                        let store_guard = store.lock().await;
+                        let tasks = store_guard.list_tasks();
+                        let json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
+                        let resp = format!(
+                            r#"{{"kind":"task_list","id":"{}","tasks":{}}}"#,
+                            req_id, json
+                        );
+                        let _ = reader.get_mut().write_all(resp.as_bytes()).await;
+                        let _ = reader.get_mut().write_all(b"\n").await;
+                    }
 
-                    let resp = if let Some((tid, status, artifact)) = task_info {
-                        format!(
-                            r#"{{"kind":"result","id":"{}","text":"{}","task_id":"{}","status":"{:?}","artifact":{}}}"#,
-                            req_id,
-                            serde_json::to_string(&reply.text).unwrap_or_default(),
-                            tid,
-                            status,
-                            serde_json::to_string(&artifact).unwrap_or("null".to_string()),
-                        )
-                    } else {
-                        format!(
-                            r#"{{"kind":"result","id":"{}","text":{}}}"#,
-                            req_id,
-                            serde_json::to_string(&reply.text).unwrap_or_default(),
-                        )
-                    };
+                    "ping" => {
+                        let resp = format!(r#"{{"kind":"pong","id":"{}"}}"#, req_id);
+                        let _ = reader.get_mut().write_all(resp.as_bytes()).await;
+                        let _ = reader.get_mut().write_all(b"\n").await;
+                    }
 
-                    let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-                    let _ = reader.get_mut().write_all(b"\n").await;
-                }
-
-                "task_list" => {
-                    let store_guard = store.lock().await;
-                    let tasks = store_guard.list_tasks();
-                    let json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
-                    let resp = format!(
-                        r#"{{"kind":"task_list","id":"{}","tasks":{}}}"#,
-                        req_id, json
-                    );
-                    let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-                    let _ = reader.get_mut().write_all(b"\n").await;
-                }
-
-                "ping" => {
-                    let resp = format!(r#"{{"kind":"pong","id":"{}"}}"#, req_id);
-                    let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-                    let _ = reader.get_mut().write_all(b"\n").await;
-                }
-
-                other => {
-                    let resp = format!(
-                        r#"{{"kind":"error","id":"{}","error":"unknown request kind: {}"}}"#,
-                        req_id, other
-                    );
-                    let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-                    let _ = reader.get_mut().write_all(b"\n").await;
+                    other => {
+                        let resp = format!(
+                            r#"{{"kind":"error","id":"{}","error":"unknown request kind: {}"}}"#,
+                            req_id, other
+                        );
+                        let _ = reader.get_mut().write_all(resp.as_bytes()).await;
+                        let _ = reader.get_mut().write_all(b"\n").await;
+                    }
                 }
             }
-        }
+            // Client disconnected — the spawned task exits, daemon continues
+        });
     }
 }
 
