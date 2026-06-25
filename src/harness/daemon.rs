@@ -139,7 +139,7 @@ pub async fn run_daemon(debug: DebugConfig, json_output: bool) -> Result<(), Box
                         let _ = reader
                             .get_mut()
                             .write_all(
-                                format!(r#"{{"error":"invalid request: {}"}}{}"#, e, "\n").as_bytes(),
+                                format!("{}\n", serde_json::json!({"error": format!("invalid request: {}", e)})).as_bytes(),
                             )
                             .await;
                         continue;
@@ -186,20 +186,20 @@ pub async fn run_daemon(debug: DebugConfig, json_output: bool) -> Result<(), Box
                         drop(session);
 
                         let resp = if let Some((tid, status, artifact)) = task_info {
-                            format!(
-                                r#"{{"kind":"result","id":"{}","text":"{}","task_id":"{}","status":"{:?}","artifact":{}}}"#,
-                                req_id,
-                                serde_json::to_string(&reply.text).unwrap_or_default(),
-                                tid,
-                                status,
-                                serde_json::to_string(&artifact).unwrap_or("null".to_string()),
-                            )
+                            serde_json::json!({
+                                "kind": "result",
+                                "id": req_id,
+                                "text": reply.text,
+                                "task_id": tid,
+                                "status": status,
+                                "artifact": artifact,
+                            }).to_string()
                         } else {
-                            format!(
-                                r#"{{"kind":"result","id":"{}","text":{}}}"#,
-                                req_id,
-                                serde_json::to_string(&reply.text).unwrap_or_default(),
-                            )
+                            serde_json::json!({
+                                "kind": "result",
+                                "id": req_id,
+                                "text": reply.text,
+                            }).to_string()
                         };
 
                         let _ = reader.get_mut().write_all(resp.as_bytes()).await;
@@ -209,28 +209,28 @@ pub async fn run_daemon(debug: DebugConfig, json_output: bool) -> Result<(), Box
                     "task_list" => {
                         let store_guard = store.lock().await;
                         let tasks = store_guard.list_tasks();
-                        let json = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
+                        let tasks_json = serde_json::to_value(&tasks).unwrap_or(serde_json::Value::Array(vec![]));
                         let resp = format!(
-                            r#"{{"kind":"task_list","id":"{}","tasks":{}}}"#,
-                            req_id, json
+                            "{}\n",
+                            serde_json::json!({"kind": "task_list", "id": req_id, "tasks": tasks_json})
                         );
                         let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-                        let _ = reader.get_mut().write_all(b"\n").await;
                     }
 
                     "ping" => {
-                        let resp = format!(r#"{{"kind":"pong","id":"{}"}}"#, req_id);
+                        let resp = format!(
+                            "{}\n",
+                            serde_json::json!({"kind": "pong", "id": req_id})
+                        );
                         let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-                        let _ = reader.get_mut().write_all(b"\n").await;
                     }
 
                     other => {
                         let resp = format!(
-                            r#"{{"kind":"error","id":"{}","error":"unknown request kind: {}"}}"#,
-                            req_id, other
+                            "{}\n",
+                            serde_json::json!({"kind": "error", "id": req_id, "error": format!("unknown request kind: {}", other)})
                         );
                         let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-                        let _ = reader.get_mut().write_all(b"\n").await;
                     }
                 }
             }
@@ -246,9 +246,8 @@ async fn writeresp(
     msg: &str,
 ) {
     let resp = format!(
-        r#"{{"kind":"{}","id":"{}","error":"{}"}}"#,
-        kind, req_id, msg
+        "{}\n",
+        serde_json::json!({"kind": kind, "id": req_id, "error": msg})
     );
     let _ = reader.get_mut().write_all(resp.as_bytes()).await;
-    let _ = reader.get_mut().write_all(b"\n").await;
 }
