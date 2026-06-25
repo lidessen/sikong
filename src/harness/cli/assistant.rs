@@ -12,6 +12,7 @@ use crate::{
 use clap::{Subcommand, ValueEnum};
 use serde::Serialize;
 
+use crate::harness::daemon;
 use super::launch;
 use super::task;
 
@@ -167,6 +168,58 @@ pub fn run_assistant_prompt(
     if message.is_empty() {
         return Err("assistant prompt message must not be empty".into());
     }
+
+    // Try daemon first — if one is already running, use it so tasks survive
+    // bash timeout. The daemon has a persistent tokio runtime; when this CLI
+    // process exits, the daemon keeps processing the task.
+    let debug = DebugConfig::from_env();
+    if daemon::daemon_is_running(&debug) {
+        if !json_output {
+            eprintln!("→ using daemon at {}", daemon::daemon_socket_path(&debug).display());
+        }
+        match daemon::send_via_daemon(&debug, &message) {
+            Ok(response) => {
+                // Parse and display the response
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&response) {
+                    let task_id = val["task_id"].as_str().unwrap_or("?");
+                    let status = val["status"].as_str().unwrap_or("?");
+                    let artifact = val["artifact"].as_str().unwrap_or("");
+                    if !json_output {
+                        if !artifact.is_empty() {
+                            println!("{}", artifact);
+                        }
+                        println!("── Result ─────────────────────────────────────────");
+                        println!("  task:   {}", task_id);
+                        println!("  status: {}", status);
+                    } else {
+                        println!("{}", response);
+                    }
+                } else {
+                    println!("{}", response);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                // Daemon connection failed — fall through to inline processing
+                if !json_output {
+                    eprintln!("daemon connect failed ({}), running inline...", e);
+                }
+                fallback_run_inline(message, wait_ms, workspace, allow_write, write_scope, json_output)
+            }
+        }
+    } else {
+        fallback_run_inline(message, wait_ms, workspace, allow_write, write_scope, json_output)
+    }
+}
+
+fn fallback_run_inline(
+    message: String,
+    wait_ms: u64,
+    workspace: AssistantPromptWorkspace,
+    allow_write: bool,
+    write_scope: Vec<String>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("siko-assistant-prompt")
         .enable_all()

@@ -1,3 +1,4 @@
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +15,39 @@ use crate::{
 use super::cli::launch;
 use super::cli::task;
 
-fn daemon_socket_path(debug: &DebugConfig) -> PathBuf {
+pub fn daemon_socket_path(debug: &DebugConfig) -> PathBuf {
     debug.data_dir().join("daemon.sock")
+}
+
+/// Send a message to an already-running daemon and return the response.
+/// Synchronous (blocking) — uses std::os::unix::net::UnixStream.
+pub fn send_via_daemon(debug: &DebugConfig, message: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let socket_path = daemon_socket_path(debug);
+    let mut stream = UnixStream::connect(&socket_path)?;
+
+    let request = serde_json::json!({
+        "kind": "send",
+        "id": "cli-send",
+        "message": message,
+    });
+
+    use std::io::{Read, Write};
+    writeln!(stream, "{}", request)?;
+    // Signal EOF so the daemon's read loop ends and sends the response back
+    stream.shutdown(std::net::Shutdown::Write)?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
+}
+
+/// Returns true if a daemon socket exists and is accepting connections.
+pub fn daemon_is_running(debug: &DebugConfig) -> bool {
+    let socket_path = daemon_socket_path(debug);
+    if !socket_path.exists() {
+        return false;
+    }
+    UnixStream::connect(&socket_path).is_ok()
 }
 
 pub async fn run_daemon(debug: DebugConfig, json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
