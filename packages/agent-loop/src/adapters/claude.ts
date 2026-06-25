@@ -1001,16 +1001,30 @@ export function fillEstimatedOutput(
   usage: ClaudeUsage,
   streamState: { streamedText: string; streamedThinking: string },
 ): ClaudeUsage {
-  if (usage.outputTokens > 0) return usage;
   const chars = streamState.streamedText.length + streamState.streamedThinking.length;
-  if (chars === 0) return usage;
-  const outputTokens = Math.ceil(chars / 4);
-  return {
-    ...usage,
-    outputTokens,
-    totalTokens:
-      usage.inputTokens + outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens,
-  };
+
+  // DeepSeek's Anthropic-compatible endpoint reports token usage only in the
+  // final result message. When the run stops before that (terminal tool call),
+  // estimate from streamed character counts (~4 chars/token for output, ~6
+  // chars/token for input as a conservative heuristic). A real reported value
+  // is never overridden.
+  let { inputTokens, outputTokens } = usage;
+
+  if (outputTokens === 0 && chars > 0) {
+    outputTokens = Math.ceil(chars / 4);
+  }
+
+  if (inputTokens === 0 && chars > 0) {
+    // Estimate input from output using a conservative ratio (~3:1 for coding
+    // tasks) when no real input usage was reported.
+    inputTokens = Math.ceil(outputTokens * 3);
+  }
+
+  const totalTokens =
+    inputTokens + outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens;
+
+  if (usage.outputTokens > 0 && usage.inputTokens > 0) return usage;
+  return { ...usage, inputTokens, outputTokens, totalTokens };
 }
 
 function mapResultUsage(message: SDKMessage & { type: "result" }): {

@@ -178,7 +178,7 @@ fn operation_prompt_sections(context: &AgentOperationContext) -> Vec<AgentPrompt
                     "Information gathering is not a special route. If the raw intent cannot be meaningfully worked without a missing user choice, missing external fact, or missing input location, make next the concrete evidence-gathering work and size that work. Otherwise keep the user's requested work intact and let Execute or Plan handle the local details."
                 }
                 "Constraints" {
-                    "Use tools in this pass only for targeted look to avoid mis-sizing or losing the user's intent; do not perform broad inspection, implementation, verification, or evidence collection here."
+                    "Use tools in this pass for targeted look when the intent is ambiguous or the scope unclear — a quick read of relevant file headers, directory listings, or import surfaces can calibrate size better than guessing from intent alone. Stop reading once the size is clear. Do not perform broad inspection, implementation, verification, or evidence collection."
                 }
                 "Completion" {
                     finish_prompt(&[EngineTool::SubmitSpecification.name()])
