@@ -116,6 +116,39 @@ impl FileTaskStore {
         self.last_persist_error.as_deref()
     }
 
+    pub fn mark_interrupted_active_tasks(&mut self) {
+        let active_ids = self
+            .tasks
+            .iter()
+            .filter_map(|(id, task)| match task.status {
+                AssistantTaskStatus::Created
+                | AssistantTaskStatus::Queued
+                | AssistantTaskStatus::Running => Some(id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let changed = !active_ids.is_empty();
+        for id in active_ids {
+            if let Some(task) = self.tasks.get_mut(&id) {
+                task.status = AssistantTaskStatus::Failed;
+                task.record_event(AssistantTaskEventRecord {
+                    level: Level::WARN,
+                    kind: "task.recovered".to_string(),
+                    source: "task.store".to_string(),
+                    message: "marked interrupted active task as failed on startup".to_string(),
+                    node_id: None,
+                    operation: None,
+                    payload: Value::Null,
+                });
+            }
+        }
+
+        if changed {
+            self.persist();
+        }
+    }
+
     fn persist(&mut self) {
         match self.try_persist() {
             Ok(()) => self.last_persist_error = None,
@@ -317,6 +350,26 @@ mod tests {
         assert_ne!(first, second);
         assert_eq!(first.chars().count(), 8);
         assert_eq!(second.chars().count(), 8);
+    }
+
+    #[test]
+    fn file_store_marks_interrupted_active_tasks_failed() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("tasks.json");
+        let mut store = FileTaskStore::open(&path).unwrap();
+        let task_id = store.create_task("interrupted".to_string());
+        store.set_task_status(&task_id, AssistantTaskStatus::Running);
+
+        let mut reopened = FileTaskStore::open(&path).unwrap();
+        reopened.mark_interrupted_active_tasks();
+
+        let task = reopened.get_task(&task_id).unwrap();
+        assert_eq!(task.status, AssistantTaskStatus::Failed);
+        assert!(
+            task.events
+                .iter()
+                .any(|event| event.kind == "task.recovered")
+        );
     }
 
     #[test]

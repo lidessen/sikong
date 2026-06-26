@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use async_recursion::async_recursion;
 use tokio::task::JoinSet;
@@ -8,7 +8,7 @@ use crate::common::workspace::{
     GitWorkspaceSurface, Workspace, WorkspaceChange, WorkspaceProvider, WorkspaceResource,
     WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceSurface,
 };
-use crate::core::agent_run::{AgentRunScheduler, CancellationToken};
+use crate::core::agent_run::{AgentRunEventSink, AgentRunScheduler, CancellationToken};
 
 use super::node::{
     Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode,
@@ -16,10 +16,13 @@ use super::node::{
 };
 use super::resources::WorkspaceResourceRegistry;
 use super::{
-    AgentOperationContext, AgentRunRecord, AgentRunResult, ArtifactId, AttemptRecord, EngineError,
-    EngineReport, FailureClass, NodeId, NodeOperation, NodeOperationOutput, NodeStatus,
-    OperationEvent, OperationHarness, ProblemKey, VerificationVerdict,
+    AgentOperationContext, AgentRunRecord, AgentRunResult, ArtifactId, AttemptRecord,
+    BranchProgressEvent, EngineError, EngineProgressEvent, EngineReport, FailureClass, NodeId,
+    NodeOperation, NodeOperationOutput, NodeStatus, OperationEvent, OperationHarness, ProblemKey,
+    VerificationVerdict,
 };
+
+type EngineProgressSink = Arc<dyn Fn(EngineProgressEvent) + Send + Sync>;
 
 fn plan_from_scope_assessment(
     assessment: &ScopeAssessment,
@@ -69,6 +72,7 @@ pub struct Engine<W: Workspace, A: AgentRunScheduler> {
     attempts: HashMap<ProblemKey, Vec<AttemptRecord>>,
     events: Vec<OperationEvent>,
     agent_runs: Vec<AgentRunRecord>,
+    progress_sink: Option<EngineProgressSink>,
     workspace_resources: WorkspaceResourceRegistry,
 }
 
@@ -91,8 +95,17 @@ where
             attempts: HashMap::new(),
             events: Vec::new(),
             agent_runs: Vec::new(),
+            progress_sink: None,
             workspace_resources: WorkspaceResourceRegistry::default(),
         }
+    }
+
+    pub fn with_progress_sink(
+        mut self,
+        sink: impl Fn(EngineProgressEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.progress_sink = Some(Arc::new(sink));
+        self
     }
 
     pub fn with_stop_after_route_depth(mut self, depth: usize) -> Self {
@@ -416,12 +429,14 @@ where
         let mut branches = JoinSet::new();
         let stop_after_route_depth = self.stop_after_route_depth;
         let max_decomposition_depth = self.max_decomposition_depth;
+        let progress_sink = self.progress_sink.clone();
         for child_id in child_ids {
             check_cancelled(cancellation)?;
             let child = self.node(child_id)?.clone();
             let workspace = self.workspace.clone();
             let agent = self.agent.clone();
             let cancellation = cancellation.clone();
+            let progress_sink = progress_sink.clone();
             branches.spawn(async move {
                 // Build the branch engine inside a RAII guard so that if
                 // resolve panics or errors, the guard's Drop cleans up any
@@ -429,6 +444,16 @@ where
                 let mut branch = Engine::new(workspace.clone(), agent);
                 branch.stop_after_route_depth = stop_after_route_depth;
                 branch.max_decomposition_depth = max_decomposition_depth;
+                branch.progress_sink = progress_sink.map(|sink| {
+                    let child_id = child.id;
+                    Arc::new(move |event: EngineProgressEvent| {
+                        if Self::progress_event_node_id(&event) == child_id {
+                            sink(event);
+                        } else {
+                            sink(Self::branch_local_progress_event(child_id, event));
+                        }
+                    }) as EngineProgressSink
+                });
                 branch.next_node_id = child.id;
                 branch.nodes.insert(child.id, child);
 
@@ -921,11 +946,96 @@ where
     }
 
     fn record(&mut self, node_id: NodeId, operation: NodeOperation, note: impl Into<String>) {
-        self.events.push(OperationEvent {
+        let event = OperationEvent {
             node_id,
             operation,
             note: note.into(),
-        });
+        };
+        self.events.push(event.clone());
+        self.emit_progress(EngineProgressEvent::Operation { event });
+    }
+
+    fn record_agent_run(&mut self, run: AgentRunRecord) {
+        self.agent_runs.push(run.clone());
+        self.emit_progress(EngineProgressEvent::AgentRun { run });
+    }
+
+    fn emit_progress(&self, event: EngineProgressEvent) {
+        if let Some(sink) = &self.progress_sink {
+            sink(event);
+        }
+    }
+
+    fn progress_event_node_id(event: &EngineProgressEvent) -> NodeId {
+        match event {
+            EngineProgressEvent::Operation { event } => event.node_id,
+            EngineProgressEvent::AgentRunStarted { node_id, .. } => *node_id,
+            EngineProgressEvent::AgentRun { run } => run.node_id,
+            EngineProgressEvent::AgentRunEvent { node_id, .. } => *node_id,
+            EngineProgressEvent::BranchLocal {
+                branch_root_node_id,
+                ..
+            } => *branch_root_node_id,
+        }
+    }
+
+    fn branch_local_progress_event(
+        branch_root_node_id: NodeId,
+        event: EngineProgressEvent,
+    ) -> EngineProgressEvent {
+        let (local_node_id, event) = match event {
+            EngineProgressEvent::Operation { event } => (
+                event.node_id,
+                BranchProgressEvent::Operation {
+                    operation: event.operation,
+                    note: event.note,
+                },
+            ),
+            EngineProgressEvent::AgentRunStarted {
+                node_id,
+                operation,
+                objective,
+                terminal_tools,
+            } => (
+                node_id,
+                BranchProgressEvent::AgentRunStarted {
+                    operation,
+                    objective,
+                    terminal_tools,
+                },
+            ),
+            EngineProgressEvent::AgentRun { run } => (
+                run.node_id,
+                BranchProgressEvent::AgentRun {
+                    operation: run.operation,
+                    report: run.report,
+                    terminal_tool: run.terminal_tool,
+                    terminal_payload: run.terminal_payload,
+                    duration_ms: run.duration_ms,
+                    usage: run.usage,
+                    events: run.events,
+                },
+            ),
+            EngineProgressEvent::AgentRunEvent {
+                node_id,
+                operation,
+                event,
+            } => (
+                node_id,
+                BranchProgressEvent::AgentRunEvent { operation, event },
+            ),
+            EngineProgressEvent::BranchLocal {
+                local_node_id,
+                event,
+                ..
+            } => (local_node_id, event),
+        };
+
+        EngineProgressEvent::BranchLocal {
+            branch_root_node_id,
+            local_node_id,
+            event,
+        }
     }
 
     async fn run_agent(
@@ -966,8 +1076,27 @@ where
             terminal_tools = ?input.terminal_tool_set,
             "starting agent run"
         );
+        self.emit_progress(EngineProgressEvent::AgentRunStarted {
+            node_id,
+            operation,
+            objective: input.objective.clone(),
+            terminal_tools: input.terminal_tool_set.clone(),
+        });
+        let event_sink = self.progress_sink.as_ref().map(|sink| {
+            let sink = sink.clone();
+            Arc::new(move |event| {
+                sink(EngineProgressEvent::AgentRunEvent {
+                    node_id,
+                    operation,
+                    event,
+                });
+            }) as AgentRunEventSink
+        });
         let started_at = Instant::now();
-        let worker_result = self.agent.run(input, cancellation.clone()).await;
+        let worker_result = self
+            .agent
+            .run_with_event_sink(input, cancellation.clone(), event_sink)
+            .await;
         let duration_ms = started_at.elapsed().as_millis();
         check_cancelled(cancellation)?;
         let usage = worker_result.usage.clone();
@@ -987,7 +1116,7 @@ where
                     error = %error.message,
                     "agent run failed"
                 );
-                self.agent_runs.push(AgentRunRecord {
+                self.record_agent_run(AgentRunRecord {
                     node_id,
                     operation,
                     report: error.message.clone(),
@@ -1008,7 +1137,7 @@ where
             terminal_tool = ?result.terminal_tool,
             "agent run completed"
         );
-        self.agent_runs.push(AgentRunRecord {
+        self.record_agent_run(AgentRunRecord {
             node_id,
             operation,
             report: result.report.clone(),

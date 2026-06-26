@@ -15,6 +15,7 @@ pub use assistant::AssistantPromptWorkspace;
 pub mod chrono;
 pub mod eval;
 pub use eval::EvalCommand;
+pub mod tui;
 
 pub use launch::AgentHostLaunch;
 pub mod util;
@@ -130,10 +131,12 @@ fn run_cli(cli: Cli) -> i32 {
         Some(Command::Assistant {
             acp: true,
             command: None,
-        }) => match assistant::run_assistant_acp() {
+        })
+        | Some(Command::Acp) => match assistant::run_assistant_acp() {
             Ok(()) => 0,
             Err(error) => {
                 error!(%error, "failed to run assistant ACP server");
+                eprintln!("failed to run ACP server: {error}");
                 1
             }
         },
@@ -279,12 +282,14 @@ fn run_cli(cli: Cli) -> i32 {
             wait_ms,
             json,
             allow_write,
+            no_allow_write,
             write_scope,
         }) => {
             if task.is_empty() {
                 eprintln!("error: task description is required");
                 return 1;
             }
+            let allow_write = allow_write && !no_allow_write;
             let effective_scope = if allow_write && !write_scope.is_empty() {
                 write_scope
             } else if allow_write {
@@ -316,6 +321,14 @@ fn run_cli(cli: Cli) -> i32 {
                 1
             }
         },
+        Some(Command::Tui) => match tui::run_tui() {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to run TUI");
+                eprintln!("failed to run TUI: {error}");
+                1
+            }
+        },
         Some(Command::Setup { json }) => match setup::run_setup(json) {
             Ok(()) => 0,
             Err(error) => {
@@ -331,8 +344,22 @@ fn run_cli(cli: Cli) -> i32 {
             metrics::run_metrics_command(json);
             0
         }
-        Some(Command::Daemon { json }) => {
-            let debug = DebugConfig::from_env();
+        Some(Command::Daemon { command, json }) => run_daemon_command(command, json),
+        Some(Command::Log { limit, json }) => match task::print_task_logs(limit, json) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to show task logs");
+                eprintln!("failed to show task logs: {error}");
+                1
+            }
+        },
+    }
+}
+
+fn run_daemon_command(command: Option<DaemonCommand>, json: bool) -> i32 {
+    let debug = DebugConfig::from_env();
+    match command {
+        None | Some(DaemonCommand::Start) => {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .thread_name("siko-daemon")
                 .enable_all()
@@ -347,14 +374,49 @@ fn run_cli(cli: Cli) -> i32 {
                 }
             }
         }
-        Some(Command::Log { limit, json }) => match task::print_task_logs(limit, json) {
-            Ok(()) => 0,
-            Err(error) => {
-                error!(%error, "failed to show task logs");
-                eprintln!("failed to show task logs: {error}");
-                1
+        Some(DaemonCommand::Status) => {
+            let running = crate::harness::daemon::daemon_is_running(&debug);
+            if json {
+                print_json_data(serde_json::json!({
+                    "running": running,
+                    "socket": crate::harness::daemon::daemon_socket_path(&debug),
+                }));
+            } else if running {
+                println!(
+                    "daemon running at {}",
+                    crate::harness::daemon::daemon_socket_path(&debug).display()
+                );
+            } else {
+                println!(
+                    "daemon not running at {}",
+                    crate::harness::daemon::daemon_socket_path(&debug).display()
+                );
             }
-        },
+            if running { 0 } else { 1 }
+        }
+        Some(DaemonCommand::Stop) => {
+            match crate::harness::daemon::send_json_to_daemon(
+                &debug,
+                serde_json::json!({"kind": "shutdown", "id": "cli-stop"}),
+            ) {
+                Ok(value) => {
+                    if json {
+                        print_json_data(value);
+                    } else {
+                        println!("daemon stopped");
+                    }
+                    0
+                }
+                Err(error) => {
+                    if json {
+                        print_json_error(format!("daemon stop failed: {error}"));
+                    } else {
+                        eprintln!("daemon stop failed: {error}");
+                    }
+                    1
+                }
+            }
+        }
     }
 }
 
@@ -383,6 +445,8 @@ enum Command {
         #[arg(long)]
         acp: bool,
     },
+    /// Serve ACP JSON-RPC over stdio, using the daemon as the runtime owner.
+    Acp,
     /// Send a task through the assistant. This is the primary user-facing command.
     /// Use the assistant layer to understand requests, create tasks, and return results.
     Send {
@@ -395,13 +459,17 @@ enum Command {
         wait_ms: u64,
 
         /// Print structured JSON output.
-        #[arg(long)]
+        #[arg(long, global = true)]
         json: bool,
 
         /// Allow the agent to modify files in the workspace (default: true).
         /// Set --no-allow-write to make the agent read-only.
         #[arg(long, default_value_t = true)]
         allow_write: bool,
+
+        /// Run the task with read-only workspace capabilities.
+        #[arg(long = "no-allow-write", conflicts_with = "allow_write")]
+        no_allow_write: bool,
 
         /// Coarse writable glob when --allow-write is set. Repeatable for multiple paths.
         /// Defaults to **/* (entire workspace) when --allow-write is set without this flag.
@@ -413,6 +481,8 @@ enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
+    /// Open the terminal UI for daily task-board work.
+    Tui,
     /// Run evaluation scenarios (internal).
     #[command(hide = true)]
     Eval {
@@ -431,8 +501,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Start the persistent daemon for background task processing.
+    /// Manage the persistent daemon for background task processing.
     Daemon {
+        #[command(subcommand)]
+        command: Option<DaemonCommand>,
+
         /// Print structured JSON output.
         #[arg(long)]
         json: bool,
@@ -447,6 +520,16 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum DaemonCommand {
+    /// Start the persistent daemon in the foreground.
+    Start,
+    /// Check whether the daemon socket is accepting connections.
+    Status,
+    /// Stop the running daemon.
+    Stop,
 }
 
 #[allow(unused_imports)]
@@ -473,6 +556,42 @@ mod tests {
             Some(Command::Assistant {
                 acp: true,
                 command: None
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_top_level_acp_command() {
+        let cli = Cli::try_parse_from(["siko", "acp"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Acp)));
+    }
+
+    #[test]
+    fn parses_tui_command() {
+        let cli = Cli::try_parse_from(["siko", "tui"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Tui)));
+    }
+
+    #[test]
+    fn parses_daemon_status_command() {
+        let cli = Cli::try_parse_from(["siko", "daemon", "status"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Daemon {
+                command: Some(DaemonCommand::Status),
+                json: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_daemon_stop_command() {
+        let cli = Cli::try_parse_from(["siko", "daemon", "--json", "stop"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Daemon {
+                command: Some(DaemonCommand::Stop),
+                json: true,
             })
         ));
     }
@@ -641,6 +760,32 @@ mod tests {
                     json: true
                 }
             }) if task_id == "task_1"
+        ));
+    }
+
+    #[test]
+    fn parses_send_no_allow_write() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "send",
+            "--wait-ms",
+            "0",
+            "--no-allow-write",
+            "--json",
+            "read",
+            "only",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Send {
+                task,
+                wait_ms: 0,
+                json: true,
+                allow_write: true,
+                no_allow_write: true,
+                write_scope,
+            }) if task == ["read", "only"] && write_scope.is_empty()
         ));
     }
 

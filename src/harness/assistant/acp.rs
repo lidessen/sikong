@@ -6,7 +6,13 @@ use std::{
 };
 
 use super::session::{AssistantLoop, AssistantSession};
-use crate::TaskStore;
+use crate::{
+    TaskStore,
+    harness::task_view::{
+        TaskEventCursor, inspect_task_view, resolve_task_ref, sort_tasks_newest_first,
+        task_artifact, task_summary,
+    },
+};
 
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -103,6 +109,7 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
                             "sessions": true,
                             "prompt": true,
                             "cancel": true,
+                            "tasks": true,
                         },
                     }),
                 )
@@ -122,7 +129,10 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
                 let Some(prompt) = prompt_text(&request.params) else {
                     return error(request.id, -32602, "prompt text is required");
                 };
-                let reply = self.session.handle_message(&mut self.store, prompt).await;
+                let reply = self
+                    .session
+                    .handle_task_message(&mut self.store, prompt)
+                    .await;
                 ok(
                     request.id,
                     json!({
@@ -151,14 +161,90 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
                     }),
                 )
             }
+            "task/list" => {
+                if let Err(message) = self.require_initialized() {
+                    return error(request.id, -32002, message);
+                }
+                let limit = request
+                    .params
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(20) as usize;
+                let mut tasks = self.store.list_tasks();
+                sort_tasks_newest_first(&mut tasks);
+                tasks.truncate(limit);
+                let summaries = tasks.iter().map(task_summary).collect::<Vec<_>>();
+                ok(request.id, json!({ "tasks": summaries }))
+            }
+            "task/inspect" => {
+                if let Err(message) = self.require_initialized() {
+                    return error(request.id, -32002, message);
+                }
+                let Some(task_ref) = task_ref_param(&request.params) else {
+                    return error(request.id, -32602, "taskId is required");
+                };
+                let cursor = task_event_cursor(&request.params);
+                match resolve_task_ref(&self.store, &task_ref) {
+                    Ok(task) => ok(request.id, json!(inspect_task_view(&task, cursor))),
+                    Err(message) => error(request.id, -32004, message),
+                }
+            }
+            "task/events" => {
+                if let Err(message) = self.require_initialized() {
+                    return error(request.id, -32002, message);
+                }
+                let Some(task_ref) = task_ref_param(&request.params) else {
+                    return error(request.id, -32602, "taskId is required");
+                };
+                let cursor = task_event_cursor(&request.params);
+                match resolve_task_ref(&self.store, &task_ref) {
+                    Ok(task) => {
+                        let view = inspect_task_view(&task, cursor);
+                        ok(
+                            request.id,
+                            json!({
+                                "taskId": task.id,
+                                "status": task.status,
+                                "events": view.events,
+                                "cursor": view.cursor,
+                            }),
+                        )
+                    }
+                    Err(message) => error(request.id, -32004, message),
+                }
+            }
+            "task/artifact" => {
+                if let Err(message) = self.require_initialized() {
+                    return error(request.id, -32002, message);
+                }
+                let Some(task_ref) = task_ref_param(&request.params) else {
+                    return error(request.id, -32602, "taskId is required");
+                };
+                match resolve_task_ref(&self.store, &task_ref) {
+                    Ok(task) => ok(
+                        request.id,
+                        json!({
+                            "taskId": task.id,
+                            "status": task.status,
+                            "artifact": task_artifact(&task),
+                        }),
+                    ),
+                    Err(message) => error(request.id, -32004, message),
+                }
+            }
             _ => error(request.id, -32601, "method not found"),
         }
     }
 
-    fn require_session(&self, params: &Value) -> Result<(), String> {
+    fn require_initialized(&self) -> Result<(), String> {
         if !self.initialized {
             return Err("server is not initialized".to_string());
         }
+        Ok(())
+    }
+
+    fn require_session(&self, params: &Value) -> Result<(), String> {
+        self.require_initialized()?;
         let Some(expected) = &self.session_id else {
             return Err("session has not been created".to_string());
         };
@@ -170,6 +256,30 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
             return Err("unknown sessionId".to_string());
         }
         Ok(())
+    }
+}
+
+fn task_ref_param(params: &Value) -> Option<String> {
+    params
+        .get("taskId")
+        .or_else(|| params.get("task_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn task_event_cursor(params: &Value) -> TaskEventCursor {
+    let cursor = params.get("cursor").unwrap_or(params);
+    TaskEventCursor {
+        task_seq: cursor
+            .get("taskSeq")
+            .or_else(|| cursor.get("task_seq"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        agent_event_ordinal: cursor
+            .get("agentEventOrdinal")
+            .or_else(|| cursor.get("agent_event_ordinal"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default() as usize,
     }
 }
 

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -17,7 +18,7 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, info, warn};
 
-use super::run::{AgentRunRequest, AgentRunResponse, CancellationToken};
+use super::run::{AgentRunEventSink, AgentRunRequest, AgentRunResponse, CancellationToken};
 
 #[async_trait]
 pub trait AgentRunScheduler: Send {
@@ -26,6 +27,15 @@ pub trait AgentRunScheduler: Send {
         input: AgentRunRequest,
         cancellation: CancellationToken,
     ) -> AgentRunResponse;
+
+    async fn run_with_event_sink(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+        _event_sink: Option<AgentRunEventSink>,
+    ) -> AgentRunResponse {
+        self.run(input, cancellation).await
+    }
 }
 
 fn short_message_id(prefix: &str) -> String {
@@ -118,6 +128,10 @@ enum ProcessAgentRunSchedulerMessage<'a> {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ProcessAgentRunSchedulerHostMessage {
+    Event {
+        id: String,
+        event: Value,
+    },
     Result {
         id: String,
         result: AgentRunResponse,
@@ -296,6 +310,7 @@ impl ProcessAgentRunScheduler {
                     .map_err(ProcessAgentRunSchedulerError::Decode)?;
 
             match response {
+                ProcessAgentRunSchedulerHostMessage::Event { .. } => {}
                 ProcessAgentRunSchedulerHostMessage::Result { id, result } if id == expected_id => {
                     return Ok(result);
                 }
@@ -312,6 +327,7 @@ impl ProcessAgentRunScheduler {
         &mut self,
         expected_id: &str,
         cancellation: &CancellationToken,
+        event_sink: Option<AgentRunEventSink>,
     ) -> Result<AgentRunResponse, ProcessAgentRunSchedulerError> {
         let reader = self
             .reader
@@ -319,6 +335,7 @@ impl ProcessAgentRunScheduler {
             .ok_or(ProcessAgentRunSchedulerError::MissingReader)?;
 
         let mut line = String::new();
+        let mut streamed_events = Vec::new();
         loop {
             line.clear();
             tokio::select! {
@@ -333,13 +350,22 @@ impl ProcessAgentRunScheduler {
                         serde_json::from_str(line.trim_end()).map_err(ProcessAgentRunSchedulerError::Decode)?;
 
                     match response {
-                        ProcessAgentRunSchedulerHostMessage::Result { id, result } if id == expected_id => {
+                        ProcessAgentRunSchedulerHostMessage::Event { id, event } if id == expected_id => {
+                            if let Some(sink) = &event_sink {
+                                sink(event.clone());
+                            }
+                            streamed_events.push(event);
+                        }
+                        ProcessAgentRunSchedulerHostMessage::Result { id, mut result } if id == expected_id => {
+                            result.events = merge_streamed_events(streamed_events, result.events);
                             return Ok(result);
                         }
                         ProcessAgentRunSchedulerHostMessage::Error { id, message } if id == expected_id => {
                             return Err(ProcessAgentRunSchedulerError::Host(message));
                         }
-                        ProcessAgentRunSchedulerHostMessage::Result { .. } | ProcessAgentRunSchedulerHostMessage::Error { .. } => {}
+                        ProcessAgentRunSchedulerHostMessage::Result { .. }
+                        | ProcessAgentRunSchedulerHostMessage::Error { .. } => {}
+                        ProcessAgentRunSchedulerHostMessage::Event { .. } => {}
                     }
                 }
             }
@@ -406,13 +432,44 @@ impl ProcessAgentRunScheduler {
         let _ = self.socket_dir.take();
     }
 
-    fn error_result(message: impl Into<String>) -> AgentRunResponse {
+    fn error_result(error: ProcessAgentRunSchedulerError) -> AgentRunResponse {
+        let class = error.failure_class();
+        let message = error.to_string();
         AgentRunResponse {
-            report: message.into(),
+            report: format!("agent host failure ({class}): {message}"),
             tool_calls: Vec::new(),
             terminal_call: None,
             usage: None,
-            events: Vec::new(),
+            events: vec![json!({
+                "event": "agent_run_failure",
+                "source": "siko.agent_host",
+                "class": class,
+                "message": message,
+            })],
+        }
+    }
+}
+
+impl ProcessAgentRunSchedulerError {
+    fn failure_class(&self) -> &'static str {
+        match self {
+            Self::TempDir(_) => "startup",
+            Self::Unavailable(_) => "startup",
+            Self::RemoveSocket { .. } => "startup",
+            Self::Spawn(_) => "startup",
+            Self::Connect { .. } => "startup",
+            Self::ConnectTimeout { .. } => "startup",
+            Self::CloneSocket(_) => "transport",
+            Self::MissingWriter => "transport",
+            Self::MissingReader => "transport",
+            Self::Encode(_) => "protocol",
+            Self::Write(_) => "transport",
+            Self::Flush(_) => "transport",
+            Self::Read(_) => "transport",
+            Self::Closed => "transport",
+            Self::Decode(_) => "protocol",
+            Self::Host(_) => "host",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -424,12 +481,21 @@ impl AgentRunScheduler for ProcessAgentRunScheduler {
         input: AgentRunRequest,
         cancellation: CancellationToken,
     ) -> AgentRunResponse {
+        self.run_with_event_sink(input, cancellation, None).await
+    }
+
+    async fn run_with_event_sink(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+        event_sink: Option<AgentRunEventSink>,
+    ) -> AgentRunResponse {
         if cancellation.is_cancelled() {
-            return Self::error_result(ProcessAgentRunSchedulerError::Cancelled.to_string());
+            return Self::error_result(ProcessAgentRunSchedulerError::Cancelled);
         }
 
         if let Err(error) = self.ensure_started().await {
-            return Self::error_result(error.to_string());
+            return Self::error_result(error);
         }
 
         let run_id = short_message_id("run");
@@ -453,10 +519,13 @@ impl AgentRunScheduler for ProcessAgentRunScheduler {
                 error = %error,
                 "failed to send agent host run"
             );
-            return Self::error_result(error.to_string());
+            return Self::error_result(error);
         }
 
-        match self.read_response_or_cancel(&run_id, &cancellation).await {
+        match self
+            .read_response_or_cancel(&run_id, &cancellation, event_sink)
+            .await
+        {
             Ok(result) => {
                 info!(
                     run_id = %run_id,
@@ -474,7 +543,7 @@ impl AgentRunScheduler for ProcessAgentRunScheduler {
                     "agent host run cancelled"
                 );
                 self.terminate().await;
-                Self::error_result(ProcessAgentRunSchedulerError::Cancelled.to_string())
+                Self::error_result(ProcessAgentRunSchedulerError::Cancelled)
             }
             Err(error) => {
                 warn!(
@@ -483,7 +552,7 @@ impl AgentRunScheduler for ProcessAgentRunScheduler {
                     error = %error,
                     "agent host run failed"
                 );
-                Self::error_result(error.to_string())
+                Self::error_result(error)
             }
         }
     }
@@ -518,6 +587,27 @@ impl AgentRunScheduler for Arc<Mutex<ProcessAgentRunScheduler>> {
     ) -> AgentRunResponse {
         self.lock().await.run(input, cancellation).await
     }
+
+    async fn run_with_event_sink(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+        event_sink: Option<AgentRunEventSink>,
+    ) -> AgentRunResponse {
+        self.lock()
+            .await
+            .run_with_event_sink(input, cancellation, event_sink)
+            .await
+    }
+}
+
+fn merge_streamed_events(mut streamed: Vec<Value>, result_events: Vec<Value>) -> Vec<Value> {
+    for event in result_events {
+        if !streamed.contains(&event) {
+            streamed.push(event);
+        }
+    }
+    streamed
 }
 
 async fn remove_socket_if_exists(path: &Path) -> Result<(), ProcessAgentRunSchedulerError> {

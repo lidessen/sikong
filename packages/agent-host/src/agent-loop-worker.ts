@@ -13,7 +13,13 @@ import {
   type RunHandle,
   type ToolSet,
 } from "agent-loop";
-import type { AgentRunRequest, AgentRunResponse, AgentToolCall, JsonValue } from "./protocol";
+import type {
+  AgentRunEventSink,
+  AgentRunRequest,
+  AgentRunResponse,
+  AgentToolCall,
+  JsonValue,
+} from "./protocol";
 
 export interface AgentLoopWorkerOptions {
   provider?: "deepseek" | "kimi" | "claude" | "codex" | "cursor";
@@ -42,27 +48,33 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
   const loop = createLoop(options);
   const runtime = resolveRuntime(options);
 
-  return async function runAgentLoopWorker(request: AgentRunRequest): Promise<AgentRunResponse> {
+  return async function runAgentLoopWorker(
+    request: AgentRunRequest,
+    emitEvent?: AgentRunEventSink,
+  ): Promise<AgentRunResponse> {
     const runStartedAt = performance.now();
     const terminalToolNames = new Set(request.terminalToolSet);
     const toolCalls: AgentToolCall[] = [];
     const events: JsonValue[] = [];
+    const recordEvent = (event: string, fields: Record<string, unknown>) => {
+      logAgentLoopEvent(request, event, runStartedAt, fields, events, emitEvent);
+    };
     let terminalCall: AgentToolCall | undefined;
     let run: RunHandle | undefined;
     let resultSettled = false;
     const effort = request.effort ?? options.effort;
     const specTools = createAgentLoopTools(request, terminalToolNames, toolCalls, (call) => {
       terminalCall = call;
-      logAgentLoopEvent(request, "terminal_captured", runStartedAt, {
+      recordEvent("terminal_captured", {
         terminalTool: call.name,
-      }, events);
+      });
       const fallbackCancelMs = 15_000;
       setTimeout(() => {
         if (resultSettled) return;
-        logAgentLoopEvent(request, "terminal_fallback_cancel", runStartedAt, {
+        recordEvent("terminal_fallback_cancel", {
           terminalTool: call.name,
           fallbackCancelMs,
-        }, events);
+        });
         run?.cancel(`terminal tool ${call.name} fallback cancel`);
       }, fallbackCancelMs);
     });
@@ -70,10 +82,14 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
     if (request.runtimeProfile === "code") {
       execTools.Bash = defineTool({
         description: "Run a shell command. Returns stdout.",
-        inputSchema: { type: "object", properties: {
-          command: { type: "string", description: "Shell command to run" },
-          timeout: { type: "number", description: "Timeout in ms (default 120000)" },
-        }, required: ["command"] } as Record<string, unknown>,
+        inputSchema: {
+          type: "object",
+          properties: {
+            command: { type: "string", description: "Shell command to run" },
+            timeout: { type: "number", description: "Timeout in ms (default 120000)" },
+          },
+          required: ["command"],
+        } as Record<string, unknown>,
         execute: async (args: Record<string, unknown>) => {
           const cmd = stringOr(args.command, "");
           const t = Number(args.timeout ?? 120_000);
@@ -85,14 +101,20 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
             ]);
             await proc.exited;
             return { ok: true, exitCode: proc.exitCode, stdout: out.slice(0, 50000) };
-          } catch (e) { return { ok: false, error: errorMessage(e) }; }
+          } catch (e) {
+            return { ok: false, error: errorMessage(e) };
+          }
         },
       });
       execTools.Read = defineTool({
         description: "Read a file. Returns the file contents as text.",
-        inputSchema: { type: "object", properties: {
-          path: { type: "string", description: "Path to the file to read" },
-        }, required: ["path"] } as Record<string, unknown>,
+        inputSchema: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path to the file to read" },
+          },
+          required: ["path"],
+        } as Record<string, unknown>,
         execute: async (args: Record<string, unknown>) => {
           const path = stringOr(args.path, "");
           try {
@@ -101,14 +123,20 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
             if (!exists) return { ok: false, error: "File not found: " + path };
             const text = await file.text();
             return { ok: true, content: text.slice(0, 50000) };
-          } catch (e) { return { ok: false, error: errorMessage(e) }; }
+          } catch (e) {
+            return { ok: false, error: errorMessage(e) };
+          }
         },
       });
       execTools.Glob = defineTool({
         description: "List files matching a glob pattern. Returns file paths.",
-        inputSchema: { type: "object", properties: {
-          pattern: { type: "string", description: "Glob pattern (e.g. **/*.go)" },
-        }, required: ["pattern"] } as Record<string, unknown>,
+        inputSchema: {
+          type: "object",
+          properties: {
+            pattern: { type: "string", description: "Glob pattern (e.g. **/*.go)" },
+          },
+          required: ["pattern"],
+        } as Record<string, unknown>,
         execute: async (args: Record<string, unknown>) => {
           const pattern = stringOr(args.pattern, "");
           try {
@@ -119,20 +147,22 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
               if (paths.length >= 200) break;
             }
             return { ok: true, paths };
-          } catch (e) { return { ok: false, error: errorMessage(e) }; }
+          } catch (e) {
+            return { ok: false, error: errorMessage(e) };
+          }
         },
       });
     }
     const tools = { ...specTools, ...execTools };
 
-    logAgentLoopEvent(request, "loop.start", runStartedAt, {
+    recordEvent("loop.start", {
       provider: options.provider ?? "deepseek",
       runtime,
       runtimeProfile: request.runtimeProfile,
       model: options.model,
       maxSteps: options.maxSteps ?? 12,
       effort,
-    }, events);
+    });
     run = loop.run({
       system: renderSystemPrompt(request),
       prompt: renderUserPrompt(request),
@@ -142,20 +172,20 @@ export function createAgentLoopWorker(options: AgentLoopWorkerOptions = {}) {
       effort,
       runtimeOptions: runtimeOptionsForWorker(request, runtime),
     });
-    logAgentLoopEvent(request, "loop.created", runStartedAt, {}, events);
-    const eventsDone = logLoopEvents(request, run, runStartedAt, events);
-    logAgentLoopEvent(request, "result.await", runStartedAt, {}, events);
+    recordEvent("loop.created", {});
+    const eventsDone = logLoopEvents(request, run, runStartedAt, events, emitEvent);
+    recordEvent("result.await", {});
     const result = await run.result;
     resultSettled = true;
     await eventsDone;
-    logAgentLoopEvent(request, "result", runStartedAt, {
+    recordEvent("result", {
       status: result.status,
       durationMs: result.durationMs,
       error: result.error?.message,
       usage: result.usage,
       terminalTool: terminalCall?.name,
       toolCallCount: toolCalls.length,
-    }, events);
+    });
 
     return {
       report: [
@@ -180,15 +210,23 @@ async function logLoopEvents(
   run: AsyncIterable<unknown>,
   runStartedAt: number,
   events: JsonValue[],
+  emitEvent?: AgentRunEventSink,
 ): Promise<void> {
   try {
     for await (const event of run) {
-      logLoopEvent(request, event, runStartedAt, events);
+      logLoopEvent(request, event, runStartedAt, events, emitEvent);
     }
   } catch (error) {
-    logAgentLoopEvent(request, "event_stream_error", runStartedAt, {
-      error: errorMessage(error),
-    }, events);
+    logAgentLoopEvent(
+      request,
+      "event_stream_error",
+      runStartedAt,
+      {
+        error: errorMessage(error),
+      },
+      events,
+      emitEvent,
+    );
   }
 }
 
@@ -197,72 +235,129 @@ function logLoopEvent(
   event: unknown,
   runStartedAt: number,
   events: JsonValue[],
+  emitEvent?: AgentRunEventSink,
 ): void {
   const record = toRecord(event);
   const type = stringOr(record.type, "unknown");
   switch (type) {
     case "step":
-      logAgentLoopEvent(request, "step", runStartedAt, {
-        phase: record.phase,
-        index: record.index,
-      }, events);
+      logAgentLoopEvent(
+        request,
+        "step",
+        runStartedAt,
+        {
+          phase: record.phase,
+          index: record.index,
+        },
+        events,
+        emitEvent,
+      );
       break;
     case "tool_call_start":
-      logAgentLoopEvent(request, "tool_call_start", runStartedAt, {
-        name: record.name,
-        callId: record.callId,
-        args: truncateJson(record.args),
-      }, events);
+      logAgentLoopEvent(
+        request,
+        "tool_call_start",
+        runStartedAt,
+        {
+          name: record.name,
+          callId: record.callId,
+          args: truncateJson(record.args),
+        },
+        events,
+        emitEvent,
+      );
       break;
     case "tool_call_end":
-      logAgentLoopEvent(request, "tool_call_end", runStartedAt, {
-        name: record.name,
-        callId: record.callId,
-        durationMs: record.durationMs,
-        error: record.error,
-        result: truncateJson(record.result),
-      }, events);
+      logAgentLoopEvent(
+        request,
+        "tool_call_end",
+        runStartedAt,
+        {
+          name: record.name,
+          callId: record.callId,
+          durationMs: record.durationMs,
+          error: record.error,
+          result: truncateJson(record.result),
+        },
+        events,
+        emitEvent,
+      );
       break;
     case "usage":
-      logAgentLoopEvent(request, "usage", runStartedAt, {
-        inputTokens: record.inputTokens,
-        outputTokens: record.outputTokens,
-        activeTokens: record.activeTokens,
-        totalTokens: record.totalTokens,
-        cacheReadTokens: record.cacheReadTokens,
-        cacheCreationTokens: record.cacheCreationTokens,
-        usedRatio: record.usedRatio,
-        source: record.source,
-      }, events);
+      logAgentLoopEvent(
+        request,
+        "usage",
+        runStartedAt,
+        {
+          inputTokens: record.inputTokens,
+          outputTokens: record.outputTokens,
+          activeTokens: record.activeTokens,
+          totalTokens: record.totalTokens,
+          cacheReadTokens: record.cacheReadTokens,
+          cacheCreationTokens: record.cacheCreationTokens,
+          usedRatio: record.usedRatio,
+          source: record.source,
+        },
+        events,
+        emitEvent,
+      );
       break;
     case "thinking":
     case "text":
       if (shouldLogVerboseText()) {
-        logAgentLoopEvent(request, type, runStartedAt, {
-          chars: stringOr(record.text, "").length,
-          text: truncateText(stringOr(record.text, ""), 400),
-        }, events);
+        logAgentLoopEvent(
+          request,
+          type,
+          runStartedAt,
+          {
+            chars: stringOr(record.text, "").length,
+            text: truncateText(stringOr(record.text, ""), 400),
+          },
+          events,
+          emitEvent,
+        );
       }
       break;
     case "hook":
-      logAgentLoopEvent(request, "hook", runStartedAt, {
-        phase: record.phase,
-        name: record.name,
-        hookEvent: record.hookEvent,
-        outcome: record.outcome,
-        stdout: truncateText(stringOr(record.stdout, ""), 300),
-        stderr: truncateText(stringOr(record.stderr, ""), 300),
-      }, events);
+      logAgentLoopEvent(
+        request,
+        "hook",
+        runStartedAt,
+        {
+          phase: record.phase,
+          name: record.name,
+          hookEvent: record.hookEvent,
+          outcome: record.outcome,
+          stdout: truncateText(stringOr(record.stdout, ""), 300),
+          stderr: truncateText(stringOr(record.stderr, ""), 300),
+        },
+        events,
+        emitEvent,
+      );
       break;
     case "error":
-      logAgentLoopEvent(request, "error", runStartedAt, {
-        error: errorMessage(record.error),
-      }, events);
+      logAgentLoopEvent(
+        request,
+        "error",
+        runStartedAt,
+        {
+          error: errorMessage(record.error),
+        },
+        events,
+        emitEvent,
+      );
       break;
     default:
-      logAgentLoopEvent(request, type, runStartedAt, {
-        event: truncateJson(record),
-      }, events);
+      logAgentLoopEvent(
+        request,
+        type,
+        runStartedAt,
+        {
+          event: truncateJson(record),
+        },
+        events,
+        emitEvent,
+      );
       break;
   }
 }
@@ -273,6 +368,7 @@ function logAgentLoopEvent(
   runStartedAt: number,
   fields: Record<string, unknown>,
   events?: JsonValue[],
+  emitEvent?: AgentRunEventSink,
 ): void {
   const record = {
     ts: new Date().toISOString(),
@@ -283,7 +379,9 @@ function logAgentLoopEvent(
     terminalToolSet: request.terminalToolSet,
     ...fields,
   };
-  events?.push(toJsonValue(record));
+  const jsonRecord = toJsonValue(record);
+  events?.push(jsonRecord);
+  emitEvent?.(jsonRecord);
   console.error(JSON.stringify(record));
 }
 
@@ -312,7 +410,9 @@ function createLoop(options: AgentLoopWorkerOptions): AgentLoop {
   }
 }
 
-function resolveRuntime(options: AgentLoopWorkerOptions): "ai-sdk" | "claude-code" | "codex" | "cursor" {
+function resolveRuntime(
+  options: AgentLoopWorkerOptions,
+): "ai-sdk" | "claude-code" | "codex" | "cursor" {
   return options.runtime ?? "ai-sdk";
 }
 

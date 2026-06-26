@@ -11,9 +11,9 @@ use tracing::{Level, error, info};
 
 use crate::{
     AgentRunRequest, AgentRunResponse, AgentRunScheduler, AssistantTaskEventRecord,
-    AssistantTaskStatus, Budget, CancellationToken, CapabilityProfile, Engine, EngineError,
-    EngineReport, NodeId, NodePlan, NodePolicy, NodeTemplate, ProblemKey, TaskId, TaskStore,
-    TaskType, WorkSize, Workspaces,
+    AssistantTaskStatus, BranchProgressEvent, Budget, CancellationToken, CapabilityProfile, Engine,
+    EngineError, EngineProgressEvent, EngineReport, NodeId, NodePlan, NodePolicy, NodeTemplate,
+    ProblemKey, TaskId, TaskStore, TaskType, WorkSize, Workspaces,
 };
 
 type WorkerFactory = dyn Fn() -> Box<dyn AgentRunScheduler + Send> + Send + Sync;
@@ -44,7 +44,10 @@ pub trait TaskEngineRunner: Send {
         &mut self,
         task_id: &str,
         request: &str,
+        workspace: crate::WorkspaceRequirement,
+        capabilities: CapabilityProfile,
         cancellation: CancellationToken,
+        progress: TaskEngineProgressSink,
     ) -> Result<(NodeId, EngineReport), EngineError>;
 }
 
@@ -69,21 +72,11 @@ impl TaskEngineRunnerFactory {
 
 struct RecursiveTaskEngineRunner {
     worker_factory: TaskWorkerFactory,
-    root_workspace: crate::WorkspaceRequirement,
-    root_capabilities: CapabilityProfile,
 }
 
 impl RecursiveTaskEngineRunner {
-    fn new(
-        worker_factory: TaskWorkerFactory,
-        root_workspace: crate::WorkspaceRequirement,
-        root_capabilities: CapabilityProfile,
-    ) -> Self {
-        Self {
-            worker_factory,
-            root_workspace,
-            root_capabilities,
-        }
+    fn new(worker_factory: TaskWorkerFactory) -> Self {
+        Self { worker_factory }
     }
 }
 
@@ -113,16 +106,15 @@ impl TaskEngineRunner for RecursiveTaskEngineRunner {
         &mut self,
         task_id: &str,
         request: &str,
+        workspace: crate::WorkspaceRequirement,
+        capabilities: CapabilityProfile,
         cancellation: CancellationToken,
+        progress: TaskEngineProgressSink,
     ) -> Result<(NodeId, EngineReport), EngineError> {
-        let root_template = task_request_to_root(
-            task_id,
-            request,
-            self.root_workspace.clone(),
-            self.root_capabilities.clone(),
-        );
+        let root_template = task_request_to_root(task_id, request, workspace, capabilities);
         let worker = FactoryAgentRunScheduler::new(self.worker_factory.clone());
-        let mut engine = Engine::new(Workspaces::default(), worker);
+        let mut engine = Engine::new(Workspaces::default(), worker)
+            .with_progress_sink(move |event| progress.emit(event));
         let root = engine.insert_root(root_template);
         let report = engine.run_with_cancel(root, cancellation).await?;
         Ok((root, report))
@@ -146,6 +138,8 @@ impl AgentRunScheduler for FactoryAgentRunScheduler {
 pub struct TaskBoard {
     max_parallel_tasks: usize,
     engine_runner_factory: TaskEngineRunnerFactory,
+    default_workspace: crate::WorkspaceRequirement,
+    default_capabilities: CapabilityProfile,
     queued: VecDeque<QueuedTask>,
     running: HashMap<TaskId, RunningTask>,
     tx: UnboundedSender<TaskRunEvent>,
@@ -156,6 +150,8 @@ pub struct TaskBoard {
 struct QueuedTask {
     task_id: TaskId,
     request: String,
+    workspace: crate::WorkspaceRequirement,
+    capabilities: CapabilityProfile,
 }
 
 #[derive(Debug, Clone)]
@@ -163,8 +159,27 @@ struct RunningTask {
     cancellation: CancellationToken,
 }
 
+#[derive(Clone)]
+pub struct TaskEngineProgressSink {
+    task_id: TaskId,
+    tx: UnboundedSender<TaskRunEvent>,
+}
+
+impl TaskEngineProgressSink {
+    pub fn emit(&self, event: EngineProgressEvent) {
+        let _ = self.tx.send(TaskRunEvent::Progress {
+            task_id: self.task_id.clone(),
+            event,
+        });
+    }
+}
+
 #[derive(Debug)]
 enum TaskRunEvent {
+    Progress {
+        task_id: TaskId,
+        event: EngineProgressEvent,
+    },
     Completed {
         task_id: TaskId,
         root: NodeId,
@@ -202,24 +217,41 @@ impl TaskBoard {
         root_capabilities: CapabilityProfile,
     ) -> Self {
         let engine_runner_factory = TaskEngineRunnerFactory::new(move || {
-            Box::new(RecursiveTaskEngineRunner::new(
-                worker_factory.clone(),
-                root_workspace.clone(),
-                root_capabilities.clone(),
-            ))
+            Box::new(RecursiveTaskEngineRunner::new(worker_factory.clone()))
         });
-        Self::with_engine_runner(max_parallel_tasks, engine_runner_factory)
+        Self::with_engine_runner_and_root(
+            max_parallel_tasks,
+            engine_runner_factory,
+            root_workspace,
+            root_capabilities,
+        )
     }
 
     pub fn with_engine_runner(
         max_parallel_tasks: usize,
         engine_runner_factory: TaskEngineRunnerFactory,
     ) -> Self {
+        Self::with_engine_runner_and_root(
+            max_parallel_tasks,
+            engine_runner_factory,
+            crate::WorkspaceRequirement::memory(),
+            CapabilityProfile::read_only(),
+        )
+    }
+
+    pub fn with_engine_runner_and_root(
+        max_parallel_tasks: usize,
+        engine_runner_factory: TaskEngineRunnerFactory,
+        default_workspace: crate::WorkspaceRequirement,
+        default_capabilities: CapabilityProfile,
+    ) -> Self {
         let max_parallel_tasks = max_parallel_tasks.max(1);
         let (tx, rx) = unbounded_channel();
         Self {
             max_parallel_tasks,
             engine_runner_factory,
+            default_workspace,
+            default_capabilities,
             queued: VecDeque::new(),
             running: HashMap::new(),
             tx,
@@ -234,11 +266,38 @@ impl TaskBoard {
         }
     }
 
+    pub fn set_default_root(
+        &mut self,
+        workspace: crate::WorkspaceRequirement,
+        capabilities: CapabilityProfile,
+    ) {
+        self.default_workspace = workspace;
+        self.default_capabilities = capabilities;
+    }
+
     pub async fn enqueue(
         &mut self,
         store: &mut impl TaskStore,
         task_id: TaskId,
         request: String,
+    ) -> TaskBoardSnapshot {
+        self.enqueue_with_root(
+            store,
+            task_id,
+            request,
+            self.default_workspace.clone(),
+            self.default_capabilities.clone(),
+        )
+        .await
+    }
+
+    pub async fn enqueue_with_root(
+        &mut self,
+        store: &mut impl TaskStore,
+        task_id: TaskId,
+        request: String,
+        workspace: crate::WorkspaceRequirement,
+        capabilities: CapabilityProfile,
     ) -> TaskBoardSnapshot {
         store.set_task_status(&task_id, AssistantTaskStatus::Queued);
         let payload = json!({
@@ -266,7 +325,12 @@ impl TaskBoard {
                 payload,
             },
         );
-        self.queued.push_back(QueuedTask { task_id, request });
+        self.queued.push_back(QueuedTask {
+            task_id,
+            request,
+            workspace,
+            capabilities,
+        });
         self.start_ready(store);
         self.snapshot()
     }
@@ -420,8 +484,19 @@ impl TaskBoard {
             }
 
             let mut engine_runner = engine_runner_factory.make();
+            let progress = TaskEngineProgressSink {
+                task_id: queued.task_id.clone(),
+                tx: tx.clone(),
+            };
             let event = match engine_runner
-                .run_task(&queued.task_id, &queued.request, cancellation.clone())
+                .run_task(
+                    &queued.task_id,
+                    &queued.request,
+                    queued.workspace,
+                    queued.capabilities,
+                    cancellation.clone(),
+                    progress,
+                )
                 .await
             {
                 Ok(_) if cancellation.is_cancelled() => TaskRunEvent::Cancelled {
@@ -447,6 +522,9 @@ impl TaskBoard {
 
     fn apply_event(&mut self, store: &mut impl TaskStore, event: TaskRunEvent) {
         match event {
+            TaskRunEvent::Progress { task_id, event } => {
+                record_engine_progress_event(store, &task_id, event);
+            }
             TaskRunEvent::Completed {
                 task_id,
                 root,
@@ -548,6 +626,9 @@ fn record_engine_report_logs(
     );
 
     for event in &report.events {
+        if has_engine_operation_event(store, task_id, event) {
+            continue;
+        }
         info!(
             target: "siko.task",
             task_id = %task_id,
@@ -574,6 +655,9 @@ fn record_engine_report_logs(
     }
 
     for run in &report.agent_runs {
+        if has_agent_run_event(store, task_id, run) {
+            continue;
+        }
         info!(
             target: "siko.task",
             task_id = %task_id,
@@ -602,6 +686,244 @@ fn record_engine_report_logs(
             },
         );
     }
+}
+
+fn record_engine_progress_event(
+    store: &mut impl TaskStore,
+    task_id: &str,
+    event: EngineProgressEvent,
+) {
+    match event {
+        EngineProgressEvent::Operation { event } => {
+            if has_engine_operation_event(store, task_id, &event) {
+                return;
+            }
+            store.record_task_event(
+                task_id,
+                AssistantTaskEventRecord {
+                    level: Level::INFO,
+                    kind: "engine.operation".to_string(),
+                    source: "engine".to_string(),
+                    message: event.note.clone(),
+                    node_id: Some(event.node_id),
+                    operation: Some(event.operation),
+                    payload: json!({
+                        "node_id": event.node_id,
+                        "operation": event.operation,
+                        "note": event.note,
+                    }),
+                },
+            );
+        }
+        EngineProgressEvent::AgentRunStarted {
+            node_id,
+            operation,
+            objective,
+            terminal_tools,
+        } => {
+            store.record_task_event(
+                task_id,
+                AssistantTaskEventRecord {
+                    level: Level::INFO,
+                    kind: "agent.run.started".to_string(),
+                    source: "agent".to_string(),
+                    message: "agent run started".to_string(),
+                    node_id: Some(node_id),
+                    operation: Some(operation),
+                    payload: json!({
+                        "node_id": node_id,
+                        "operation": operation,
+                        "objective": objective,
+                        "terminal_tools": terminal_tools,
+                    }),
+                },
+            );
+        }
+        EngineProgressEvent::AgentRun { run } => {
+            if has_agent_run_event(store, task_id, &run) {
+                return;
+            }
+            store.record_task_event(
+                task_id,
+                AssistantTaskEventRecord {
+                    level: Level::INFO,
+                    kind: "agent.run".to_string(),
+                    source: "agent".to_string(),
+                    message: run.report.clone(),
+                    node_id: Some(run.node_id),
+                    operation: Some(run.operation),
+                    payload: json!({
+                        "node_id": run.node_id,
+                        "operation": run.operation,
+                        "terminal_tool": run.terminal_tool,
+                        "duration_ms": run.duration_ms,
+                        "report": run.report,
+                    }),
+                },
+            );
+        }
+        EngineProgressEvent::AgentRunEvent {
+            node_id,
+            operation,
+            event,
+        } => {
+            store.record_task_event(
+                task_id,
+                AssistantTaskEventRecord {
+                    level: Level::INFO,
+                    kind: "agent.run.event".to_string(),
+                    source: "agent".to_string(),
+                    message: agent_run_event_message(&event),
+                    node_id: Some(node_id),
+                    operation: Some(operation),
+                    payload: json!({
+                        "node_id": node_id,
+                        "operation": operation,
+                        "event": event,
+                    }),
+                },
+            );
+        }
+        EngineProgressEvent::BranchLocal {
+            branch_root_node_id,
+            local_node_id,
+            event,
+        } => match event {
+            BranchProgressEvent::Operation { operation, note } => {
+                store.record_task_event(
+                    task_id,
+                    AssistantTaskEventRecord {
+                        level: Level::INFO,
+                        kind: "engine.branch.operation".to_string(),
+                        source: "engine".to_string(),
+                        message: note.clone(),
+                        node_id: Some(branch_root_node_id),
+                        operation: Some(operation),
+                        payload: json!({
+                            "branch_root_node_id": branch_root_node_id,
+                            "local_node_id": local_node_id,
+                            "operation": operation,
+                            "note": note,
+                        }),
+                    },
+                );
+            }
+            BranchProgressEvent::AgentRunStarted {
+                operation,
+                objective,
+                terminal_tools,
+            } => {
+                store.record_task_event(
+                    task_id,
+                    AssistantTaskEventRecord {
+                        level: Level::INFO,
+                        kind: "agent.branch.run.started".to_string(),
+                        source: "agent".to_string(),
+                        message: "branch agent run started".to_string(),
+                        node_id: Some(branch_root_node_id),
+                        operation: Some(operation),
+                        payload: json!({
+                            "branch_root_node_id": branch_root_node_id,
+                            "local_node_id": local_node_id,
+                            "operation": operation,
+                            "objective": objective,
+                            "terminal_tools": terminal_tools,
+                        }),
+                    },
+                );
+            }
+            BranchProgressEvent::AgentRun {
+                operation,
+                report,
+                terminal_tool,
+                terminal_payload,
+                duration_ms,
+                usage,
+                events,
+            } => {
+                store.record_task_event(
+                    task_id,
+                    AssistantTaskEventRecord {
+                        level: Level::INFO,
+                        kind: "agent.branch.run".to_string(),
+                        source: "agent".to_string(),
+                        message: report.clone(),
+                        node_id: Some(branch_root_node_id),
+                        operation: Some(operation),
+                        payload: json!({
+                            "branch_root_node_id": branch_root_node_id,
+                            "local_node_id": local_node_id,
+                            "operation": operation,
+                            "terminal_tool": terminal_tool,
+                            "terminal_payload": terminal_payload,
+                            "duration_ms": duration_ms,
+                            "usage": usage,
+                            "events": events,
+                            "report": report,
+                        }),
+                    },
+                );
+            }
+            BranchProgressEvent::AgentRunEvent { operation, event } => {
+                store.record_task_event(
+                    task_id,
+                    AssistantTaskEventRecord {
+                        level: Level::INFO,
+                        kind: "agent.branch.run.event".to_string(),
+                        source: "agent".to_string(),
+                        message: agent_run_event_message(&event),
+                        node_id: Some(branch_root_node_id),
+                        operation: Some(operation),
+                        payload: json!({
+                            "branch_root_node_id": branch_root_node_id,
+                            "local_node_id": local_node_id,
+                            "operation": operation,
+                            "event": event,
+                        }),
+                    },
+                );
+            }
+        },
+    }
+}
+
+fn agent_run_event_message(event: &serde_json::Value) -> String {
+    event
+        .get("event")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("agent run event")
+        .to_string()
+}
+
+fn has_engine_operation_event(
+    store: &impl TaskStore,
+    task_id: &str,
+    event: &crate::OperationEvent,
+) -> bool {
+    store.get_task(task_id).is_some_and(|task| {
+        task.events.iter().any(|existing| {
+            existing.kind == "engine.operation"
+                && existing.node_id == Some(event.node_id)
+                && existing.operation == Some(event.operation)
+                && existing.message == event.note
+        })
+    })
+}
+
+fn has_agent_run_event(store: &impl TaskStore, task_id: &str, run: &crate::AgentRunRecord) -> bool {
+    store.get_task(task_id).is_some_and(|task| {
+        task.events.iter().any(|existing| {
+            existing.kind == "agent.run"
+                && existing.node_id == Some(run.node_id)
+                && existing.operation == Some(run.operation)
+                && existing.message == run.report
+                && existing
+                    .payload
+                    .get("terminal_tool")
+                    .and_then(serde_json::Value::as_str)
+                    == run.terminal_tool.as_deref()
+        })
+    })
 }
 
 fn task_request_to_root(

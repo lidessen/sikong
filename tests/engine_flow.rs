@@ -63,6 +63,36 @@ impl AgentRunScheduler for EventfulAgentRunScheduler {
     }
 }
 
+#[derive(Debug, Clone)]
+struct LiveEventAgentRunScheduler;
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for LiveEventAgentRunScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        TestAgentRunScheduler.run(input, cancellation).await
+    }
+
+    async fn run_with_event_sink(
+        &mut self,
+        input: AgentRunRequest,
+        cancellation: CancellationToken,
+        event_sink: Option<AgentRunEventSink>,
+    ) -> AgentRunResponse {
+        if let Some(sink) = event_sink {
+            sink(serde_json::json!({
+                "source": "agent-loop",
+                "event": "tool_call_start",
+                "name": input.terminal_tool_set.first().cloned().unwrap_or_default(),
+            }));
+        }
+        TestAgentRunScheduler.run(input, cancellation).await
+    }
+}
+
 #[tokio::test]
 async fn simple_leaf_executes_verifies_and_commits() {
     let mut engine = engine();
@@ -119,6 +149,35 @@ async fn simple_leaf_executes_verifies_and_commits() {
             .filter_map(|run| run.terminal_tool.as_deref())
             .collect::<Vec<_>>(),
         vec!["submit_specification", "submit_work", "submit_verdict",]
+    );
+}
+
+#[tokio::test]
+async fn engine_streams_agent_run_events_before_run_record() {
+    let progress_events = Arc::new(Mutex::new(Vec::new()));
+    let progress_events_for_sink = progress_events.clone();
+    let mut engine = Engine::new(MemoryWorkspace::default(), LiveEventAgentRunScheduler)
+        .with_progress_sink(move |event| {
+            progress_events_for_sink.lock().unwrap().push(event);
+        });
+    let root = engine.insert_root(NodeTemplate::memory_leaf("live-event", "stream event"));
+
+    let report = engine.run(root).await.unwrap();
+
+    assert_eq!(report.status, NodeStatus::Committed);
+    assert!(
+        progress_events.lock().unwrap().iter().any(|event| {
+            matches!(
+                event,
+                EngineProgressEvent::AgentRunEvent {
+                    operation: NodeOperation::Execute,
+                    event,
+                    ..
+                } if event.get("event").and_then(serde_json::Value::as_str) == Some("tool_call_start")
+            )
+        }),
+        "expected live agent run event; events: {:?}",
+        progress_events.lock().unwrap()
     );
 }
 
@@ -508,6 +567,149 @@ async fn parallel_group_executes_children_concurrently() {
 }
 
 #[tokio::test]
+async fn parallel_child_root_progress_streams_before_branch_merge() {
+    let state = Arc::new(ConcurrentAgentState::default());
+    let progress_events = Arc::new(Mutex::new(Vec::new()));
+    let progress_events_for_sink = progress_events.clone();
+    let mut engine = Engine::new(
+        MemoryWorkspace::default(),
+        ConcurrentAgentRunScheduler {
+            state: state.clone(),
+        },
+    )
+    .with_progress_sink(move |event| {
+        progress_events_for_sink.lock().unwrap().push(event);
+    });
+    let root = engine.insert_root(NodeTemplate {
+        policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
+        key: ProblemKey("parallel-progress".to_string()),
+        intent: "combined progress work".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![
+                NodeTemplate::memory_leaf("progress-a", "progress a"),
+                NodeTemplate::memory_leaf("progress-b", "progress b"),
+            ],
+        }),
+    });
+
+    let run = tokio::spawn(async move { engine.run(root).await });
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while std::time::Instant::now() < deadline && state.current_execute.load(Ordering::SeqCst) == 0
+    {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+
+    assert!(
+        state.current_execute.load(Ordering::SeqCst) > 0,
+        "parallel child execute did not start"
+    );
+    assert!(
+        progress_events.lock().unwrap().iter().any(|event| {
+            matches!(
+                event,
+                EngineProgressEvent::AgentRunStarted {
+                    node_id,
+                    operation: NodeOperation::Execute,
+                    ..
+                } if *node_id != root
+            )
+        }),
+        "expected child root agent run start before branch merge; events: {:?}",
+        progress_events.lock().unwrap()
+    );
+
+    let report = run.await.unwrap().unwrap();
+    assert_eq!(report.status, NodeStatus::Committed);
+}
+
+#[tokio::test]
+async fn parallel_branch_local_progress_streams_before_branch_merge() {
+    let state = Arc::new(ConcurrentAgentState::default());
+    let progress_events = Arc::new(Mutex::new(Vec::new()));
+    let progress_events_for_sink = progress_events.clone();
+    let mut engine = Engine::new(
+        MemoryWorkspace::default(),
+        NestedProgressAgentRunScheduler {
+            state: state.clone(),
+        },
+    )
+    .with_progress_sink(move |event| {
+        progress_events_for_sink.lock().unwrap().push(event);
+    });
+    let root = engine.insert_root(NodeTemplate {
+        policy: NodePolicy::Explore,
+        task_type: TaskType::Explore,
+        key: ProblemKey("parallel-branch-local-progress".to_string()),
+        intent: "combined nested progress work".to_string(),
+        size: WorkSize::Small,
+        scope_assessment: None,
+        workspace: WorkspaceRequirement::memory(),
+        capabilities: CapabilityProfile::read_only(),
+        budget: Budget::default(),
+        plan: NodePlan::Group(PlanGroup {
+            mode: PlanGroupMode::Parallel,
+            items: vec![NodeTemplate {
+                policy: NodePolicy::Explore,
+                task_type: TaskType::Explore,
+                key: ProblemKey("nested-progress-parent".to_string()),
+                intent: "nested progress parent".to_string(),
+                size: WorkSize::Small,
+                scope_assessment: None,
+                workspace: WorkspaceRequirement::memory(),
+                capabilities: CapabilityProfile::read_only(),
+                budget: Budget::default(),
+                plan: NodePlan::Group(PlanGroup {
+                    mode: PlanGroupMode::Stage,
+                    items: vec![NodeTemplate::memory_leaf(
+                        "nested-progress-grandchild",
+                        "nested progress grandchild",
+                    )],
+                }),
+            }],
+        }),
+    });
+
+    let run = tokio::spawn(async move { engine.run(root).await });
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while std::time::Instant::now() < deadline && state.current_execute.load(Ordering::SeqCst) == 0
+    {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+
+    assert!(
+        state.current_execute.load(Ordering::SeqCst) > 0,
+        "parallel branch grandchild execute did not start"
+    );
+    assert!(
+        progress_events.lock().unwrap().iter().any(|event| {
+            matches!(
+                event,
+                EngineProgressEvent::BranchLocal {
+                    branch_root_node_id,
+                    local_node_id,
+                    event: BranchProgressEvent::AgentRunStarted {
+                        operation: NodeOperation::Execute,
+                        ..
+                    },
+                } if *branch_root_node_id != root && local_node_id != branch_root_node_id
+            )
+        }),
+        "expected branch-local agent run start before branch merge; events: {:?}",
+        progress_events.lock().unwrap()
+    );
+
+    let report = run.await.unwrap().unwrap();
+    assert_eq!(report.status, NodeStatus::Committed);
+}
+
+#[tokio::test]
 async fn parallel_group_merges_children_as_they_finish() {
     let mut engine = Engine::new(MemoryWorkspace::default(), StaggeredAgentRunScheduler);
     let root = engine.insert_root(NodeTemplate {
@@ -669,6 +871,95 @@ impl AgentRunScheduler for ConcurrentAgentRunScheduler {
         }
 
         TestAgentRunScheduler.run(input, cancellation).await
+    }
+}
+
+#[derive(Clone)]
+struct NestedProgressAgentRunScheduler {
+    state: Arc<ConcurrentAgentState>,
+}
+
+#[async_trait::async_trait]
+impl AgentRunScheduler for NestedProgressAgentRunScheduler {
+    async fn run(
+        &mut self,
+        input: AgentRunRequest,
+        _cancellation: CancellationToken,
+    ) -> AgentRunResponse {
+        if input.terminal_tool_set == vec!["submit_work".to_string()] {
+            let current = self.state.current_execute.fetch_add(1, Ordering::SeqCst) + 1;
+            self.state.max_execute.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            self.state.current_execute.fetch_sub(1, Ordering::SeqCst);
+        }
+
+        let terminal_tool = input.terminal_tool_set[0].clone();
+        let intent = input
+            .input
+            .pointer("/node/intent")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("mock output");
+        let arguments = match terminal_tool.as_str() {
+            "submit_specification"
+                if intent == "combined nested progress work"
+                    || intent == "nested progress parent" =>
+            {
+                serde_json::json!({
+                "next": intent,
+                "size": "large",
+                "reason": "Nested progress parent needs one planned child."
+                })
+            }
+            "submit_specification" => serde_json::json!({
+                "next": intent,
+                "size": "small",
+                "reason": "Leaf progress work is local."
+            }),
+            "submit_plan_group" if intent == "combined nested progress work" => serde_json::json!({
+                "mode": "parallel",
+                "items": [{
+                    "key": "nested-progress-parent",
+                    "intent": "nested progress parent",
+                    "read_scope": [],
+                    "write_scope": [],
+                    "size": "large",
+                    "reason": "Nested branch parent should plan one local child.",
+                    "requires_prior_results": false
+                }]
+            }),
+            "submit_plan_group" => serde_json::json!({
+                "mode": "stage",
+                "items": [{
+                    "key": "nested-progress-grandchild",
+                    "intent": "nested progress grandchild",
+                    "read_scope": [],
+                    "write_scope": [],
+                    "size": "small",
+                    "reason": "One nested child is enough to expose branch-local progress.",
+                    "requires_prior_results": false
+                }]
+            }),
+            "submit_work" | "submit_combination" => serde_json::json!({
+                "output": intent,
+            }),
+            "submit_verdict" => serde_json::json!({
+                "verdict": "accept",
+                "reason": "nested progress completed",
+            }),
+            other => serde_json::json!({ "unexpected": other }),
+        };
+        let call = AgentToolCall {
+            name: terminal_tool,
+            arguments,
+        };
+
+        AgentRunResponse {
+            report: format!("nested progress worker completed {}", input.objective),
+            tool_calls: vec![call.clone()],
+            terminal_call: Some(call),
+            usage: None,
+            events: Vec::new(),
+        }
     }
 }
 

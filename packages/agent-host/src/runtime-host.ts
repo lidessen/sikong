@@ -7,7 +7,9 @@ import { createServer, type Socket as NodeSocket } from "node:net";
 // may not be writable. Point to a temp directory instead.
 if (!process.env.CLAUDE_SESSION_ENV_DIR) {
   const sessionDir = `/tmp/siko-sessions-${process.pid}`;
-  try { mkdirSync(sessionDir, { recursive: true }); } catch {}
+  try {
+    mkdirSync(sessionDir, { recursive: true });
+  } catch {}
   process.env.CLAUDE_SESSION_ENV_DIR = sessionDir;
 }
 
@@ -16,13 +18,17 @@ import type { EffortLevel } from "agent-loop";
 import { runMockAgentWorker } from "./mock-worker";
 import {
   parseRuntimeClientMessage,
+  type AgentRunEventSink,
   type AgentHostMessage,
   type AgentRunRequest,
   type AgentRunResponse,
   type RuntimeClientMessage,
 } from "./protocol";
 
-export type RuntimeWorker = (request: AgentRunRequest) => Promise<AgentRunResponse>;
+export type RuntimeWorker = (
+  request: AgentRunRequest,
+  emitEvent?: AgentRunEventSink,
+) => Promise<AgentRunResponse>;
 
 export interface RuntimeHostOptions {
   worker?: RuntimeWorker;
@@ -192,7 +198,9 @@ async function handleLine(
   });
 
   try {
-    const result = await worker(message.request);
+    const result = await worker(message.request, (event) => {
+      writeMessage({ type: "event", id: message.id, event });
+    });
     logHostEvent("run.complete", {
       id: message.id,
       durationMs: Math.round(performance.now() - startedAt),
@@ -258,9 +266,17 @@ function createRuntimeWorker(argv: string[]): RuntimeWorker {
   return runMockAgentWorker;
 }
 
-function parseAgentLoopProvider(argv: string[]): "deepseek" | "kimi" | "claude" | "codex" | "cursor" | undefined {
+function parseAgentLoopProvider(
+  argv: string[],
+): "deepseek" | "kimi" | "claude" | "codex" | "cursor" | undefined {
   const provider = parseFlag(argv, "--provider") ?? Bun.env.SIKONG_AGENT_HOST_PROVIDER;
-  if (provider === "deepseek" || provider === "kimi" || provider === "claude" || provider === "codex" || provider === "cursor") {
+  if (
+    provider === "deepseek" ||
+    provider === "kimi" ||
+    provider === "claude" ||
+    provider === "codex" ||
+    provider === "cursor"
+  ) {
     return provider;
   }
   return undefined;

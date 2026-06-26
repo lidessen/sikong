@@ -18,9 +18,9 @@ pub use node::{
     PolicyPack, ProblemNode, ScopeAssessment, TaskType, WorkSize,
 };
 pub use types::{
-    AgentRunRecord, ArtifactId, AttemptRecord, Budget, CapabilityProfile, EngineError,
-    EngineReport, FailureClass, NodeId, NodeOperation, NodeStatus, OperationEvent, ProblemKey,
-    VerificationVerdict,
+    AgentRunRecord, ArtifactId, AttemptRecord, BranchProgressEvent, Budget, CapabilityProfile,
+    EngineError, EngineProgressEvent, EngineReport, FailureClass, NodeId, NodeOperation,
+    NodeStatus, OperationEvent, ProblemKey, VerificationVerdict,
 };
 
 #[derive(Debug, Clone)]

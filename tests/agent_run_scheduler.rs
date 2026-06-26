@@ -1,6 +1,7 @@
 use serde_json::json;
 use siko::*;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_run_scheduler_reuses_one_host_for_multiple_runs() {
@@ -71,6 +72,65 @@ async fn agent_run_scheduler_cancels_running_host() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_run_scheduler_reports_structured_startup_failure() {
+    let mut worker =
+        ProcessAgentRunScheduler::new("__siko_missing_agent_host_command__", Vec::<String>::new());
+
+    let result = worker
+        .run(request("submit_work"), CancellationToken::new())
+        .await;
+
+    assert!(result.terminal_call.is_none());
+    assert!(result.report.contains("agent host failure (startup)"));
+    assert!(result.events.iter().any(|event| {
+        event.get("event").and_then(serde_json::Value::as_str) == Some("agent_run_failure")
+            && event.get("class").and_then(serde_json::Value::as_str) == Some("startup")
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_run_scheduler_streams_host_events_before_result() {
+    if Command::new("bun").arg("--version").output().is_err() {
+        eprintln!("skipping agent_run_scheduler_streams_host_events_before_result: bun not found");
+        return;
+    }
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let events_for_sink = events.clone();
+    let mut worker =
+        ProcessAgentRunScheduler::new("bun", ["packages/agent-host/src/runtime-host.ts"]);
+
+    let result = worker
+        .run_with_event_sink(
+            request("submit_work"),
+            CancellationToken::new(),
+            Some(Arc::new(move |event| {
+                events_for_sink.lock().unwrap().push(event);
+            })),
+        )
+        .await;
+
+    assert!(
+        events.lock().unwrap().iter().any(|event| {
+            event.get("event").and_then(serde_json::Value::as_str) == Some("tool_call_start")
+        }),
+        "expected streamed host event; events: {:?}",
+        events.lock().unwrap()
+    );
+    assert_eq!(
+        result
+            .events
+            .iter()
+            .filter(|event| {
+                event.get("event").and_then(serde_json::Value::as_str) == Some("tool_call_start")
+            })
+            .count(),
+        1
+    );
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compiled_agent_host_binary_speaks_socket_protocol_when_configured() {
     let Ok(command) = std::env::var("SIKONG_AGENT_HOST_COMMAND") else {
         eprintln!(
@@ -88,7 +148,7 @@ async fn compiled_agent_host_binary_speaks_socket_protocol_when_configured() {
         result.terminal_call,
         Some(AgentToolCall {
             name: "submit_work".to_string(),
-            arguments: json!({}),
+            arguments: json!({"output": "mock output"}),
         })
     );
 }

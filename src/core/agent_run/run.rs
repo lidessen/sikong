@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
+pub type AgentRunEventSink = Arc<dyn Fn(Value) + Send + Sync>;
+
 #[derive(Debug)]
 struct CancellationState {
     cancelled: AtomicBool,

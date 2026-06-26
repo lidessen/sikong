@@ -9,7 +9,8 @@ mod board;
 mod store;
 
 pub use board::{
-    TaskBoard, TaskBoardSnapshot, TaskEngineRunner, TaskEngineRunnerFactory, TaskWorkerFactory,
+    TaskBoard, TaskBoardSnapshot, TaskEngineProgressSink, TaskEngineRunner,
+    TaskEngineRunnerFactory, TaskWorkerFactory,
 };
 pub use store::{FileTaskStore, MemoryTaskStore, TaskStore};
 

@@ -4,13 +4,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::util;
-use crate::{
-    AssistantTask, AssistantTaskEvent, AssistantTaskStatus, DebugConfig, FileTaskStore,
-    NodeOperation, TaskStore,
-};
+use crate::{AssistantTaskEvent, AssistantTaskStatus, DebugConfig, FileTaskStore, TaskStore};
 use clap::Subcommand;
-use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
+
+pub use crate::harness::task_view::{
+    AgentEventEntry, AgentEventFilter, assistant_agent_events, legacy_uuid_v7_timestamp_ms,
+    parse_node_operation, resolve_task_ref, sort_tasks_newest_first, task_list_id,
+};
 
 // ── TaskCommand ──────────────────────────────────────────────────────────
 
@@ -194,7 +195,7 @@ fn print_task_show(task_id: &str, json_output: bool) -> Result<(), Box<dyn std::
     let task = resolve_task_ref(&store, task_id)?;
 
     if json_output {
-        serde_json::to_writer_pretty(std::io::stdout(), task)?;
+        serde_json::to_writer_pretty(std::io::stdout(), &task)?;
         println!();
         return Ok(());
     }
@@ -234,21 +235,51 @@ pub fn print_assistant_events(
     let debug = DebugConfig::from_env();
     let store = FileTaskStore::open(assistant_store_path(&debug))?;
     let task = resolve_task_ref(&store, task_id)?;
-    let entries = assistant_agent_events(task, &filter);
+    let entries = assistant_agent_events(&task, &filter);
+    let include_task_events = filter.is_empty();
 
     if json_output {
-        serde_json::to_writer_pretty(std::io::stdout(), &entries)?;
+        if include_task_events {
+            let task_events = task.events.iter().map(|event| {
+                json!({
+                    "type": "task_event",
+                    "task_id": task.id,
+                    "event": event,
+                })
+            });
+            let agent_events = entries.iter().map(|entry| {
+                json!({
+                    "type": "agent_event",
+                    "task_id": task.id,
+                    "event": entry,
+                })
+            });
+            let combined = task_events.chain(agent_events).collect::<Vec<_>>();
+            serde_json::to_writer_pretty(std::io::stdout(), &combined)?;
+        } else {
+            serde_json::to_writer_pretty(std::io::stdout(), &entries)?;
+        }
         println!();
         return Ok(());
     }
 
+    let task_event_count = if include_task_events {
+        task.events.len()
+    } else {
+        0
+    };
     println!(
         "task {} {} {:?} events={}",
         task.id,
         task.title,
         task.status,
-        entries.len()
+        task_event_count + entries.len()
     );
+    if include_task_events {
+        for event in &task.events {
+            println!("{}", format_task_log(event));
+        }
+    }
     for entry in entries {
         println!("{}", util::format_agent_event(&entry));
     }
@@ -267,7 +298,7 @@ pub fn print_assistant_logs(
     let task = resolve_task_ref(&store, task_id)?;
 
     if full_output {
-        serde_json::to_writer_pretty(std::io::stdout(), task)?;
+        serde_json::to_writer_pretty(std::io::stdout(), &task)?;
         println!();
         return Ok(());
     }
@@ -345,7 +376,7 @@ fn inspect_task_stream(
             }
         }
 
-        for entry in assistant_agent_events(task, &AgentEventFilter::default()) {
+        for entry in assistant_agent_events(&task, &AgentEventFilter::default()) {
             let key = (entry.run_index, entry.event_index);
             if printed_agent_events.insert(key) {
                 if json_output {
@@ -408,75 +439,6 @@ fn inspect_task_stream(
     }
 }
 
-// ── Task ref resolution helpers ──────────────────────────────────────────
-
-pub fn resolve_task_ref<'a>(
-    store: &'a FileTaskStore,
-    task_ref: &str,
-) -> Result<&'a AssistantTask, Box<dyn std::error::Error>> {
-    if let Some(task) = store.get_task(task_ref) {
-        return Ok(task);
-    }
-
-    let matches = store
-        .list_tasks()
-        .into_iter()
-        .filter(|task| task.id.starts_with(task_ref))
-        .collect::<Vec<_>>();
-
-    match matches.len() {
-        0 => Err(format!("unknown task id {task_ref}").into()),
-        1 => {
-            let id = matches[0].id.clone();
-            store
-                .get_task(&id)
-                .ok_or_else(|| format!("unknown task id {task_ref}").into())
-        }
-        _ => {
-            let ids = matches
-                .iter()
-                .map(|task| task.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(format!("ambiguous task id prefix {task_ref}; matches: {ids}").into())
-        }
-    }
-}
-
-pub fn task_list_id(task_id: &str) -> String {
-    if task_id.chars().count() <= 16 {
-        return task_id.to_string();
-    }
-    task_id.chars().take(12).collect()
-}
-
-pub fn sort_tasks_newest_first(tasks: &mut [AssistantTask]) {
-    tasks.sort_by(|a, b| {
-        task_created_sort_key(b)
-            .cmp(&task_created_sort_key(a))
-            .then_with(|| b.id.cmp(&a.id))
-    });
-}
-
-fn task_created_sort_key(task: &AssistantTask) -> u64 {
-    if task.created_at_ms != 0 {
-        return task.created_at_ms;
-    }
-    legacy_uuid_v7_timestamp_ms(&task.id).unwrap_or_default()
-}
-
-pub fn legacy_uuid_v7_timestamp_ms(id: &str) -> Option<u64> {
-    let hex = id
-        .chars()
-        .filter(|ch| *ch != '-')
-        .take(12)
-        .collect::<String>();
-    if hex.len() != 12 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return None;
-    }
-    u64::from_str_radix(&hex, 16).ok()
-}
-
 // ── Status helpers ───────────────────────────────────────────────────────
 
 fn task_is_active(status: &AssistantTaskStatus) -> bool {
@@ -534,83 +496,6 @@ pub fn truncate_text(input: &str, max_chars: usize) -> String {
     }
 }
 
-// ── Agent event filtering ───────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default)]
-pub struct AgentEventFilter {
-    pub operation: Option<NodeOperation>,
-    pub event: Option<String>,
-    pub tool: Option<String>,
-    pub source: Option<String>,
-    pub query: Option<String>,
-}
-
-impl AgentEventFilter {
-    pub fn try_new(
-        operation: Option<String>,
-        event: Option<String>,
-        tool: Option<String>,
-        source: Option<String>,
-        query: Option<String>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self {
-            operation: operation.as_deref().map(parse_node_operation).transpose()?,
-            event,
-            tool,
-            source,
-            query,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AgentEventEntry {
-    pub task_id: String,
-    pub run_index: usize,
-    pub event_index: usize,
-    pub node_id: crate::NodeId,
-    pub operation: NodeOperation,
-    pub source: Option<String>,
-    pub event: Option<String>,
-    pub name: Option<String>,
-    pub elapsed_ms: Option<u64>,
-    pub objective: Option<String>,
-    pub record: Value,
-}
-
-pub fn assistant_agent_events(
-    task: &AssistantTask,
-    filter: &AgentEventFilter,
-) -> Vec<AgentEventEntry> {
-    let Some(report) = &task.last_report else {
-        return Vec::new();
-    };
-
-    report
-        .agent_runs
-        .iter()
-        .enumerate()
-        .flat_map(|(run_index, run)| {
-            run.events
-                .iter()
-                .enumerate()
-                .map(move |(event_index, record)| AgentEventEntry {
-                    task_id: task.id.clone(),
-                    run_index: run_index + 1,
-                    event_index: event_index + 1,
-                    node_id: run.node_id,
-                    operation: run.operation,
-                    source: util::json_string(record, "source"),
-                    event: util::json_string(record, "event"),
-                    name: util::json_string(record, "name"),
-                    elapsed_ms: util::json_u64(record, "elapsedMs"),
-                    objective: util::json_string(record, "objective"),
-                    record: record.clone(),
-                })
-        })
-        .filter(|entry| util::agent_event_matches(entry, filter))
-        .collect()
-}
 pub fn optional_eq(expected: Option<&str>, actual: Option<&str>) -> bool {
     let Some(expected) = expected else {
         return true;
@@ -641,15 +526,4 @@ pub fn format_agent_event(entry: &AgentEventEntry) -> String {
         objective,
         record
     )
-}
-pub fn parse_node_operation(input: &str) -> Result<NodeOperation, Box<dyn std::error::Error>> {
-    match input.trim().to_ascii_lowercase().as_str() {
-        "specify" => Ok(NodeOperation::Specify),
-        "plan" => Ok(NodeOperation::Plan),
-        "execute" => Ok(NodeOperation::Execute),
-        "combine" => Ok(NodeOperation::Combine),
-        "verify" => Ok(NodeOperation::Verify),
-        "commit" => Ok(NodeOperation::Commit),
-        other => Err(format!("unknown operation '{other}'; expected one of: specify, plan, execute, combine, verify, commit").into()),
-    }
 }

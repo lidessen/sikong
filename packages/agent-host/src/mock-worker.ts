@@ -1,5 +1,6 @@
 import { defineTool, type ToolDefinition, type ToolSet } from "agent-loop";
 import type {
+  AgentRunEventSink,
   AgentRunRequest,
   AgentRunResponse,
   AgentToolCall,
@@ -23,7 +24,10 @@ export function createDynamicTools(specs: AgentToolSpec[]): ToolSet {
   return tools;
 }
 
-export async function runMockAgentWorker(request: AgentRunRequest): Promise<AgentRunResponse> {
+export async function runMockAgentWorker(
+  request: AgentRunRequest,
+  emitEvent?: AgentRunEventSink,
+): Promise<AgentRunResponse> {
   const delayMs = delayFromInput(request.input);
   if (delayMs > 0) {
     await Bun.sleep(delayMs);
@@ -54,21 +58,25 @@ export async function runMockAgentWorker(request: AgentRunRequest): Promise<Agen
 
   const call = loopResult.terminalCall;
   const callNames = loopResult.calls.map((toolCall) => toolCall.name).join(" -> ");
+  const events = loopResult.calls.map((toolCall, index) => ({
+    source: "agent-loop",
+    event: "tool_call_start",
+    elapsedMs: index,
+    objective: request.objective,
+    terminalToolSet: request.terminalToolSet,
+    name: toolCall.name,
+    args: JSON.stringify(toolCall.arguments),
+  }));
+  for (const event of events) {
+    emitEvent?.(event);
+  }
   return {
     report: call
       ? `mock agent worker completed ${request.objective}; tool calls ${callNames}; terminal tool ${call.name} called`
       : `mock agent worker completed ${request.objective}`,
     toolCalls: loopResult.calls,
     ...(call ? { terminalCall: call } : {}),
-    events: loopResult.calls.map((toolCall, index) => ({
-      source: "agent-loop",
-      event: "tool_call_start",
-      elapsedMs: index,
-      objective: request.objective,
-      terminalToolSet: request.terminalToolSet,
-      name: toolCall.name,
-      args: JSON.stringify(toolCall.arguments),
-    })),
+    events,
   };
 }
 
@@ -311,7 +319,12 @@ function taskBoardTasks(input: Record<string, unknown>): Record<string, unknown>
 
 function mockPlanGroupArgs(plan: unknown): Record<string, unknown> {
   const record = toRecord(plan);
-  if (plan === "NeedsPlanning" || plan === "Split" || "NeedsPlanning" in record || "Split" in record) {
+  if (
+    plan === "NeedsPlanning" ||
+    plan === "Split" ||
+    "NeedsPlanning" in record ||
+    "Split" in record
+  ) {
     return {
       mode: "parallel",
       items: [

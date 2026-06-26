@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::task::{AgentEventEntry, AgentEventFilter};
+use crate::harness::task_view::AgentEventEntry;
 
 /// Compact JSON serialization: one line, no extra whitespace.
 pub(crate) fn compact_json(value: &Value) -> String {
@@ -16,40 +16,6 @@ pub(crate) fn truncate_text(input: &str, max_chars: usize) -> String {
     } else {
         truncated
     }
-}
-
-/// Filter predicate: returns true if the entry matches all non-None filter fields.
-pub(crate) fn agent_event_matches(entry: &AgentEventEntry, filter: &AgentEventFilter) -> bool {
-    if filter
-        .operation
-        .is_some_and(|operation| entry.operation != operation)
-    {
-        return false;
-    }
-    if !optional_eq(filter.event.as_deref(), entry.event.as_deref()) {
-        return false;
-    }
-    if !optional_eq(filter.tool.as_deref(), entry.name.as_deref()) {
-        return false;
-    }
-    if !optional_eq(filter.source.as_deref(), entry.source.as_deref()) {
-        return false;
-    }
-    if let Some(query) = &filter.query {
-        let haystack = compact_json(&entry.record).to_lowercase();
-        if !haystack.contains(&query.to_lowercase()) {
-            return false;
-        }
-    }
-    true
-}
-
-/// Case-insensitive optional equality: if `expected` is None, always matches.
-pub(crate) fn optional_eq(expected: Option<&str>, actual: Option<&str>) -> bool {
-    let Some(expected) = expected else {
-        return true;
-    };
-    actual.is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
 }
 
 /// Format an agent event entry for human-readable display.
@@ -76,14 +42,4 @@ pub(crate) fn format_agent_event(entry: &AgentEventEntry) -> String {
         objective,
         record
     )
-}
-
-/// Extract an optional string value from a JSON object by key.
-pub(crate) fn json_string(value: &Value, key: &str) -> Option<String> {
-    value.get(key)?.as_str().map(str::to_string)
-}
-
-/// Extract an optional u64 value from a JSON object by key.
-pub(crate) fn json_u64(value: &Value, key: &str) -> Option<u64> {
-    value.get(key)?.as_u64()
 }

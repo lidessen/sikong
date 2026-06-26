@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 
 use crate::{
     AgentPromptSection, AgentRunRequest, AgentRunScheduler, AgentToolCall, AssistantHarness,
-    AssistantTaskStatus, CancellationToken, TaskBoard, TaskBoardSnapshot, TaskId, TaskStore,
-    TaskWorkerFactory, WorkspaceRequirement,
+    AssistantTaskEventRecord, AssistantTaskStatus, CancellationToken, TaskBoard, TaskBoardSnapshot,
+    TaskId, TaskStore, TaskWorkerFactory, WorkspaceRequirement,
 };
 
 use super::context::{AssistantContext, AssistantConversationMessage, AssistantConversationRole};
@@ -272,6 +272,14 @@ impl<L: AssistantLoop> AssistantSession<L> {
         }
     }
 
+    pub fn set_task_root(
+        &mut self,
+        workspace: WorkspaceRequirement,
+        capabilities: crate::CapabilityProfile,
+    ) {
+        self.task_board.set_default_root(workspace, capabilities);
+    }
+
     pub async fn drain(&mut self, store: &mut impl TaskStore) -> TaskBoardSnapshot {
         self.task_board.drain(store).await
     }
@@ -344,6 +352,38 @@ impl<L: AssistantLoop> AssistantSession<L> {
         reply
     }
 
+    pub async fn handle_task_message(
+        &mut self,
+        store: &mut impl TaskStore,
+        message: impl Into<String>,
+    ) -> SessionReply {
+        let message = message.into();
+        let request = message.trim().to_string();
+        if request.is_empty() {
+            let reply = SessionReply {
+                text: "Please provide a task request.".to_string(),
+                task_id: None,
+            };
+            self.record_turn(message, &reply);
+            return reply;
+        }
+        if !self.task_board_enabled {
+            let reply = SessionReply {
+                text: "Task board is disabled; cannot create a durable task.".to_string(),
+                task_id: None,
+            };
+            self.record_turn(message, &reply);
+            return reply;
+        }
+
+        self.task_board.drain(store).await;
+        let reply = self
+            .create_task_with_source(store, request, TaskCreationSource::DirectIntake)
+            .await;
+        self.record_turn(message, &reply);
+        reply
+    }
+
     async fn apply_turn(
         &mut self,
         store: &mut impl TaskStore,
@@ -391,7 +431,11 @@ impl<L: AssistantLoop> AssistantSession<L> {
                         Ok(request) => request,
                         Err(error) => return tool_sequence_error(error),
                     };
-                    if let Some(task_id) = self.create_task(store, request).await.task_id {
+                    if let Some(task_id) = self
+                        .create_task_with_source(store, request, TaskCreationSource::AssistantTool)
+                        .await
+                        .task_id
+                    {
                         push_unique(&mut touched_task_ids, task_id);
                     }
                 }
@@ -505,9 +549,27 @@ impl<L: AssistantLoop> AssistantSession<L> {
         }
     }
 
-    async fn create_task(&mut self, store: &mut impl TaskStore, request: String) -> SessionReply {
+    async fn create_task_with_source(
+        &mut self,
+        store: &mut impl TaskStore,
+        request: String,
+        source: TaskCreationSource,
+    ) -> SessionReply {
         let task_id = store.create_task(request.clone());
-        store.push_task_event(&task_id, "created from assistant message");
+        store.record_task_event(
+            &task_id,
+            AssistantTaskEventRecord {
+                level: tracing::Level::INFO,
+                kind: "task.created".to_string(),
+                source: "assistant.session".to_string(),
+                message: source.message().to_string(),
+                node_id: None,
+                operation: None,
+                payload: json!({
+                    "source": source.payload_source(),
+                }),
+            },
+        );
         self.focus_task = Some(task_id.clone());
         let snapshot = self
             .task_board
@@ -568,6 +630,28 @@ impl<L: AssistantLoop> AssistantSession<L> {
         if self.conversation.len() > self.conversation_message_limit {
             let overflow = self.conversation.len() - self.conversation_message_limit;
             self.conversation.drain(0..overflow);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskCreationSource {
+    AssistantTool,
+    DirectIntake,
+}
+
+impl TaskCreationSource {
+    fn message(self) -> &'static str {
+        match self {
+            Self::AssistantTool => "created from assistant tool",
+            Self::DirectIntake => "created from direct task intake",
+        }
+    }
+
+    fn payload_source(self) -> &'static str {
+        match self {
+            Self::AssistantTool => "assistant_tool",
+            Self::DirectIntake => "direct_intake",
         }
     }
 }

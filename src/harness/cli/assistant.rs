@@ -1,20 +1,20 @@
-use std::io::{self, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::{
-    AcpServer, AgentAssistantLoop, AssistantSession, AssistantSessionConfig, AssistantTaskStatus,
-    CapabilityProfile, DebugConfig, FileTaskStore, ProcessAgentRunScheduler, SikoConfig, TaskStore,
-    WorkspaceRequirement, run_acp_stdio_server,
+    AcpRequest, AcpResponse, AgentAssistantLoop, AssistantSession, AssistantSessionConfig,
+    AssistantTaskStatus, CapabilityProfile, DebugConfig, FileTaskStore, JsonRpcError,
+    ProcessAgentRunScheduler, SikoConfig, TaskStore, WorkspaceRequirement,
 };
 use clap::{Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::harness::daemon;
 use super::launch;
 use super::task;
+use crate::harness::daemon;
 
 /// Assistant command subcommands.
 #[derive(Debug, Subcommand)]
@@ -106,6 +106,25 @@ pub enum AssistantPromptWorkspace {
     CurrentGit,
 }
 
+impl AssistantPromptWorkspace {
+    pub fn as_daemon_value(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::CurrentFileSystem => "current-file-system",
+            Self::CurrentGit => "current-git",
+        }
+    }
+
+    pub fn from_daemon_value(value: &str) -> Option<Self> {
+        match value {
+            "memory" => Some(Self::Memory),
+            "current-file-system" => Some(Self::CurrentFileSystem),
+            "current-git" => Some(Self::CurrentGit),
+            _ => None,
+        }
+    }
+}
+
 /// Output from a completed assistant prompt.
 #[derive(Debug, Serialize)]
 pub struct AssistantPromptOutput {
@@ -120,39 +139,199 @@ pub struct AssistantPromptOutput {
 
 /// Run the assistant as an ACP server over stdio.
 pub fn run_assistant_acp() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .thread_name("siko-assistant")
-        .enable_all()
-        .build()?;
-    runtime.block_on(run_assistant_acp_async())
+    let debug = DebugConfig::from_env();
+    daemon::ensure_daemon_running(&debug)?;
+    run_daemon_acp_proxy(&debug, BufReader::new(io::stdin()), io::stdout())?;
+    Ok(())
 }
 
-async fn run_assistant_acp_async() -> Result<(), Box<dyn std::error::Error>> {
-    let config = SikoConfig::load()?;
-    let debug = DebugConfig::from_env();
-    let store = FileTaskStore::open(task::assistant_store_path(&debug))?;
-    let worker_launch = launch::resolve_agent_loop_launch(&debug, 0);
-    let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
-        worker_launch.command.clone(),
-        worker_launch.args.clone(),
-    )));
-    let assistant_loop = AgentAssistantLoop::new(shared_scheduler.clone());
-    let session = AssistantSession::with_worker_factory(
-        assistant_loop,
-        {
-            let sched = shared_scheduler.clone();
-            move || Box::new(sched.clone())
-        },
-        AssistantSessionConfig {
-            max_parallel_tasks: config.assistant.max_parallel_tasks,
-            task_board_enabled: true,
-            conversation_message_limit: 200,
-            ..AssistantSessionConfig::default()
-        },
-    );
-    let server = AcpServer::new(store, session);
-    run_acp_stdio_server(server, BufReader::new(io::stdin()), io::stdout()).await?;
+pub fn run_daemon_acp_proxy(
+    debug: &DebugConfig,
+    input: impl BufRead,
+    mut output: impl Write,
+) -> std::io::Result<()> {
+    let mut initialized = false;
+    let mut session_id: Option<String> = None;
+
+    for line in input.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<AcpRequest>(&line) {
+            Ok(request) => {
+                handle_daemon_acp_request(debug, request, &mut initialized, &mut session_id)
+            }
+            Err(err) => acp_error(None, -32700, format!("parse error: {err}")),
+        };
+        serde_json::to_writer(&mut output, &response)?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+    }
     Ok(())
+}
+
+fn handle_daemon_acp_request(
+    debug: &DebugConfig,
+    request: AcpRequest,
+    initialized: &mut bool,
+    session_id: &mut Option<String>,
+) -> AcpResponse {
+    if request.jsonrpc != "2.0" {
+        return acp_error(request.id, -32600, "jsonrpc must be 2.0");
+    }
+
+    match request.method.as_str() {
+        "initialize" => {
+            *initialized = true;
+            acp_ok(
+                request.id,
+                serde_json::json!({
+                    "protocolVersion": 1,
+                    "agent": { "name": "siko" },
+                    "capabilities": {
+                        "sessions": true,
+                        "prompt": true,
+                        "cancel": true,
+                        "tasks": true,
+                    },
+                }),
+            )
+        }
+        "session/new" => {
+            if !*initialized {
+                return acp_error(request.id, -32002, "server is not initialized");
+            }
+            let id = "session_1".to_string();
+            *session_id = Some(id.clone());
+            acp_ok(request.id, serde_json::json!({ "sessionId": id }))
+        }
+        "session/prompt" => {
+            if let Err(message) = require_acp_session(*initialized, session_id, &request.params) {
+                return acp_error(request.id, -32001, message);
+            }
+            let Some(prompt) = acp_prompt_text(&request.params) else {
+                return acp_error(request.id, -32602, "prompt text is required");
+            };
+            let send_request = daemon_send_request_from_acp(&request.params, prompt);
+            match daemon::send_json_to_daemon(debug, send_request) {
+                Ok(value) => acp_ok(
+                    request.id,
+                    serde_json::json!({
+                        "stopReason": "end_turn",
+                        "content": [
+                            { "type": "text", "text": value.get("text").and_then(serde_json::Value::as_str).unwrap_or_default() }
+                        ],
+                        "metadata": {
+                            "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                            "status": value.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                            "runningTasks": value.get("running_tasks").cloned().unwrap_or(serde_json::json!(0)),
+                            "queuedTasks": value.get("queued_tasks").cloned().unwrap_or(serde_json::json!(0)),
+                        },
+                    }),
+                ),
+                Err(error) => acp_error(request.id, -32003, error.to_string()),
+            }
+        }
+        "session/cancel" => {
+            if let Err(message) = require_acp_session(*initialized, session_id, &request.params) {
+                return acp_error(request.id, -32001, message);
+            }
+            match daemon::send_json_to_daemon(
+                debug,
+                serde_json::json!({"kind": "cancel", "id": "acp-cancel"}),
+            ) {
+                Ok(value) => acp_ok(
+                    request.id,
+                    serde_json::json!({
+                        "cancelled": true,
+                        "content": [
+                            { "type": "text", "text": value.get("text").and_then(serde_json::Value::as_str).unwrap_or_default() }
+                        ],
+                    }),
+                ),
+                Err(error) => acp_error(request.id, -32003, error.to_string()),
+            }
+        }
+        "task/list" => {
+            if !*initialized {
+                return acp_error(request.id, -32002, "server is not initialized");
+            }
+            match daemon::send_json_to_daemon(
+                debug,
+                serde_json::json!({
+                    "kind": "task_list_view",
+                    "id": "acp-task-list",
+                    "limit": request.params.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(20),
+                }),
+            ) {
+                Ok(value) => acp_ok(
+                    request.id,
+                    serde_json::json!({ "tasks": value.get("tasks").cloned().unwrap_or_else(|| serde_json::json!([])) }),
+                ),
+                Err(error) => acp_error(request.id, -32003, error.to_string()),
+            }
+        }
+        "task/inspect" | "task/events" | "task/artifact" => {
+            if !*initialized {
+                return acp_error(request.id, -32002, "server is not initialized");
+            }
+            let Some(task_id) = acp_task_ref(&request.params) else {
+                return acp_error(request.id, -32602, "taskId is required");
+            };
+            let kind = match request.method.as_str() {
+                "task/inspect" => "task_inspect",
+                "task/events" => "task_events",
+                _ => "task_artifact",
+            };
+            let daemon_request = serde_json::json!({
+                "kind": kind,
+                "id": "acp-task",
+                "task_id": task_id,
+                "cursor": request.params.get("cursor").cloned().unwrap_or(serde_json::Value::Null),
+            });
+            match daemon::send_json_to_daemon(debug, daemon_request) {
+                Ok(value)
+                    if value.get("kind").and_then(serde_json::Value::as_str) == Some("error") =>
+                {
+                    acp_error(
+                        request.id,
+                        -32004,
+                        value
+                            .get("error")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("task request failed"),
+                    )
+                }
+                Ok(value) if request.method == "task/inspect" => acp_ok(
+                    request.id,
+                    value
+                        .get("view")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                ),
+                Ok(value) if request.method == "task/events" => acp_ok(
+                    request.id,
+                    serde_json::json!({
+                        "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "status": value.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                        "events": value.get("events").cloned().unwrap_or_else(|| serde_json::json!([])),
+                        "cursor": value.get("cursor").cloned().unwrap_or(serde_json::Value::Null),
+                    }),
+                ),
+                Ok(value) => acp_ok(
+                    request.id,
+                    serde_json::json!({
+                        "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                        "status": value.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                        "artifact": value.get("artifact").cloned().unwrap_or(serde_json::Value::Null),
+                    }),
+                ),
+                Err(error) => acp_error(request.id, -32003, error.to_string()),
+            }
+        }
+        _ => acp_error(request.id, -32601, "method not found"),
+    }
 }
 
 /// Run one assistant prompt (blocking).
@@ -169,46 +348,221 @@ pub fn run_assistant_prompt(
         return Err("assistant prompt message must not be empty".into());
     }
 
-    // Try daemon first — if one is already running, use it so tasks survive
-    // bash timeout. The daemon has a persistent tokio runtime; when this CLI
-    // process exits, the daemon keeps processing the task.
     let debug = DebugConfig::from_env();
-    if daemon::daemon_is_running(&debug) {
-        if !json_output {
-            eprintln!("→ using daemon at {}", daemon::daemon_socket_path(&debug).display());
-        }
-        match daemon::send_via_daemon(&debug, &message) {
-            Ok(response) => {
-                // Parse and display the response
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&response) {
-                    let task_id = val["task_id"].as_str().unwrap_or("?");
-                    let status = val["status"].as_str().unwrap_or("?");
-                    let artifact = val["artifact"].as_str().unwrap_or("");
-                    if !json_output {
-                        if !artifact.is_empty() {
-                            println!("{}", artifact);
-                        }
-                        println!("── Result ─────────────────────────────────────────");
-                        println!("  task:   {}", task_id);
-                        println!("  status: {}", status);
-                    } else {
-                        println!("{}", response);
-                    }
+
+    match daemon::ensure_daemon_running(&debug) {
+        Ok(started) => {
+            if !json_output {
+                let action = if started {
+                    "started daemon"
                 } else {
-                    println!("{}", response);
-                }
-                Ok(())
+                    "using daemon"
+                };
+                eprintln!(
+                    "→ {action} at {}",
+                    daemon::daemon_socket_path(&debug).display()
+                );
             }
-            Err(e) => {
-                // Daemon connection failed — fall through to inline processing
-                if !json_output {
-                    eprintln!("daemon connect failed ({}), running inline...", e);
-                }
-                fallback_run_inline(message, wait_ms, workspace, allow_write, write_scope, json_output)
+        }
+        Err(error)
+            if std::env::var("SIKONG_DEV").as_deref() == Ok("1")
+                && std::env::var("SIKONG_INLINE").as_deref() == Ok("1") =>
+        {
+            if !json_output {
+                eprintln!("daemon unavailable ({error}), running inline because SIKONG_INLINE=1");
+            }
+            return fallback_run_inline(
+                message,
+                wait_ms,
+                workspace,
+                allow_write,
+                write_scope,
+                json_output,
+            );
+        }
+        Err(error) => return Err(error),
+    }
+
+    let response = daemon::send_via_daemon(
+        &debug,
+        &message,
+        wait_ms,
+        workspace,
+        allow_write,
+        write_scope,
+    )?;
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&response) {
+        let output = daemon_value_to_prompt_output(&val);
+        if json_output {
+            serde_json::to_writer_pretty(std::io::stdout(), &output)?;
+            println!();
+        } else {
+            let artifact = output.final_artifact.as_deref().unwrap_or("");
+            if !artifact.is_empty() {
+                println!("{}", artifact);
+            }
+            println!("── Result ─────────────────────────────────────────");
+            if let Some(task_id) = output.task_id.as_deref() {
+                println!("  task:   {}", task_id);
+            }
+            if let Some(status) = output.status.as_ref() {
+                println!("  status: {:?}", status);
+            }
+            if output.running_tasks > 0 || output.queued_tasks > 0 {
+                println!(
+                    "  task board: {} running, {} queued",
+                    output.running_tasks, output.queued_tasks
+                );
             }
         }
     } else {
-        fallback_run_inline(message, wait_ms, workspace, allow_write, write_scope, json_output)
+        println!("{}", response);
+    }
+    Ok(())
+}
+
+fn daemon_value_to_prompt_output(value: &serde_json::Value) -> AssistantPromptOutput {
+    AssistantPromptOutput {
+        response: value
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        task_id: value
+            .get("task_id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string),
+        status: value
+            .get("status")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
+        final_artifact: value
+            .get("artifact")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string),
+        running_tasks: value
+            .get("running_tasks")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default() as usize,
+        queued_tasks: value
+            .get("queued_tasks")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default() as usize,
+        persist_error: value
+            .get("persist_error")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string),
+    }
+}
+
+fn require_acp_session(
+    initialized: bool,
+    expected: &Option<String>,
+    params: &serde_json::Value,
+) -> Result<(), String> {
+    if !initialized {
+        return Err("server is not initialized".to_string());
+    }
+    let Some(expected) = expected else {
+        return Err("session has not been created".to_string());
+    };
+    let actual = params
+        .get("sessionId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "sessionId is required".to_string())?;
+    if actual != expected {
+        return Err("unknown sessionId".to_string());
+    }
+    Ok(())
+}
+
+fn acp_prompt_text(params: &serde_json::Value) -> Option<String> {
+    if let Some(text) = params.get("prompt").and_then(serde_json::Value::as_str) {
+        return Some(text.to_string());
+    }
+    params
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|content| {
+            content.iter().find_map(|part| {
+                if part.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+                    part.get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn acp_task_ref(params: &serde_json::Value) -> Option<String> {
+    params
+        .get("taskId")
+        .or_else(|| params.get("task_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+}
+
+fn daemon_send_request_from_acp(params: &serde_json::Value, prompt: String) -> serde_json::Value {
+    let wait_ms = params
+        .get("waitMs")
+        .or_else(|| params.get("wait_ms"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let workspace = params
+        .get("workspace")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("current-file-system");
+    let allow_write = params
+        .get("allowWrite")
+        .or_else(|| params.get("allow_write"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let mut write_scope = params
+        .get("writeScope")
+        .or_else(|| params.get("write_scope"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if allow_write && write_scope.is_empty() {
+        write_scope.push("**/*".to_string());
+    }
+    serde_json::json!({
+        "kind": "send",
+        "id": "acp-send",
+        "message": prompt,
+        "wait_ms": wait_ms,
+        "workspace": workspace,
+        "allow_write": allow_write,
+        "write_scope": write_scope,
+    })
+}
+
+fn acp_ok(id: Option<serde_json::Value>, result: serde_json::Value) -> AcpResponse {
+    AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: Some(result),
+        error: None,
+    }
+}
+
+fn acp_error(id: Option<serde_json::Value>, code: i64, message: impl Into<String>) -> AcpResponse {
+    AcpResponse {
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: None,
+        error: Some(JsonRpcError {
+            code,
+            message: message.into(),
+        }),
     }
 }
 
@@ -251,6 +605,7 @@ async fn run_assistant_prompt_async(
         CapabilityProfile::read_only()
     };
     let mut store = FileTaskStore::open(task::assistant_store_path(&debug))?;
+    store.mark_interrupted_active_tasks();
     let worker_launch = launch::resolve_agent_loop_launch(&debug, 0);
     let shared_scheduler = Arc::new(Mutex::new(ProcessAgentRunScheduler::new(
         worker_launch.command.clone(),
@@ -277,11 +632,11 @@ async fn run_assistant_prompt_async(
     let assistant_progress = if json_output {
         None
     } else {
-        Some(send_spinner("assistant thinking"))
+        Some(send_spinner("creating task"))
     };
-    let reply = session.handle_message(&mut store, message).await;
+    let reply = session.handle_task_message(&mut store, message).await;
     if let Some(ref pb) = assistant_progress {
-        pb.finish_with_message("assistant turn complete ✓");
+        pb.finish_with_message("task created");
     }
 
     let snapshot = if reply.task_id.is_some() {
@@ -297,6 +652,12 @@ async fn run_assistant_prompt_async(
                 .wait_for_all(&mut store, Duration::from_millis(wait_ms))
                 .await
         };
+        if wait_ms == 0 && (snapshot.running_tasks > 0 || snapshot.queued_tasks > 0) {
+            return Err(
+                "wait-ms 0 requires a running siko daemon for background task execution; start `siko daemon` or use a positive --wait-ms"
+                    .into(),
+            );
+        }
         // Keep the tokio runtime alive while background engine tasks are still
         // running. Without this, the runtime drops when the CLI returns and
         // spawned tasks are cancelled silently.
@@ -442,7 +803,7 @@ pub fn print_assistant_logs(
     let task = task::resolve_task_ref(&store, task_id)?;
 
     if full_output {
-        serde_json::to_writer_pretty(std::io::stdout(), task)?;
+        serde_json::to_writer_pretty(std::io::stdout(), &task)?;
         println!();
         return Ok(());
     }

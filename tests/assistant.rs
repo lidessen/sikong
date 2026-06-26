@@ -75,6 +75,21 @@ impl AssistantLoop for DirectReplyAssistantLoop {
 }
 
 #[derive(Debug, Default)]
+struct FailingAssistantLoop;
+
+#[async_trait::async_trait]
+impl AssistantLoop for FailingAssistantLoop {
+    async fn run_turn(
+        &mut self,
+        _context: &AssistantContext,
+    ) -> Result<AssistantTurn, AssistantTurnError> {
+        Err(AssistantTurnError {
+            message: "assistant provider unavailable".to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Default)]
 struct RecordingConversationAssistantLoop {
     contexts: Arc<Mutex<Vec<AssistantContext>>>,
 }
@@ -288,6 +303,31 @@ async fn assistant_prompt_creates_task_and_runtime_completes_it() {
     let task = store.get_task(&task_id).expect("task");
     assert_eq!(task.status, AssistantTaskStatus::Completed);
     assert!(task.root_node.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn direct_task_message_creates_durable_task_without_assistant_turn() {
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::new(FailingAssistantLoop, TestAgentRunScheduler);
+
+    let reply = session
+        .handle_task_message(&mut store, "write a concise design")
+        .await;
+
+    let task_id = reply.task_id.expect("task id");
+    assert!(
+        reply.text.contains(&task_id),
+        "reply should include durable task id: {}",
+        reply.text
+    );
+    let task = store.get_task(&task_id).expect("task");
+    assert_eq!(task.request, "write a concise design");
+    assert!(
+        task.events
+            .iter()
+            .any(|event| event.kind == "task.created"
+                && event.payload["source"] == "direct_intake")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -518,6 +558,79 @@ async fn assistant_accepts_new_prompt_while_another_task_is_running() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_board_persists_agent_run_progress_before_task_completion() {
+    let state = Arc::new(ConcurrentWorkerState::default());
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::with_worker_factory(
+        TestAssistantLoop,
+        {
+            let state = state.clone();
+            move || SlowAgentRunScheduler {
+                state: state.clone(),
+            }
+        },
+        AssistantSessionConfig {
+            max_parallel_tasks: 1,
+            task_board_enabled: true,
+            conversation_message_limit: 12,
+            ..AssistantSessionConfig::default()
+        },
+    );
+
+    let started = session
+        .handle_task_message(&mut store, "progress should be visible")
+        .await;
+    let task_id = started.task_id.expect("task id");
+    wait_until(Duration::from_secs(1), || {
+        state.current.load(Ordering::SeqCst) > 0
+    })
+    .await;
+    session.drain(&mut store).await;
+    let task = store.get_task(&task_id).expect("task");
+    assert_eq!(task.status, AssistantTaskStatus::Running);
+    assert!(
+        task.events
+            .iter()
+            .any(|event| event.kind == "agent.run.started"),
+        "expected agent.run.started while worker is still active; events: {:?}",
+        task.events
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    let mut saw_live_progress = false;
+    while std::time::Instant::now() < deadline {
+        session.drain(&mut store).await;
+        let task = store.get_task(&task_id).expect("task");
+        if task.status == AssistantTaskStatus::Running
+            && task.events.iter().any(|event| event.kind == "agent.run")
+        {
+            saw_live_progress = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+
+    assert!(
+        saw_live_progress,
+        "expected agent.run to be persisted before task completed; events: {:?}",
+        store.get_task(&task_id).expect("task").events
+    );
+
+    session
+        .wait_for_all(&mut store, Duration::from_secs(2))
+        .await;
+    let task = store.get_task(&task_id).expect("task");
+    assert_eq!(task.status, AssistantTaskStatus::Completed);
+    let report = task.last_report.as_ref().expect("engine report");
+    let persisted_agent_runs = task
+        .events
+        .iter()
+        .filter(|event| event.kind == "agent.run")
+        .count();
+    assert_eq!(persisted_agent_runs, report.agent_runs.len());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_board_uses_injected_engine_runner() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let factory = TaskEngineRunnerFactory::new({
@@ -550,6 +663,46 @@ async fn task_board_uses_injected_engine_runner() {
         calls.lock().unwrap().as_slice(),
         &[(task_id, "injected runtime task".to_string())]
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn task_board_persists_branch_local_progress() {
+    let factory = TaskEngineRunnerFactory::new(|| Box::new(BranchProgressTaskEngineRunner));
+    let mut task_board = TaskBoard::with_engine_runner(1, factory);
+    let mut store = MemoryTaskStore::new();
+    let task_id = store.create_task("branch local progress task".to_string());
+
+    task_board
+        .enqueue(
+            &mut store,
+            task_id.clone(),
+            "branch local progress task".to_string(),
+        )
+        .await;
+    task_board
+        .wait_for_all(&mut store, Duration::from_secs(1))
+        .await;
+
+    let task = store.get_task(&task_id).expect("task");
+    let event = task
+        .events
+        .iter()
+        .find(|event| event.kind == "agent.branch.run.started")
+        .expect("branch-local progress event");
+    assert_eq!(event.node_id, Some(7));
+    assert_eq!(event.operation, Some(NodeOperation::Execute));
+    assert_eq!(event.payload["branch_root_node_id"], 7);
+    assert_eq!(event.payload["local_node_id"], 11);
+    assert_eq!(event.payload["terminal_tools"][0], "submit_work");
+    let run_event = task
+        .events
+        .iter()
+        .find(|event| event.kind == "agent.run.event")
+        .expect("agent run event");
+    assert_eq!(run_event.node_id, Some(3));
+    assert_eq!(run_event.operation, Some(NodeOperation::Execute));
+    assert_eq!(run_event.message, "tool_call_start");
+    assert_eq!(run_event.payload["event"]["name"], "submit_work");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -676,9 +829,115 @@ async fn acp_initialize_session_and_prompt_returns_started_task() {
         prompt.result.as_ref().unwrap()["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("Creating task.")
+            .contains("Task ")
     );
     assert!(prompt.result.as_ref().unwrap()["metadata"]["taskId"].is_string());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_task_methods_expose_inspection_events_and_artifact() {
+    let store = MemoryTaskStore::new();
+    let session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
+    let mut server = AcpServer::new(store, session);
+
+    server
+        .handle_request(request(1, "initialize", serde_json::json!({})))
+        .await;
+    let new_session = server
+        .handle_request(request(2, "session/new", serde_json::json!({})))
+        .await;
+    let session_id = new_session.result.as_ref().unwrap()["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = server
+        .handle_request(request(
+            3,
+            "session/prompt",
+            serde_json::json!({
+                "sessionId": session_id,
+                "prompt": "ship acp task inspection"
+            }),
+        ))
+        .await;
+    let task_id = prompt.result.as_ref().unwrap()["metadata"]["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.shutdown().await;
+
+    let list = server
+        .handle_request(request(4, "task/list", serde_json::json!({ "limit": 5 })))
+        .await;
+    assert!(list.error.is_none());
+    assert_eq!(list.result.as_ref().unwrap()["tasks"][0]["id"], task_id);
+    assert_eq!(
+        list.result.as_ref().unwrap()["tasks"][0]["has_artifact"],
+        true
+    );
+
+    let inspect = server
+        .handle_request(request(
+            5,
+            "task/inspect",
+            serde_json::json!({ "taskId": task_id }),
+        ))
+        .await;
+    assert!(inspect.error.is_none());
+    let inspect_result = inspect.result.as_ref().unwrap();
+    assert_eq!(inspect_result["task"]["status"], "Completed");
+    assert_eq!(
+        inspect_result["artifact"]["text"],
+        "ship acp task inspection"
+    );
+    assert!(
+        inspect_result["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["type"] == "task_event")
+    );
+    assert!(
+        inspect_result["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"]["kind"] == "agent.run")
+    );
+
+    let cursor = inspect_result["cursor"].clone();
+    let no_new_events = server
+        .handle_request(request(
+            6,
+            "task/events",
+            serde_json::json!({
+                "taskId": task_id,
+                "cursor": cursor
+            }),
+        ))
+        .await;
+    assert!(no_new_events.error.is_none());
+    assert_eq!(
+        no_new_events.result.as_ref().unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let artifact = server
+        .handle_request(request(
+            7,
+            "task/artifact",
+            serde_json::json!({ "taskId": task_id }),
+        ))
+        .await;
+    assert!(artifact.error.is_none());
+    assert_eq!(
+        artifact.result.as_ref().unwrap()["artifact"]["text"],
+        "ship acp task inspection"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -752,7 +1011,10 @@ impl TaskEngineRunner for RecordingTaskEngineRunner {
         &mut self,
         task_id: &str,
         request: &str,
+        _workspace: WorkspaceRequirement,
+        _capabilities: CapabilityProfile,
         _cancellation: CancellationToken,
+        _progress: TaskEngineProgressSink,
     ) -> Result<(NodeId, EngineReport), EngineError> {
         self.calls
             .lock()
@@ -762,6 +1024,51 @@ impl TaskEngineRunner for RecordingTaskEngineRunner {
             42,
             EngineReport {
                 root: 42,
+                status: NodeStatus::Committed,
+                artifact: None,
+                artifact_text: None,
+                events: Vec::new(),
+                agent_runs: Vec::new(),
+            },
+        ))
+    }
+}
+
+struct BranchProgressTaskEngineRunner;
+
+#[async_trait::async_trait]
+impl TaskEngineRunner for BranchProgressTaskEngineRunner {
+    async fn run_task(
+        &mut self,
+        _task_id: &str,
+        _request: &str,
+        _workspace: WorkspaceRequirement,
+        _capabilities: CapabilityProfile,
+        _cancellation: CancellationToken,
+        progress: TaskEngineProgressSink,
+    ) -> Result<(NodeId, EngineReport), EngineError> {
+        progress.emit(EngineProgressEvent::BranchLocal {
+            branch_root_node_id: 7,
+            local_node_id: 11,
+            event: BranchProgressEvent::AgentRunStarted {
+                operation: NodeOperation::Execute,
+                objective: "branch child work".to_string(),
+                terminal_tools: vec!["submit_work".to_string()],
+            },
+        });
+        progress.emit(EngineProgressEvent::AgentRunEvent {
+            node_id: 3,
+            operation: NodeOperation::Execute,
+            event: serde_json::json!({
+                "source": "agent-loop",
+                "event": "tool_call_start",
+                "name": "submit_work",
+            }),
+        });
+        Ok((
+            1,
+            EngineReport {
+                root: 1,
                 status: NodeStatus::Committed,
                 artifact: None,
                 artifact_text: None,

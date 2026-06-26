@@ -179,6 +179,61 @@ pub struct AgentRunRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BranchProgressEvent {
+    Operation {
+        operation: NodeOperation,
+        note: String,
+    },
+    AgentRunStarted {
+        operation: NodeOperation,
+        objective: String,
+        terminal_tools: Vec<String>,
+    },
+    AgentRun {
+        operation: NodeOperation,
+        report: String,
+        terminal_tool: Option<String>,
+        terminal_payload: Option<Value>,
+        duration_ms: u128,
+        usage: Option<AgentTokenUsage>,
+        #[serde(default)]
+        events: Vec<Value>,
+    },
+    AgentRunEvent {
+        operation: NodeOperation,
+        event: Value,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EngineProgressEvent {
+    Operation {
+        event: OperationEvent,
+    },
+    AgentRunStarted {
+        node_id: NodeId,
+        operation: NodeOperation,
+        objective: String,
+        terminal_tools: Vec<String>,
+    },
+    AgentRun {
+        run: AgentRunRecord,
+    },
+    AgentRunEvent {
+        node_id: NodeId,
+        operation: NodeOperation,
+        event: Value,
+    },
+    BranchLocal {
+        branch_root_node_id: NodeId,
+        local_node_id: NodeId,
+        event: BranchProgressEvent,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttemptRecord {
     pub node_id: NodeId,
     pub operation: NodeOperation,

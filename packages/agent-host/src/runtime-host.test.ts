@@ -44,6 +44,55 @@ test("socket runtime host writes large responses completely", async () => {
   }
 });
 
+test("socket runtime host streams run events before result", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "siko-agent-host-event-test-"));
+  const socketPath = join(dir, "agent-host.sock");
+  const request = validRunRequest();
+  const host = runRuntimeHost({
+    socketPath,
+    worker: async (_request, emitEvent) => {
+      emitEvent?.({
+        source: "agent-loop",
+        event: "tool_call_start",
+        name: "finish",
+      });
+      await Bun.sleep(20);
+      return {
+        report: "eventful response",
+        toolCalls: [{ name: "finish", arguments: { ok: true } }],
+        terminalCall: { name: "finish", arguments: { ok: true } },
+      };
+    },
+  });
+
+  try {
+    await waitForSocket(socketPath);
+    const client = await connectClient(socketPath);
+    client.socket.write(`${JSON.stringify({ type: "run", id: "run_1", request })}\n`);
+
+    const event = JSON.parse(await client.readLine()) as AgentHostMessage;
+    expect(event.type).toBe("event");
+    if (event.type !== "event") {
+      throw new Error("expected event message");
+    }
+    expect(event.id).toBe("run_1");
+    expect(event.event).toEqual({
+      source: "agent-loop",
+      event: "tool_call_start",
+      name: "finish",
+    });
+
+    const result = JSON.parse(await client.readLine()) as AgentHostMessage;
+    expect(result.type).toBe("result");
+
+    client.socket.write(`${JSON.stringify({ type: "shutdown", id: "shutdown_1" })}\n`);
+    await host;
+    client.socket.end();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 function validRunRequest(): AgentRunRequest {
   return {
     protocolVersion: 1,
@@ -80,12 +129,24 @@ async function connectClient(socketPath: string): Promise<{
   socket: Bun.Socket<ClientState>;
   readLine: () => Promise<string>;
 }> {
-  let resolveLine: ((line: string) => void) | undefined;
-  let rejectLine: ((error: Error) => void) | undefined;
-  const line = new Promise<string>((resolve, reject) => {
-    resolveLine = resolve;
-    rejectLine = reject;
-  });
+  const lines: string[] = [];
+  const waiters: Array<{
+    resolve: (line: string) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  const pushLine = (line: string) => {
+    const waiter = waiters.shift();
+    if (waiter) {
+      waiter.resolve(line);
+      return;
+    }
+    lines.push(line);
+  };
+  const rejectWaiters = (error: Error) => {
+    for (const waiter of waiters.splice(0)) {
+      waiter.reject(error);
+    }
+  };
 
   const socket = await Bun.connect<ClientState>({
     unix: socketPath,
@@ -93,19 +154,20 @@ async function connectClient(socketPath: string): Promise<{
     socket: {
       data(socket, data) {
         socket.data.buffer += socket.data.decoder.decode(data, { stream: true });
-        const newlineIndex = socket.data.buffer.indexOf("\n");
-        if (newlineIndex >= 0) {
-          const firstLine = socket.data.buffer.slice(0, newlineIndex);
+        let newlineIndex = socket.data.buffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = socket.data.buffer.slice(0, newlineIndex);
           socket.data.buffer = socket.data.buffer.slice(newlineIndex + 1);
-          resolveLine?.(firstLine);
+          pushLine(line);
+          newlineIndex = socket.data.buffer.indexOf("\n");
         }
       },
       error(_socket, error) {
-        rejectLine?.(error instanceof Error ? error : new Error(String(error)));
+        rejectWaiters(error instanceof Error ? error : new Error(String(error)));
       },
       close(_socket, error) {
         if (error) {
-          rejectLine?.(error instanceof Error ? error : new Error(String(error)));
+          rejectWaiters(error instanceof Error ? error : new Error(String(error)));
         }
       },
     },
@@ -113,7 +175,15 @@ async function connectClient(socketPath: string): Promise<{
 
   return {
     socket,
-    readLine: () => withTimeout(line, 5_000),
+    readLine: () =>
+      withTimeout(
+        lines.length > 0
+          ? Promise.resolve(lines.shift() as string)
+          : new Promise<string>((resolve, reject) => {
+              waiters.push({ resolve, reject });
+            }),
+        5_000,
+      ),
   };
 }
 

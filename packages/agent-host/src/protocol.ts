@@ -4,6 +4,7 @@ const z = ((zod as unknown as { z?: typeof zod }).z ?? zod) as typeof zod;
 
 export const jsonValueSchema = z.json();
 export type JsonValue = zod.infer<typeof jsonValueSchema>;
+export type AgentRunEventSink = (event: JsonValue) => void;
 
 export const agentToolSpecSchema = z
   .object({
@@ -98,6 +99,13 @@ export const runtimeClientMessageSchema = z.discriminatedUnion("type", [
 export type RuntimeClientMessage = zod.infer<typeof runtimeClientMessageSchema>;
 
 export const agentHostMessageSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("event"),
+      id: z.string(),
+      event: jsonValueSchema,
+    })
+    .strict(),
   z
     .object({
       type: z.literal("result"),
