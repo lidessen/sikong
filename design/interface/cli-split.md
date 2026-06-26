@@ -2,7 +2,7 @@
 
 **Status:** Draft (+) — 2026-07-XX
 
-**Governs:** `src/harness/cli.rs` → `src/harness/cli/mod.rs` + submodules
+**Governs:** `src/interface/cli/` submodules
 
 **Layer:** L1 — Command & Interface
 
@@ -12,8 +12,8 @@
 
 ## Purpose
 
-Split `src/harness/cli.rs` (5123 lines, ~85 inline tests) into a directory module
-with focused submodules, each owning one command surface. No behavior changes.
+Keep `src/interface/cli/` as a directory module with focused submodules, each
+owning one command surface. No behavior changes.
 
 ## Rationale
 
@@ -32,7 +32,7 @@ A single 5k+ line file for CLI dispatch creates several problems:
 ## Module Structure
 
 ```
-src/harness/cli/
+src/interface/cli/
 ├── mod.rs          — re-exports; Cli, Command enums; pub fn run(); fn run_cli();
 │                     CliOutput, JSON helpers; DebugConfig
 ├── assistant.rs    — AssistantCommand, run_assistant_acp, run_assistant_prompt,
@@ -51,7 +51,7 @@ src/harness/cli/
 
 ### `cli/mod.rs`
 
-Re-exports everything needed by `main.rs` and other harness modules:
+Re-exports everything needed by `main.rs` and other interface modules:
 
 - `pub fn run(args) -> i32` (main entrypoint)
 - `pub fn run_assistant_acp()` (used by assistant/mod.rs)
@@ -119,11 +119,10 @@ Submodules are independent — they do not call each other. The dispatch in
 
 ## Migration Strategy
 
-1. Rename `src/harness/cli.rs` → `src/harness/cli/mod.rs`
-2. Create submodule files with empty `use super::*;` stubs
-3. Move code blocks section by section, keeping `mod.rs` as thin dispatch
-4. Extract tests into `cli/tests.rs`
-5. Run `cargo test` and `cargo clippy` after each extracted submodule
+1. Keep `src/interface/cli/mod.rs` as thin dispatch.
+2. Keep command-specific behavior in sibling submodules.
+3. Extract tests into focused modules when a command surface grows large enough.
+4. Run `cargo test` and `cargo clippy` after each extracted submodule.
 
 The migration preserves:
 

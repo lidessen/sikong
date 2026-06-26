@@ -1,4 +1,4 @@
-use crate::common::workspace::{WorkspaceChange, WorkspaceRequirement};
+use crate::workspace::{WorkspaceChange, WorkspaceRequirement};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -306,7 +306,7 @@ mod tests {
     use super::*;
     use crate::Budget;
     use crate::CapabilityProfile;
-    use crate::common::workspace::WorkspaceRequirement;
+    use crate::workspace::WorkspaceRequirement;
 
     #[test]
     fn scope_assessment_new_sets_all_fields() {

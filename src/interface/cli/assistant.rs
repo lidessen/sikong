@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use super::launch;
 use super::task;
-use crate::harness::daemon;
+use crate::interface::daemon;
 
 /// Assistant command subcommands.
 #[derive(Debug, Subcommand)]

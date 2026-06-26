@@ -5,21 +5,27 @@ track is reference-only unless a task explicitly targets it.
 
 ## Top-Level Modules
 
-- `assistant/` contains assistant context/session/ACP behavior plus
+- `interface/assistant/` contains assistant context/session/ACP behavior plus
   assistant-specific harness and tool definitions.
+- `interface/cli/` contains operator-facing CLI command parsing and dispatch.
+- `interface/daemon.rs` contains the daemon socket lifecycle and request
+  handling surface.
 - `task_board/` contains the assistant-facing task board: task records, stores,
   statuses, events, persistence, queueing, cancellation, and task-level dispatch
-  into the recursive engine.
+  into the recursive engine. `task_board/view.rs` owns shared task inspection
+  projections used by CLI, ACP, and daemon responses.
 - `task_run/` contains the single-task recursive execution model: the recursive
   engine state machine, problem tree, node plans, artifacts, workspace resource
   bookkeeping, node-operation prompts, context packets, tool lists, terminal
-  tool sets, and terminal result decoding.
+- tool sets, and terminal result decoding. `task_run/governance.rs` contains
+  operation governance gates and layers used by the operation harness.
 - `workspace/` defines the workspace abstraction and concrete providers.
   Provider-specific filesystem or git facts should be captured here, not by
   agent terminal payloads.
 - `agent_run/` contains the single agent run protocol and the agent run
   scheduling system.
-- `config.rs`, `cli.rs`, and `main.rs` are application shell plumbing.
+- `common/config.rs`, `common/metrics.rs`, and `main.rs` are shared/application
+  plumbing.
 
 ## Workspace Provider Layout
 
@@ -49,8 +55,9 @@ track is reference-only unless a task explicitly targets it.
 
 - `agent_run` is the single-run contract and run scheduling boundary. It should
   not grow assistant, task, execution, or workspace policy.
-- `assistant` is the user-facing coordinator. It can inspect and manage tasks,
-  but should not implement task queueing or node execution semantics.
+- `interface/assistant` is the user-facing coordinator. It can inspect and
+  manage tasks, but should not implement task queueing or node execution
+  semantics.
 - `task_board` is task management, persistence, and task-level queueing. It may
   dispatch a task to a `TaskEngineRunner`, but should not implement engine node
   operation semantics.

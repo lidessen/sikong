@@ -8,7 +8,7 @@ use std::{
 use super::session::{AssistantLoop, AssistantSession};
 use crate::{
     TaskStore,
-    harness::task_view::{
+    task_board::view::{
         TaskEventCursor, inspect_task_view, resolve_task_ref, sort_tasks_newest_first,
         task_artifact, task_summary,
     },

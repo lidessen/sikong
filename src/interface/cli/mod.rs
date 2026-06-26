@@ -375,27 +375,27 @@ fn run_daemon_command(command: Option<DaemonCommand>, json: bool) -> i32 {
             }
         }
         Some(DaemonCommand::Status) => {
-            let running = crate::harness::daemon::daemon_is_running(&debug);
+            let running = crate::interface::daemon::daemon_is_running(&debug);
             if json {
                 print_json_data(serde_json::json!({
                     "running": running,
-                    "socket": crate::harness::daemon::daemon_socket_path(&debug),
+                    "socket": crate::interface::daemon::daemon_socket_path(&debug),
                 }));
             } else if running {
                 println!(
                     "daemon running at {}",
-                    crate::harness::daemon::daemon_socket_path(&debug).display()
+                    crate::interface::daemon::daemon_socket_path(&debug).display()
                 );
             } else {
                 println!(
                     "daemon not running at {}",
-                    crate::harness::daemon::daemon_socket_path(&debug).display()
+                    crate::interface::daemon::daemon_socket_path(&debug).display()
                 );
             }
             if running { 0 } else { 1 }
         }
         Some(DaemonCommand::Stop) => {
-            match crate::harness::daemon::send_json_to_daemon(
+            match crate::interface::daemon::send_json_to_daemon(
                 &debug,
                 serde_json::json!({"kind": "shutdown", "id": "cli-stop"}),
             ) {

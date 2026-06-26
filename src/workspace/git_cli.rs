@@ -153,7 +153,7 @@ impl GitCli {
             all_changed.push(path.clone());
 
             // Check if this path matches any write_scope pattern
-            if crate::common::workspace::path_allowed(write_scope, std::path::Path::new(&path)) {
+            if crate::workspace::path_allowed(write_scope, std::path::Path::new(&path)) {
                 scope_paths.push(path);
             }
         }

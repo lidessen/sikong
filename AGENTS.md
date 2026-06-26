@@ -8,21 +8,24 @@ This repository contains a single Rust-based mainline implementation.
 
 - `src/` contains the Rust `siko` engine, assistant, task manager, single-task
   run harnesses/tools, workspace providers, and agent run scheduler.
-  - `src/main.rs` — binary entrypoint (parses CLI args, delegates to harness)
+  - `src/main.rs` — binary entrypoint (parses CLI args, delegates to CLI interface)
   - `src/lib.rs` — public API surface re-exporting all modules
-- `src/core/` contains the engine, task run, task board, and agent run:
-  - `src/core/task_run/` — recursive engine, operation harness, problem tree,
-    node plan/execute/combine/verify, resource bookkeeping, agent-run tools
-  - `src/core/task_board/` — assistant-facing task board types, stores,
-    queueing, cancellation, task-level dispatch
-  - `src/core/agent_run/` — agent run request/response, scheduler,
-    cancellation tokens
-- `src/harness/` contains CLI, governance, and assistant loop harnesses:
-  - `src/harness/cli.rs` — CLI subcommand dispatch (run, assistant, eval, etc.)
-  - `src/harness/governance.rs` — governance gates and layers
-  - `src/harness/assistant/` — ACP server, session, assistant tools, context
+- `src/task_run/` contains recursive engine execution: operation harnesses,
+  problem tree, node plan/execute/combine/verify, resource bookkeeping,
+  governance gates, and agent-run tools.
+- `src/task_board/` contains assistant-facing task board types, stores,
+  queueing, cancellation, task-level dispatch, and task inspection views.
+- `src/agent_run/` contains agent run request/response, scheduler, cancellation
+  tokens, and tool schema support.
+- `src/workspace/` contains workspace providers and workspace facts:
+  FileSystem, GitFileSystem, Memory, WorkspaceSurface, scope checks, and
+  provider cleanup.
+- `src/interface/` contains external/operator surfaces:
+  - `src/interface/cli/` — CLI subcommand dispatch (`run`, `send`, `task`,
+    `tui`, `acp`, `daemon`, `eval`, etc.)
+  - `src/interface/assistant/` — ACP server, session, assistant tools, context
+  - `src/interface/daemon.rs` — daemon socket lifecycle and request handling
 - `src/common/` contains shared primitives:
-  - `src/common/workspace/` — FileSystem, GitFileSystem, Memory, WorkspaceSurface
   - `src/common/config.rs` — SikoConfig, per-provider config
   - `src/common/metrics.rs` — MetricsCollection and recording
   - `src/common/types.rs` — common type aliases (NodeId, ArtifactId)

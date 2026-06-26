@@ -4,11 +4,11 @@ use async_recursion::async_recursion;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 
-use crate::common::workspace::{
+use crate::agent_run::{AgentRunEventSink, AgentRunScheduler, CancellationToken};
+use crate::workspace::{
     GitWorkspaceSurface, Workspace, WorkspaceChange, WorkspaceProvider, WorkspaceResource,
     WorkspaceResourceMetadata, WorkspaceResourceRef, WorkspaceResourceState, WorkspaceSurface,
 };
-use crate::core::agent_run::{AgentRunEventSink, AgentRunScheduler, CancellationToken};
 
 use super::node::{
     Artifact, ArtifactContentKind, NodePlan, NodePolicy, NodeTemplate, PlanGroup, PlanGroupMode,
@@ -823,7 +823,7 @@ where
 
         if node.capabilities.allow_write {
             let out_of_scope = change.changed_paths.iter().any(|path| {
-                !crate::common::workspace::path_allowed(
+                !crate::workspace::path_allowed(
                     &node.workspace.write_scope,
                     std::path::Path::new(path.as_str()),
                 )
@@ -1304,7 +1304,7 @@ where
     ///     included in the commit history.
     /// (b) **Programmatic trigger** — tasks that want to commit their own
     ///     completed work within a custom write scope can call this method
-    ///     (or the public `crate::common::workspace::commit_write_scope_paths`)
+    ///     (or the public `crate::workspace::commit_write_scope_paths`)
     ///     at any point before the workspace resources are released.
     ///
     /// # Graceful degradation
@@ -1315,7 +1315,7 @@ where
     fn post_completion_write_scope_commit(
         &mut self,
         node_id: NodeId,
-        surface: &crate::common::workspace::WorkspaceSurface,
+        surface: &crate::workspace::WorkspaceSurface,
     ) -> Result<(), EngineError> {
         let write_scope = &self.node(node_id)?.workspace.write_scope;
         if write_scope.is_empty() {
@@ -1340,11 +1340,8 @@ where
             self.node(node_id)?.key.0,
         );
 
-        match crate::common::workspace::commit_write_scope_paths(
-            &git.worktree_path,
-            &message,
-            write_scope,
-        ) {
+        match crate::workspace::commit_write_scope_paths(&git.worktree_path, &message, write_scope)
+        {
             Ok((changed_paths, commit_sha)) => {
                 if let Some(sha) = commit_sha {
                     info!(
@@ -1647,7 +1644,7 @@ fn scope_allowed_by_parent(child_scope: &str, parent_scopes: &[String]) -> bool 
 fn parent_scope_allows_child(parent_scope: &str, child_scope: &str) -> bool {
     parent_scope == "**/*"
         || parent_scope == child_scope
-        || crate::common::workspace::path_allowed(
+        || crate::workspace::path_allowed(
             &[parent_scope.to_string()],
             std::path::Path::new(child_scope),
         )
@@ -1725,7 +1722,7 @@ mod tests {
         assert!(scope_allowed_by_parent("src/task_run/types.rs", &parents));
         assert!(!scope_allowed_by_parent("src/main.js", &parents));
     }
-    use crate::core::task_run::node::PlanGroup;
+    use crate::task_run::node::PlanGroup;
 
     // --- plan_from_scope_assessment tests ---
 

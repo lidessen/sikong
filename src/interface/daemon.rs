@@ -11,7 +11,7 @@ use tracing::{error, info};
 use crate::{
     AssistantSession, AssistantSessionConfig, CapabilityProfile, DebugConfig, FileTaskStore,
     ProcessAgentRunScheduler, SikoConfig, TaskStore, WorkspaceProvider, WorkspaceRequirement,
-    harness::task_view::{
+    task_board::view::{
         TaskEventCursor, inspect_task_view, resolve_task_ref, sort_tasks_newest_first,
         task_artifact, task_summary,
     },

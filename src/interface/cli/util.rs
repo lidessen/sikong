@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::harness::task_view::AgentEventEntry;
+use crate::task_board::view::AgentEventEntry;
 
 /// Compact JSON serialization: one line, no extra whitespace.
 pub(crate) fn compact_json(value: &Value) -> String {

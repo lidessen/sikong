@@ -53,9 +53,12 @@ Start with [design/README.md](design/README.md).
 ```text
 .
 ├── src/                # Rust mainline (active)
-│   ├── core/           # Engine, task run, agent run, board
-│   ├── harness/        # CLI, assistant, tools, packs
-│   └── common/         # Workspace providers, config, types, metrics
+│   ├── task_run/       # Recursive engine, operation harness, governance
+│   ├── task_board/     # Assistant task records, stores, queue, views
+│   ├── agent_run/      # Agent run protocol and scheduler
+│   ├── workspace/      # Workspace providers, scope checks, resource facts
+│   ├── interface/      # CLI, ACP assistant surface, daemon
+│   └── common/         # Config, metrics, shared primitive types
 ├── tests/              # Rust integration tests
 ├── design/             # Architecture & design documentation
 ├── packages/

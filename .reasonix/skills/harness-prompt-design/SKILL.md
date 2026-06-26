@@ -87,7 +87,7 @@ The signal that ends this run. Usually "call submit_specification" etc.
 
 ## Reference: Current Sikong Harness Prompts
 
-The Sikong engine has 5 operation harnesses in src/core/task_run/harness.rs:
+The Sikong engine has 5 operation harnesses in src/task_run/harness.rs:
 
 - **Specify**: scope assessment + routing decision → submit_specification
 - **Plan**: decompose into child nodes → submit_plan_group  

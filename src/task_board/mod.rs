@@ -7,12 +7,19 @@ use tracing::Level;
 
 mod board;
 mod store;
+pub mod view;
 
 pub use board::{
     TaskBoard, TaskBoardSnapshot, TaskEngineProgressSink, TaskEngineRunner,
     TaskEngineRunnerFactory, TaskWorkerFactory,
 };
 pub use store::{FileTaskStore, MemoryTaskStore, TaskStore};
+pub use view::{
+    AgentEventEntry, AgentEventFilter, TaskArtifactView, TaskEventCursor, TaskInspectView,
+    TaskSummaryView, TaskTimelineRecord, assistant_agent_events, inspect_task_view,
+    legacy_uuid_v7_timestamp_ms, parse_node_operation, resolve_task_ref, sort_tasks_newest_first,
+    task_artifact, task_list_id, task_summary,
+};
 
 pub type TaskId = String;
 

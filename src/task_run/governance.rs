@@ -1,4 +1,4 @@
-use crate::core::task_run::NodeOperation;
+use crate::task_run::NodeOperation;
 
 /// Governance layer enum identifying which authority layer applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]

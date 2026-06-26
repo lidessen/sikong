@@ -8,7 +8,7 @@ use crate::{AssistantTaskEvent, AssistantTaskStatus, DebugConfig, FileTaskStore,
 use clap::Subcommand;
 use serde_json::json;
 
-pub use crate::harness::task_view::{
+pub use crate::task_board::view::{
     AgentEventEntry, AgentEventFilter, assistant_agent_events, legacy_uuid_v7_timestamp_ms,
     parse_node_operation, resolve_task_ref, sort_tasks_newest_first, task_list_id,
 };

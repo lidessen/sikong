@@ -2,13 +2,13 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::AgentToolSpec;
-use crate::common::workspace::WorkspaceProvider;
-use crate::core::agent_run::{
+use crate::agent_run::{
     AgentEffort, AgentPromptSection, AgentRunRequest, AgentRunResponse, AgentRuntimeProfile,
 };
-use crate::harness::governance::{
+use crate::task_run::governance::{
     GovernanceGate, GovernanceLayer, active_hard_gates_for, governance_layer_for,
 };
+use crate::workspace::WorkspaceProvider;
 
 use super::tools::{EngineTool, EngineTools};
 use super::{
@@ -24,7 +24,7 @@ macro_rules! operation_prompt {
     )+ $(,)?) => {
         vec![
             $(
-                    crate::core::agent_run::AgentPromptSection {
+                    crate::agent_run::AgentPromptSection {
                     title: $title.to_string(),
                     content: ($content).into(),
                 }

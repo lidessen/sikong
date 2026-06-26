@@ -1,13 +1,17 @@
 mod engine;
+mod governance;
 mod harness;
 mod node;
 mod resources;
 mod tools;
 mod types;
 
-use crate::common::workspace::WorkspaceSurface;
+use crate::workspace::WorkspaceSurface;
 
 pub use engine::Engine;
+pub use governance::{
+    GovernanceGate, GovernanceLayer, active_hard_gates_for, governance_layer_for,
+};
 pub use harness::{
     EngineAgentArtifactPacket, EngineAgentContextPacket, EngineAgentGitRequirementPacket,
     EngineAgentGovernanceGatePacket, EngineAgentGovernancePacket, EngineAgentNodePacket,

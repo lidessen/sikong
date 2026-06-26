@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 
+use crate::agent_run::AgentTokenUsage;
 pub use crate::common::types::{ArtifactId, NodeId};
-use crate::common::workspace::WorkspaceError;
-use crate::core::agent_run::AgentTokenUsage;
+use crate::workspace::WorkspaceError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum NodeOperation {

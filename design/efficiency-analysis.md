@@ -1,7 +1,7 @@
 # Sikong 引擎处理大任务效率分析
 
 > 分析日期：2025-07-16
-> 分析目标：`src/core/task_run/engine.rs` (1562 行)、node 生命周期、竞品对比
+> 分析目标：`src/task_run/engine.rs` (1562 行)、node 生命周期、竞品对比
 
 ---
 

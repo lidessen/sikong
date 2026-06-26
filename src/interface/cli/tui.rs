@@ -18,12 +18,10 @@ use serde_json::json;
 
 use crate::{
     AssistantTask, AssistantTaskEvent, AssistantTaskStatus, DebugConfig, FileTaskStore, TaskStore,
-    harness::{
-        daemon,
-        task_view::{
-            TaskEventCursor, TaskTimelineRecord, inspect_task_view, sort_tasks_newest_first,
-            task_list_id,
-        },
+    interface::daemon,
+    task_board::view::{
+        TaskEventCursor, TaskTimelineRecord, inspect_task_view, sort_tasks_newest_first,
+        task_list_id,
     },
 };
 
@@ -956,7 +954,7 @@ fn task_event_detail(event: &AssistantTaskEvent, width: usize) -> Option<String>
 }
 
 fn format_agent_event_line(
-    event: &crate::harness::task_view::AgentEventEntry,
+    event: &crate::task_board::view::AgentEventEntry,
     ordinal: usize,
     width: usize,
 ) -> String {
@@ -982,7 +980,7 @@ fn agent_event_label(event: Option<&str>) -> &'static str {
     }
 }
 
-fn agent_event_summary(event: &crate::harness::task_view::AgentEventEntry, width: usize) -> String {
+fn agent_event_summary(event: &crate::task_board::view::AgentEventEntry, width: usize) -> String {
     let mut parts = vec![format!("{:?}", event.operation)];
     if let Some(source) = event.source.as_deref() {
         parts.push(format!("src={source}"));
@@ -1222,7 +1220,7 @@ mod tests {
     #[test]
     fn agent_timeline_line_summarizes_tool_event() {
         let line = format_agent_event_line(
-            &crate::harness::task_view::AgentEventEntry {
+            &crate::task_board::view::AgentEventEntry {
                 task_id: "task_1".to_string(),
                 run_index: 1,
                 event_index: 2,
