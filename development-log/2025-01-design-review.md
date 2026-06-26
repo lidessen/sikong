@@ -47,7 +47,7 @@ However, the simplicity reveals a tension: **self-verification contradicts the g
 
 ### Any redundancy?
 
-**With the standard Execute path, yes.** FastExecute and Execute share most of their prompt structure. The only difference is that FastExecute skips workspace surface creation and skips Verify. The agent gets the same "atomic execution pass" role prompt. The engine branching on `fast_execute` vs `execute` creates two code paths that do almost the same thing. 
+**With the standard Execute path, yes.** FastExecute and Execute share most of their prompt structure. The only difference is that FastExecute skips workspace surface creation and skips Verify. The agent gets the same "atomic execution pass" role prompt. The engine branching on `fast_execute` vs `execute` creates two code paths that do almost the same thing.
 
 ### More harm than good?
 
@@ -98,6 +98,7 @@ A four-layer authority model derived from common law governance concepts. `Arch`
 **No, and it over-engineers what should be a simpler operation contract.** The governance model adds a parallel taxonomy (`GovernanceLayer`, `GovernanceGate`, `hard_gates`) that sits alongside the existing operation taxonomy. Every operation must now answer "what governance layer am I?" and "what hard gates are active?" in addition to "what terminal tool do I use?"
 
 The concept is elegant on paper but the implementation cost is measurable:
+
 - Every operation has `governance_layer()` and `active_hard_gates()` methods
 - Every agent run prompt includes a `Governance Boundary` section
 - The operation context packet carries `governance.layer` and `governance.hard_gates`
@@ -148,8 +149,9 @@ The `Workspace` trait provides a uniform interface for different execution envir
 **Yes, and it is well-isolated.** The trait is clean with clear methods. The separation between workspace concerns (where and how work executes) and problem concerns (what work to do) is one of the best parts of the architecture. The `WorkspaceResourceRegistry` + `WorkspaceResourceRef` lifecycle management (with RAII `BranchEngineGuard`) is robust.
 
 The implementation surface is notably compact:
+
 - `FileSystem` workspace: ~200 lines
-- `GitFileSystem` workspace: ~200 lines  
+- `GitFileSystem` workspace: ~200 lines
 - `Memory` workspace: ~50 lines
 - Resource registry: ~150 lines
 
@@ -164,6 +166,7 @@ The implementation surface is notably compact:
 ### Verdict: **Keep**, with one simplification
 
 Standardize the commit path. Either:
+
 - Move `post_completion_write_scope_commit` into the `Workspace` trait as a new method (`partial_commit`), or
 - Remove the auto-commit hook entirely and require all commits to go through the standard Verify → Commit pipeline.
 
@@ -200,6 +203,7 @@ The prompt construction macro (`operation_prompt!`) could be replaced with a sim
 ### More harm than good?
 
 **The Bun dependency is a risk.** The current architecture requires:
+
 - Bun installed and available
 - `@sikong/agent-host` TypeScript source or compiled bundle
 - Unix socket availability
@@ -219,14 +223,14 @@ The ACP protocol itself is clean and well-documented, but the integration patter
 
 ## Summary
 
-| Decision | Verdict | Key Action |
-|----------|---------|------------|
-| 1. Recursive Node Lifecycle | **Keep** | No change needed; core differentiator |
-| 2. FastExecute Path | **Simplify** | Merge into single Execute path with conditional Verify skip based on workspace change evidence |
-| 3. Stage vs Parallel Group Mode | **Keep** | No change needed; well-designed and documented |
-| 4. Governance Model (Arch/Plan/Execute/Verify) | **Simplify** | Remove redundant governance taxonomy; keep only mechanically-enforced gates |
-| 5. Workspace Provider Abstraction | **Keep** | Formalize `partial_commit` in the trait instead of engine-side hook |
-| 6. Operation Harness + Agent-Host Boundary | **Simplify/Keep** | Replace prompt macro with builder; accelerate Bun→Rust migration; keep ACP as-is |
+| Decision                                       | Verdict           | Key Action                                                                                     |
+| ---------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
+| 1. Recursive Node Lifecycle                    | **Keep**          | No change needed; core differentiator                                                          |
+| 2. FastExecute Path                            | **Simplify**      | Merge into single Execute path with conditional Verify skip based on workspace change evidence |
+| 3. Stage vs Parallel Group Mode                | **Keep**          | No change needed; well-designed and documented                                                 |
+| 4. Governance Model (Arch/Plan/Execute/Verify) | **Simplify**      | Remove redundant governance taxonomy; keep only mechanically-enforced gates                    |
+| 5. Workspace Provider Abstraction              | **Keep**          | Formalize `partial_commit` in the trait instead of engine-side hook                            |
+| 6. Operation Harness + Agent-Host Boundary     | **Simplify/Keep** | Replace prompt macro with builder; accelerate Bun→Rust migration; keep ACP as-is               |
 
 ### Cross-Cutting Observations
 

@@ -206,6 +206,7 @@ impl SikoConfig {
 ```
 
 Environment override example:
+
 ```bash
 SIKONG_CONFIG__ASSISTANT__MAX_PARALLEL_TASKS=4 cargo run -- ...
 ```
@@ -241,18 +242,18 @@ $HOME/.sikong/config.yaml            → default
 
 ### Environment Variable Reference
 
-| Variable | Used By | Purpose |
-|----------|---------|---------|
-| `SIKONG_CONFIG_FILE` | `config.rs` | Override config file path |
-| `SIKONG_DATA_DIR` | `config.rs` | Data directory (tasks, config) |
-| `SIKONG_RUNTIME_DIR` | `config.rs` | Runtime bundle directory |
-| `SIKONG_BUN_COMMAND` | `config.rs` | Bun binary path |
-| `SIKONG_AGENT_HOST_COMMAND` | `config.rs` | Direct agent-host binary path |
-| `SIKONG_AGENT_HOST_SCRIPT` | `config.rs` | Agent-host TypeScript script |
-| `SIKONG_AGENT_HOST_PROVIDER` | `cli.rs` | Provider override (`deepseek`, `kimi`) |
-| `SIKONG_AGENT_HOST_RUNTIME` | `cli.rs` | Runtime override (`ai-sdk`, `claude-code`) |
-| `SIKONG_RUN_LIVE_AGENT_TESTS` | `cli.rs` | Enable live eval mode (must be `1`) |
-| `SIKONG_CONFIG__*` | `config.rs` | Config file field overrides |
+| Variable                      | Used By     | Purpose                                    |
+| ----------------------------- | ----------- | ------------------------------------------ |
+| `SIKONG_CONFIG_FILE`          | `config.rs` | Override config file path                  |
+| `SIKONG_DATA_DIR`             | `config.rs` | Data directory (tasks, config)             |
+| `SIKONG_RUNTIME_DIR`          | `config.rs` | Runtime bundle directory                   |
+| `SIKONG_BUN_COMMAND`          | `config.rs` | Bun binary path                            |
+| `SIKONG_AGENT_HOST_COMMAND`   | `config.rs` | Direct agent-host binary path              |
+| `SIKONG_AGENT_HOST_SCRIPT`    | `config.rs` | Agent-host TypeScript script               |
+| `SIKONG_AGENT_HOST_PROVIDER`  | `cli.rs`    | Provider override (`deepseek`, `kimi`)     |
+| `SIKONG_AGENT_HOST_RUNTIME`   | `cli.rs`    | Runtime override (`ai-sdk`, `claude-code`) |
+| `SIKONG_RUN_LIVE_AGENT_TESTS` | `cli.rs`    | Enable live eval mode (must be `1`)        |
+| `SIKONG_CONFIG__*`            | `config.rs` | Config file field overrides                |
 
 ---
 
@@ -311,15 +312,16 @@ fn resolve_agent_loop_launch(debug: &DebugConfig, max_steps: usize) -> AgentHost
 ```
 
 The resulting command is something like:
+
 ```
 bun packages/agent-host/src/runtime-host.ts --worker agent-loop --provider deepseek --runtime claude-code --max-steps 24
 ```
 
 ### When Each Is Used
 
-| Function | Used By | Purpose |
-|----------|---------|---------|
-| `resolve_agent_host_launch` | Assistant ACP, assistant prompt | General assistant agent runs |
+| Function                    | Used By                                                             | Purpose                                                     |
+| --------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `resolve_agent_host_launch` | Assistant ACP, assistant prompt                                     | General assistant agent runs                                |
 | `resolve_agent_loop_launch` | Eval commands (`task-run-split`, `task-run-operation`), dogfood run | Operation-level and task-level agent loops with step limits |
 
 ---
@@ -405,26 +407,26 @@ The `run` message wraps an `AgentRunRequest`:
 
 ### AgentRunRequest Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `protocolVersion` | integer | Compatibility version (currently 1). |
-| `objective` | string | Concise label for the loop run (logs and summaries). |
-| `prompt` | `AgentPromptSection[]` | Ordered model-facing prompt sections (Role, Context, Rubric, Output). |
-| `input` | `JsonValue` | Structured context packet (transcript, operation context, etc.). |
-| `tools` | `AgentToolSpec[]` | Dynamic tools available to the agent loop. |
-| `terminalToolSet` | `string[]` | Tool names that terminate the loop when called. |
-| `runtimeProfile` | `"general" \| "code"` | Profile selecting system prompt and tool defaults. |
-| `effort` | `string \| null` | Optional reasoning effort override. |
+| Field             | Type                   | Description                                                           |
+| ----------------- | ---------------------- | --------------------------------------------------------------------- |
+| `protocolVersion` | integer                | Compatibility version (currently 1).                                  |
+| `objective`       | string                 | Concise label for the loop run (logs and summaries).                  |
+| `prompt`          | `AgentPromptSection[]` | Ordered model-facing prompt sections (Role, Context, Rubric, Output). |
+| `input`           | `JsonValue`            | Structured context packet (transcript, operation context, etc.).      |
+| `tools`           | `AgentToolSpec[]`      | Dynamic tools available to the agent loop.                            |
+| `terminalToolSet` | `string[]`             | Tool names that terminate the loop when called.                       |
+| `runtimeProfile`  | `"general" \| "code"`  | Profile selecting system prompt and tool defaults.                    |
+| `effort`          | `string \| null`       | Optional reasoning effort override.                                   |
 
 ### AgentRunResponse Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `report` | string | Free-text report from the agent loop. |
-| `tool_calls` | `AgentToolCall[]` | All tools called during the loop. |
-| `terminal_call` | `AgentToolCall \| null` | The terminal tool call that ended the loop. |
-| `usage` | `AgentTokenUsage \| null` | Token usage (input, output, cache). |
-| `events` | `JsonValue[]` | Streamed events from the agent loop (tool calls, usage snapshots). |
+| Field           | Type                      | Description                                                        |
+| --------------- | ------------------------- | ------------------------------------------------------------------ |
+| `report`        | string                    | Free-text report from the agent loop.                              |
+| `tool_calls`    | `AgentToolCall[]`         | All tools called during the loop.                                  |
+| `terminal_call` | `AgentToolCall \| null`   | The terminal tool call that ended the loop.                        |
+| `usage`         | `AgentTokenUsage \| null` | Token usage (input, output, cache).                                |
+| `events`        | `JsonValue[]`             | Streamed events from the agent loop (tool calls, usage snapshots). |
 
 ### Cancellation
 
@@ -435,6 +437,7 @@ pub async fn run(&mut self, input: AgentRunRequest, cancellation: CancellationTo
 ```
 
 If cancelled mid-flight:
+
 1. The `read_response_or_cancel` loop detects the cancellation signal.
 2. The host process is terminated (`terminate()`).
 3. An error response is returned.
@@ -533,6 +536,7 @@ Scenario: Answer in two short paragraphs...
 Verdict: PASSED
 
 Findings:
+
 - Engine correctly kept the task atomic.
 - Final artifact covered both requested topics.
 
@@ -542,15 +546,15 @@ Expectation: This is a simple answer task...
 
 ### Dogfood vs Eval
 
-| Aspect | `eval task-run-split` | `dogfood run` |
-|--------|----------------------|---------------|
-| Purpose | Regression testing | Self-development |
-| Dev-log | No | Yes (with `--log`) |
-| Judge | Always | Always |
-| Artifacts | Optional (`--artifact-dir`) | Optional (`--artifact-dir`) |
-| Scenarios | Built-in + YAML + custom `--task` | Built-in + YAML only |
-| Safety gate | `SIKONG_RUN_LIVE_AGENT_TESTS=1` | Same |
-| CLI | `eval` subcommand | `dogfood` subcommand |
+| Aspect      | `eval task-run-split`             | `dogfood run`               |
+| ----------- | --------------------------------- | --------------------------- |
+| Purpose     | Regression testing                | Self-development            |
+| Dev-log     | No                                | Yes (with `--log`)          |
+| Judge       | Always                            | Always                      |
+| Artifacts   | Optional (`--artifact-dir`)       | Optional (`--artifact-dir`) |
+| Scenarios   | Built-in + YAML + custom `--task` | Built-in + YAML only        |
+| Safety gate | `SIKONG_RUN_LIVE_AGENT_TESTS=1`   | Same                        |
+| CLI         | `eval` subcommand                 | `dogfood` subcommand        |
 
 Both share the same underlying `run_task_run_split_eval_async` engine path.
 The difference is in the CLI entry point and the optional dev-log recording.

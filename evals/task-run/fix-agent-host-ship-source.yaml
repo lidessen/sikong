@@ -36,7 +36,7 @@ expectation: |
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - "**/*"
   write_scope:
     - scripts/build-release-rust.sh
     - src/harness/cli.rs

@@ -10,46 +10,46 @@
 
 ### 1.1 `src/core/task_run/types.rs` — Type Definitions
 
-| Symbol | Kind |
-|--------|------|
-| `GovernanceLayer` enum (Arch, Plan, Execute, Verify) | Type definition |
-| `GovernanceGate` enum (8 variants) | Type definition |
-| `GovernanceGate::id()` → `&'static str` | Static string accessor |
-| `GovernanceGate::description()` → `&'static str` | Static string accessor |
-| `NodeOperation::governance_layer()` → `Option<GovernanceLayer>` | **Mechanical mapping** — maps each operation to its governance layer |
+| Symbol                                                             | Kind                                                                    |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `GovernanceLayer` enum (Arch, Plan, Execute, Verify)               | Type definition                                                         |
+| `GovernanceGate` enum (8 variants)                                 | Type definition                                                         |
+| `GovernanceGate::id()` → `&'static str`                            | Static string accessor                                                  |
+| `GovernanceGate::description()` → `&'static str`                   | Static string accessor                                                  |
+| `NodeOperation::governance_layer()` → `Option<GovernanceLayer>`    | **Mechanical mapping** — maps each operation to its governance layer    |
 | `NodeOperation::active_hard_gates()` → `&'static [GovernanceGate]` | **Structural gate list** — defines which gates are active per operation |
 
 The gate lists in `active_hard_gates()` are:
 
-| Operation | Active gates |
-|-----------|-------------|
-| Specify | (none) |
-| Plan | ArchEscape, ParallelDependency, SynthesisChild, ScopeWiden, Protocol |
-| Execute | ArchEscape, ScopeWiden, Protocol, CheckFail |
-| Combine | UnsupportedFact, Protocol, CheckFail |
-| Verify | PassWithHardViolation, Protocol, CheckFail |
-| Commit | (none) |
+| Operation | Active gates                                                         |
+| --------- | -------------------------------------------------------------------- |
+| Specify   | (none)                                                               |
+| Plan      | ArchEscape, ParallelDependency, SynthesisChild, ScopeWiden, Protocol |
+| Execute   | ArchEscape, ScopeWiden, Protocol, CheckFail                          |
+| Combine   | UnsupportedFact, Protocol, CheckFail                                 |
+| Verify    | PassWithHardViolation, Protocol, CheckFail                           |
+| Commit    | (none)                                                               |
 
 Both `governance_layer()` and `active_hard_gates()` are used structurally — the harness reads them to build the agent packet, but the mapping itself belongs to the operation semantics.
 
 ### 1.2 `src/core/task_run/harness.rs` — Packet Construction
 
-| Usage | How governance is used |
-|-------|----------------------|
-| `EngineAgentGovernancePacket { layer, hard_gates }` | Struct that carries governance into agent context |
-| `EngineAgentGovernanceGatePacket { id, description }` | Struct for serializing each gate |
-| `governance_packet(operation)` → `EngineAgentGovernancePacket` | Calls `operation.governance_layer()` and `active_hard_gates()` to build packet |
-| `gate_packet(gate)` → `EngineAgentGovernanceGatePacket` | Calls `gate.id()` and `gate.description()` |
-| `governance_prompt(operation)` → `String` | Builds a *prompt text* from gate descriptions for injection into agent instructions |
+| Usage                                                          | How governance is used                                                              |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `EngineAgentGovernancePacket { layer, hard_gates }`            | Struct that carries governance into agent context                                   |
+| `EngineAgentGovernanceGatePacket { id, description }`          | Struct for serializing each gate                                                    |
+| `governance_packet(operation)` → `EngineAgentGovernancePacket` | Calls `operation.governance_layer()` and `active_hard_gates()` to build packet      |
+| `gate_packet(gate)` → `EngineAgentGovernanceGatePacket`        | Calls `gate.id()` and `gate.description()`                                          |
+| `governance_prompt(operation)` → `String`                      | Builds a _prompt text_ from gate descriptions for injection into agent instructions |
 
 **Critical finding:** `governance_prompt()` in harness.rs is the **only place** where the gate descriptions are turned into human-readable prompt text that steers agent behavior. The packet construction (`governance_packet`) is also in harness.rs, but it supplies structured data (JSON) that the agent prompt system uses.
 
 ### 1.3 `src/core/task_run/tools.rs` — Mechanical Gate Checks
 
-| Gate | Where checked | Mechanical? |
-|------|--------------|-------------|
-| **G-PROTOCOL** | `submit_plan_group`: rejects empty `items` list | **Yes** — parameter validation |
-| **G-PARALLEL-DEPENDENCY** | `submit_plan_group`: rejects parallel items with `requires_prior_results=true` | **Yes** — structural constraint |
+| Gate                           | Where checked                                                                      | Mechanical?                            |
+| ------------------------------ | ---------------------------------------------------------------------------------- | -------------------------------------- |
+| **G-PROTOCOL**                 | `submit_plan_group`: rejects empty `items` list                                    | **Yes** — parameter validation         |
+| **G-PARALLEL-DEPENDENCY**      | `submit_plan_group`: rejects parallel items with `requires_prior_results=true`     | **Yes** — structural constraint        |
 | **G-PASS-WITH-HARD-VIOLATION** | `SubmitVerdictArgs::into_verdict()`: Accept + non-empty `hard_violations` → Reject | **Yes** — deterministic protocol check |
 
 These are the **only three gates** that have actual mechanical enforcement in code. The enforcement is hardcoded as conditional logic against the gate variant, not by iterating over a dynamic list.
@@ -70,36 +70,36 @@ These are the **only three gates** that have actual mechanical enforcement in co
 
 ## 2. Per-Gate Classification
 
-### Category (A): Mechanical Constraint — engine *must* enforce at runtime
+### Category (A): Mechanical Constraint — engine _must_ enforce at runtime
 
-| Gate | Classification | Evidence |
-|------|---------------|----------|
-| **G-PROTOCOL** | **Mechanical** | Enforced in `tools.rs` `submit_plan_group()`: rejects empty plan items. Also used as the gate identifier in `InvalidPlan` return type. |
-| **G-PARALLEL-DEPENDENCY** | **Mechanical** | Enforced in `tools.rs` `submit_plan_group()`: rejects parallel items with dependencies. |
-| **G-PASS-WITH-HARD-VIOLATION** | **Mechanical** | Enforced in `tools.rs` `SubmitVerdictArgs::into_verdict()`: Accept + hard_violations → Reject. |
+| Gate                           | Classification | Evidence                                                                                                                               |
+| ------------------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **G-PROTOCOL**                 | **Mechanical** | Enforced in `tools.rs` `submit_plan_group()`: rejects empty plan items. Also used as the gate identifier in `InvalidPlan` return type. |
+| **G-PARALLEL-DEPENDENCY**      | **Mechanical** | Enforced in `tools.rs` `submit_plan_group()`: rejects parallel items with dependencies.                                                |
+| **G-PASS-WITH-HARD-VIOLATION** | **Mechanical** | Enforced in `tools.rs` `SubmitVerdictArgs::into_verdict()`: Accept + hard_violations → Reject.                                         |
 
 ### Category (B): Prompt-Level Decorator — injected into LLM prompts, no mechanical effect
 
-| Gate | Classification | Evidence |
-|------|---------------|----------|
-| **G-ARCH-ESCAPE** | **Prompt-level** | Description: "Local work modifies Arch-owned contracts without explicit authority." — no code enforces this. It exists as prompt text in `governance_prompt()` in harness.rs. |
-| **G-SCOPE-WIDEN** | **Prompt-level** (with caveat) | Description: "A child workspace scope widens beyond the parent scope." — no code enforces this. There is no runtime scope-widening check. The engine does check `out_of_scope` writes during deterministic verification (`deterministic_verification_verdict`), but that check is based on `write_scope` paths, not on the G-SCOPE-WIDEN gate. |
-| **G-SYNTHESIS-CHILD** | **Prompt-level** | Description: "A parallel plan creates a child only to synthesize sibling findings; parent Combine owns synthesis." — no code enforces this. |
-| **G-UNSUPPORTED-FACT** | **Prompt-level** | Description: "Combine introduces facts not present in accepted child artifacts or parent context." — no code enforces this. |
-| **G-CHECK-FAIL** | **Prompt-level** | Description: "A deterministic check required for acceptance failed." — the *phrase* is prompt-level. However, the engine *does* have deterministic checks in `deterministic_verification_verdict()` (empty output, write-scope violations, merge conflicts). These checks exist but are **not** labeled with G-CHECK-FAIL; they use `FailureClass::IncompleteOutput`, `UnsafeSideEffect`, `MergeConflict`. So G-CHECK-FAIL as a *named gate* is purely prompt text. |
+| Gate                   | Classification                 | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **G-ARCH-ESCAPE**      | **Prompt-level**               | Description: "Local work modifies Arch-owned contracts without explicit authority." — no code enforces this. It exists as prompt text in `governance_prompt()` in harness.rs.                                                                                                                                                                                                                                                                                       |
+| **G-SCOPE-WIDEN**      | **Prompt-level** (with caveat) | Description: "A child workspace scope widens beyond the parent scope." — no code enforces this. There is no runtime scope-widening check. The engine does check `out_of_scope` writes during deterministic verification (`deterministic_verification_verdict`), but that check is based on `write_scope` paths, not on the G-SCOPE-WIDEN gate.                                                                                                                      |
+| **G-SYNTHESIS-CHILD**  | **Prompt-level**               | Description: "A parallel plan creates a child only to synthesize sibling findings; parent Combine owns synthesis." — no code enforces this.                                                                                                                                                                                                                                                                                                                         |
+| **G-UNSUPPORTED-FACT** | **Prompt-level**               | Description: "Combine introduces facts not present in accepted child artifacts or parent context." — no code enforces this.                                                                                                                                                                                                                                                                                                                                         |
+| **G-CHECK-FAIL**       | **Prompt-level**               | Description: "A deterministic check required for acceptance failed." — the _phrase_ is prompt-level. However, the engine _does_ have deterministic checks in `deterministic_verification_verdict()` (empty output, write-scope violations, merge conflicts). These checks exist but are **not** labeled with G-CHECK-FAIL; they use `FailureClass::IncompleteOutput`, `UnsafeSideEffect`, `MergeConflict`. So G-CHECK-FAIL as a _named gate_ is purely prompt text. |
 
 ### Summary
 
-| Gate | Classification | Has Runtime Code? |
-|------|---------------|-------------------|
-| G-PROTOCOL | Mechanical ✅ | Yes — empty plan item check |
-| G-PARALLEL-DEPENDENCY | Mechanical ✅ | Yes — parallel dependency check |
-| G-PASS-WITH-HARD-VIOLATION | Mechanical ✅ | Yes — accept+hard_violations→reject |
-| G-ARCH-ESCAPE | Prompt-level | No |
-| G-SCOPE-WIDEN | Prompt-level (effectively) | No — scope checking exists but uses write_scope paths, not this gate |
-| G-SYNTHESIS-CHILD | Prompt-level | No |
-| G-UNSUPPORTED-FACT | Prompt-level | No |
-| G-CHECK-FAIL | Prompt-level | Partially — deterministic checks exist but under different names |
+| Gate                       | Classification             | Has Runtime Code?                                                    |
+| -------------------------- | -------------------------- | -------------------------------------------------------------------- |
+| G-PROTOCOL                 | Mechanical ✅              | Yes — empty plan item check                                          |
+| G-PARALLEL-DEPENDENCY      | Mechanical ✅              | Yes — parallel dependency check                                      |
+| G-PASS-WITH-HARD-VIOLATION | Mechanical ✅              | Yes — accept+hard_violations→reject                                  |
+| G-ARCH-ESCAPE              | Prompt-level               | No                                                                   |
+| G-SCOPE-WIDEN              | Prompt-level (effectively) | No — scope checking exists but uses write_scope paths, not this gate |
+| G-SYNTHESIS-CHILD          | Prompt-level               | No                                                                   |
+| G-UNSUPPORTED-FACT         | Prompt-level               | No                                                                   |
+| G-CHECK-FAIL               | Prompt-level               | Partially — deterministic checks exist but under different names     |
 
 ---
 
@@ -110,6 +110,7 @@ These are the **only three gates** that have actual mechanical enforcement in co
 **Recommendation: Keep both in `core/` but move them to a dedicated file** (e.g., `src/core/governance.rs` or `src/core/task_run/governance.rs`).
 
 **Rationale:**
+
 - `GovernanceLayer` powers `NodeOperation::governance_layer()` which is a genuine structural mapping (mechanical).
 - `GovernanceGate` powers `NodeOperation::active_hard_gates()` which is also structural.
 - Three of the gates do have mechanical enforcement in `tools.rs`.
@@ -117,28 +118,29 @@ These are the **only three gates** that have actual mechanical enforcement in co
 - However, the **descriptions** and **prompt text** (the `.description()` method and the `governance_prompt()` function) are purely prompt-level and belong in `harness/`.
 
 **Proposed split:**
+
 1. **In `core/`**: `GovernanceLayer` enum, `GovernanceGate` enum (without `.description()`), `NodeOperation::governance_layer()`, `NodeOperation::active_hard_gates()`.
 2. **In `harness/`**: The descriptions, the `governance_prompt()` function, and the prompt-building logic.
 3. **Alternative**: If the gate descriptions are never needed by `core/` mechanically, delete `.description()` entirely from core and move it to a harness-side lookup table.
 
 ### 3.2 Which gate checks stay in `core/` as concrete mechanical checks?
 
-| Check | Keep in core? | Where |
-|-------|--------------|-------|
-| Empty plan items → InvalidPlan (G-PROTOCOL) | ✅ Stay | `tools.rs` |
-| Parallel + requires_prior_results → InvalidPlan (G-PARALLEL-DEPENDENCY) | ✅ Stay | `tools.rs` |
-| Accept + hard_violations → Reject (G-PASS-WITH-HARD-VIOLATION) | ✅ Stay | `tools.rs` |
-| Write-scope out-of-bounds check | ✅ Stay | `engine.rs` (as `FailureClass::UnsafeSideEffect`, not as G-SCOPE-WIDEN) |
-| Empty output check | ✅ Stay | `engine.rs` (as `FailureClass::IncompleteOutput`, not as G-CHECK-FAIL) |
+| Check                                                                   | Keep in core? | Where                                                                   |
+| ----------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------- |
+| Empty plan items → InvalidPlan (G-PROTOCOL)                             | ✅ Stay       | `tools.rs`                                                              |
+| Parallel + requires_prior_results → InvalidPlan (G-PARALLEL-DEPENDENCY) | ✅ Stay       | `tools.rs`                                                              |
+| Accept + hard_violations → Reject (G-PASS-WITH-HARD-VIOLATION)          | ✅ Stay       | `tools.rs`                                                              |
+| Write-scope out-of-bounds check                                         | ✅ Stay       | `engine.rs` (as `FailureClass::UnsafeSideEffect`, not as G-SCOPE-WIDEN) |
+| Empty output check                                                      | ✅ Stay       | `engine.rs` (as `FailureClass::IncompleteOutput`, not as G-CHECK-FAIL)  |
 
 ### 3.3 Which gates can be deleted entirely?
 
-| Gate | Action | Rationale |
-|------|--------|-----------|
-| G-ARCH-ESCAPE | **Delete or move to harness** | No mechanical check. Only used in prompt text. |
-| G-SYNTHESIS-CHILD | **Delete or move to harness** | No mechanical check. Only used in prompt text. |
-| G-UNSUPPORTED-FACT | **Delete or move to harness** | No mechanical check. Only used in prompt text. |
-| G-CHECK-FAIL | **Delete or rename** | The name exists as prompt text, but the actual deterministic checks use different identifiers (`FailureClass`). If the intent is to have a catch-all "deterministic check failed" gate, it should be aligned with the actual failure classes. |
+| Gate               | Action                        | Rationale                                                                                                                                                                                                                                     |
+| ------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G-ARCH-ESCAPE      | **Delete or move to harness** | No mechanical check. Only used in prompt text.                                                                                                                                                                                                |
+| G-SYNTHESIS-CHILD  | **Delete or move to harness** | No mechanical check. Only used in prompt text.                                                                                                                                                                                                |
+| G-UNSUPPORTED-FACT | **Delete or move to harness** | No mechanical check. Only used in prompt text.                                                                                                                                                                                                |
+| G-CHECK-FAIL       | **Delete or rename**          | The name exists as prompt text, but the actual deterministic checks use different identifiers (`FailureClass`). If the intent is to have a catch-all "deterministic check failed" gate, it should be aligned with the actual failure classes. |
 
 **Specifically:** G-ARCH-ESCAPE, G-SYNTHESIS-CHILD, and G-UNSUPPORTED-FACT have **zero mechanical enforcement**. They are pure prompt decorations that tell the LLM what not to do, but the engine never checks them. They could be:
 
@@ -150,6 +152,7 @@ These are the **only three gates** that have actual mechanical enforcement in co
 **`core/` needs to know about three specific mechanical checks (G-PROTOCOL, G-PARALLEL-DEPENDENCY, G-PASS-WITH-HARD-VIOLATION) plus the operation-to-layer mapping.** It does **not** need to know about "governance" as a unifying concept with descriptions and prompt text.
 
 **What to keep in `core/`:**
+
 - `GovernanceLayer` enum (as a simple tag for which layer an operation runs under)
 - `GovernanceGate` enum (reduced to only the mechanically-enforced gates: Protocol, ParallelDependency, PassWithHardViolation, and maybe ScopeWiden if a mechanical check is added later)
 - `NodeOperation::governance_layer()` and `NodeOperation::active_hard_gates()` (or rename to `mechanical_checks()`)
@@ -157,6 +160,7 @@ These are the **only three gates** that have actual mechanical enforcement in co
 - The `InvalidPlan { gate: Option<GovernanceGate> }` variant (but only using the reduced set)
 
 **What to move to `harness/`:**
+
 - `GovernanceGate::description()` — prompt text for steering LLM behavior
 - `governance_prompt()` function in `harness.rs`
 - `EngineAgentGovernancePacket` and `EngineAgentGovernanceGatePacket` — these are serialization envelopes for the agent context; they could stay in core as data carriers but the descriptions they carry are prompt-level

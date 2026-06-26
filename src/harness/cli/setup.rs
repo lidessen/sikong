@@ -364,7 +364,7 @@ pub fn run_setup(json_output: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("{} Quick start:", console::style("[START]").green().bold());
     println!("   siko send \"analyze this\"     # Send a task");
-    println!("   siko assistant --acp       # ACP server for external tools");
+    println!("   siko acp                    # ACP server for external tools");
     if needs_api_key
         && std::env::var(match provider {
             "deepseek" => "DEEPSEEK_API_KEY",

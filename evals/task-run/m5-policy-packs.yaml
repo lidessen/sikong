@@ -7,7 +7,7 @@ expectation: |
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - "**/*"
   write_scope:
     - src/**/*.rs
   allow_write: true

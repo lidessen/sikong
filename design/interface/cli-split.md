@@ -58,6 +58,7 @@ Re-exports everything needed by `main.rs` and other harness modules:
 - `pub use` of key types from submodules if needed externally
 
 Contains:
+
 - `Cli` struct, `Command` enum + all 7 variants
 - `fn run_cli(cli: Cli) -> i32` — match dispatch to submodules
 - `CliOutput`, `print_json_output`, `print_json_data`, `print_json_error`
@@ -125,6 +126,7 @@ Submodules are independent — they do not call each other. The dispatch in
 5. Run `cargo test` and `cargo clippy` after each extracted submodule
 
 The migration preserves:
+
 - All imports (submodules use `use super::*;` for re-exported types)
 - All function signatures
 - All test names and coverage

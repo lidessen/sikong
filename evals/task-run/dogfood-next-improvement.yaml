@@ -30,7 +30,7 @@ expectation: |
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - "**/*"
   write_scope:
     - src/
   allow_write: true

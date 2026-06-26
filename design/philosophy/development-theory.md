@@ -60,6 +60,7 @@ rules, design philosophy, layer boundaries, terminal tool schemas, workspace
 semantics, dogfood policy.
 
 **Signal that indicates need:**
+
 - A new feature cannot be implemented without bending an existing protocol.
 - The same kind of drift appears in three different places — meaning the
   governance or design rule is too weak to prevent it.
@@ -94,6 +95,7 @@ protocol, workspace provider implementation, harnesses, terminal tool
 implementations, eval framework, metrics engine.
 
 **Signal that indicates need:**
+
 - An agent run fails with a protocol error or malformed payload
   (`G-PROTOCOL`).
 - A deterministic check in the engine is slow, brittle, or missing.
@@ -131,6 +133,7 @@ fixtures, structured output formats (JSON/JSONL), assistant pack injection, ACP
 protocol extensions, task-board tools.
 
 **Signal that indicates need:**
+
 - A user or external agent reports difficulty invoking a capability.
 - A CLI command produces unstructured output that must be parsed by another
   tool.
@@ -165,6 +168,7 @@ context packets, terminal tool usage patterns within one loop iteration,
 tool selection and call ordering in single runs.
 
 **Signal that indicates need:**
+
 - An agent run produces a valid but poor-quality result — the right structure
   but wrong content.
 - A specific operation repeatedly exceeds its token budget.
@@ -198,6 +202,7 @@ checklist refinement, drift signal detection, method feedback from live evals,
 development-theory updates.
 
 **Signal that indicates need:**
+
 - The same method feedback appears in consecutive dev-log entries (repeated
   learning).
 - A live eval passes but the operator later discovers a flaw that the eval
@@ -264,11 +269,11 @@ cleanups, prompt adjustments, interface polish.
 
 ### Depth Criteria
 
-| Depth | Scope | Verification | Risk | When to use |
-|-------|-------|--------------|------|-------------|
-| **Shallow** | < 50 lines changed, 1-2 files | `cargo build`, 1 deterministic test | Low — revert is trivial | Phase B, bug fixes, prompt adjustments |
-| **Medium** | 50-500 lines, 2-5 files | Full test suite, 1 focused live eval | Medium — needs review | New interface, new harness, protocol extension |
-| **Deep** | 500+ lines, 5+ files, design doc | Full test suite, 3+ live evals, metrics baseline check | High — needs design review first | Arch change, new engine capability, new workspace provider |
+| Depth       | Scope                            | Verification                                           | Risk                             | When to use                                                |
+| ----------- | -------------------------------- | ------------------------------------------------------ | -------------------------------- | ---------------------------------------------------------- |
+| **Shallow** | < 50 lines changed, 1-2 files    | `cargo build`, 1 deterministic test                    | Low — revert is trivial          | Phase B, bug fixes, prompt adjustments                     |
+| **Medium**  | 50-500 lines, 2-5 files          | Full test suite, 1 focused live eval                   | Medium — needs review            | New interface, new harness, protocol extension             |
+| **Deep**    | 500+ lines, 5+ files, design doc | Full test suite, 3+ live evals, metrics baseline check | High — needs design review first | Arch change, new engine capability, new workspace provider |
 
 ### "Done Enough" Checklist
 
@@ -400,10 +405,10 @@ Three rules to remember:
 
 Applying this theory to the project's current state:
 
-| Dimension | Current Signal | Next Action |
-|-----------|---------------|-------------|
-| D1 Arch | Governance model is current. Design docs are linked and reviewed. | Shallow pass: verify no drift signals are firing. |
-| D2 Engine | Recent work on cancellation notification, file store persistence, and Combine calibration is solid. Residual: shutdown drain window is hard-coded. | Deep pass candidate: configure the drain window or close the debt entry. |
-| D3 Interface | CLI commands exist for eval, metrics, dogfood. Metrics framework (M1-M6) is documented but implementation may not be complete. | Medium pass: verify metrics CLI commands compile and produce useful output. |
-| D4 Client/L0 | Operation harness prompts have been tightened through governance work. | Shallow pass: check that recent prompt changes did not increase token consumption (M1). |
-| D5 Meta | Dogfood loop has retrievable artifacts. Dev-log is detailed. Method feedback is recorded. | Shallow pass: review whether method feedback from the last 3 entries has been acted on. |
+| Dimension    | Current Signal                                                                                                                                     | Next Action                                                                             |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| D1 Arch      | Governance model is current. Design docs are linked and reviewed.                                                                                  | Shallow pass: verify no drift signals are firing.                                       |
+| D2 Engine    | Recent work on cancellation notification, file store persistence, and Combine calibration is solid. Residual: shutdown drain window is hard-coded. | Deep pass candidate: configure the drain window or close the debt entry.                |
+| D3 Interface | CLI commands exist for eval, metrics, dogfood. Metrics framework (M1-M6) is documented but implementation may not be complete.                     | Medium pass: verify metrics CLI commands compile and produce useful output.             |
+| D4 Client/L0 | Operation harness prompts have been tightened through governance work.                                                                             | Shallow pass: check that recent prompt changes did not increase token consumption (M1). |
+| D5 Meta      | Dogfood loop has retrievable artifacts. Dev-log is detailed. Method feedback is recorded.                                                          | Shallow pass: review whether method feedback from the last 3 entries has been acted on. |

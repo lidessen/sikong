@@ -25,7 +25,7 @@ expectation: |
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - "**/*"
   write_scope:
     - packages/agent-loop/src/providers/index.ts
     - packages/agent-host/src/agent-loop-worker.ts

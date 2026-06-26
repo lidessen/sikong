@@ -2,6 +2,7 @@
 
 **Date**: 2026-07-01
 **Source Files Analyzed**:
+
 - `design/philosophy/prompt-guidance.md` (attention layering theory)
 - `design/philosophy/development-philosophy.md` (design philosophy)
 - `src/core/task_run/harness.rs` (operation prompt definitions)
@@ -15,92 +16,92 @@
 
 ### Specify — 13 sections
 
-| # | Section | Tag | Notes |
-|---|---------|-----|-------|
-| 1 | Role | **L0-required** | One-sentence operation responsibility |
-| 2 | Operation Context | **L0-required** | Structured JSON injected directly |
-| 3 | Node To Specify | **L0-required** | Operation-specific lens |
-| 4 | Specification Standard | **L0-required** | Rubric for the result |
-| 5 | Attention Contract | **L0-required** | Operation-specific attention boundary |
-| 6 | Governance Boundary | **L2/L3 leak** | Durable governance model — same text projected into every operation; engine already enforces via state machine and schema |
-| 7 | Size Reading | **L0-required** | Size-selection guidance specific to Specify |
-| 8 | Evidence Surface Reading | **L0-required** | Evidence-boundary guidance specific to Specify |
-| 9 | Medium Versus Large | **L0-required** | Disambiguation specific to Specify |
-| 10 | Boundary | **L0-required** | Info-gathering boundary specific to Specify |
-| 11 | Tool Use Discipline | **L0-required** | Tool behavior specific to Specify |
-| 12 | Non Goals | **L2/L3 leak** | Defensive "do not" list — terminal `submit_specification` schema already constrains output; teaching the agent what NOT to do adds cognitive load without binding execution |
-| 13 | Completion | **L0-required** | Terminal tool names |
+| #   | Section                  | Tag             | Notes                                                                                                                                                                       |
+| --- | ------------------------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Role                     | **L0-required** | One-sentence operation responsibility                                                                                                                                       |
+| 2   | Operation Context        | **L0-required** | Structured JSON injected directly                                                                                                                                           |
+| 3   | Node To Specify          | **L0-required** | Operation-specific lens                                                                                                                                                     |
+| 4   | Specification Standard   | **L0-required** | Rubric for the result                                                                                                                                                       |
+| 5   | Attention Contract       | **L0-required** | Operation-specific attention boundary                                                                                                                                       |
+| 6   | Governance Boundary      | **L2/L3 leak**  | Durable governance model — same text projected into every operation; engine already enforces via state machine and schema                                                   |
+| 7   | Size Reading             | **L0-required** | Size-selection guidance specific to Specify                                                                                                                                 |
+| 8   | Evidence Surface Reading | **L0-required** | Evidence-boundary guidance specific to Specify                                                                                                                              |
+| 9   | Medium Versus Large      | **L0-required** | Disambiguation specific to Specify                                                                                                                                          |
+| 10  | Boundary                 | **L0-required** | Info-gathering boundary specific to Specify                                                                                                                                 |
+| 11  | Tool Use Discipline      | **L0-required** | Tool behavior specific to Specify                                                                                                                                           |
+| 12  | Non Goals                | **L2/L3 leak**  | Defensive "do not" list — terminal `submit_specification` schema already constrains output; teaching the agent what NOT to do adds cognitive load without binding execution |
+| 13  | Completion               | **L0-required** | Terminal tool names                                                                                                                                                         |
 
 ### Plan — 13 sections
 
-| # | Section | Tag | Notes |
-|---|---------|-----|-------|
-| 1 | Role | **L0-required** | |
-| 2 | Operation Context | **L0-required** | |
-| 3 | Parent Problem | **L0-required** | |
-| 4 | Planning Lens | **L0-required** | (has some teaching prose — condense) |
-| 5 | Governance Boundary | **L2/L3 leak** | Same as Specify |
-| 6 | Leverage Parent Context | **L0-required** | |
-| 7 | Divide And Attention | **L0-required** | (has some teaching prose — condense) |
-| 8 | Group Shape | **L0-required** | |
-| 9 | Planning Strategy | **L0-required** | (has some teaching prose — condense) |
-| 10 | Plan Item Shape | **L0-required** | Schema-like guidance for plan item fields |
-| 11 | Recursive Decomposition | **L0-required** | Operation-specific policy |
-| 12 | Non Goals | **L2/L3 leak** | Defensive list, same as Specify |
-| 13 | Completion | **L0-required** | |
+| #   | Section                 | Tag             | Notes                                     |
+| --- | ----------------------- | --------------- | ----------------------------------------- |
+| 1   | Role                    | **L0-required** |                                           |
+| 2   | Operation Context       | **L0-required** |                                           |
+| 3   | Parent Problem          | **L0-required** |                                           |
+| 4   | Planning Lens           | **L0-required** | (has some teaching prose — condense)      |
+| 5   | Governance Boundary     | **L2/L3 leak**  | Same as Specify                           |
+| 6   | Leverage Parent Context | **L0-required** |                                           |
+| 7   | Divide And Attention    | **L0-required** | (has some teaching prose — condense)      |
+| 8   | Group Shape             | **L0-required** |                                           |
+| 9   | Planning Strategy       | **L0-required** | (has some teaching prose — condense)      |
+| 10  | Plan Item Shape         | **L0-required** | Schema-like guidance for plan item fields |
+| 11  | Recursive Decomposition | **L0-required** | Operation-specific policy                 |
+| 12  | Non Goals               | **L2/L3 leak**  | Defensive list, same as Specify           |
+| 13  | Completion              | **L0-required** |                                           |
 
 ### Execute — 10 sections
 
-| # | Section | Tag | Notes |
-|---|---------|-----|-------|
-| 1 | Role | **L0-required** | |
-| 2 | Operation Context | **L0-required** | |
-| 3 | Work Item | **L0-required** | |
-| 4 | Workspace Rules | **L0-required** | Operation-specific constraint |
-| 5 | Self Contained Work | **L0-required** | |
-| 6 | External Evidence | **L0-required** | |
-| 7 | Execution Standard | **L0-required** | |
-| 8 | Governance Boundary | **L2/L3 leak** | Same as all others |
-| 9 | Local Autonomy | **L0-required** | |
-| 10 | Completion | **L0-required** | |
+| #   | Section             | Tag             | Notes                         |
+| --- | ------------------- | --------------- | ----------------------------- |
+| 1   | Role                | **L0-required** |                               |
+| 2   | Operation Context   | **L0-required** |                               |
+| 3   | Work Item           | **L0-required** |                               |
+| 4   | Workspace Rules     | **L0-required** | Operation-specific constraint |
+| 5   | Self Contained Work | **L0-required** |                               |
+| 6   | External Evidence   | **L0-required** |                               |
+| 7   | Execution Standard  | **L0-required** |                               |
+| 8   | Governance Boundary | **L2/L3 leak**  | Same as all others            |
+| 9   | Local Autonomy      | **L0-required** |                               |
+| 10  | Completion          | **L0-required** |                               |
 
 ### Combine — 9 sections
 
-| # | Section | Tag | Notes |
-|---|---------|-----|-------|
-| 1 | Role | **L0-required** | |
-| 2 | Operation Context | **L0-required** | |
-| 3 | Integration Inputs | **L0-required** | |
-| 4 | Workspace Integration | **L0-required** | |
-| 5 | Parent Synthesis Standard | **L0-required** | |
-| 6 | Governance Boundary | **L2/L3 leak** | Same |
-| 7 | Parent Attention | **L0-required** | |
-| 8 | Non Goals | **L2/L3 leak** | Same |
-| 9 | Completion | **L0-required** | |
+| #   | Section                   | Tag             | Notes |
+| --- | ------------------------- | --------------- | ----- |
+| 1   | Role                      | **L0-required** |       |
+| 2   | Operation Context         | **L0-required** |       |
+| 3   | Integration Inputs        | **L0-required** |       |
+| 4   | Workspace Integration     | **L0-required** |       |
+| 5   | Parent Synthesis Standard | **L0-required** |       |
+| 6   | Governance Boundary       | **L2/L3 leak**  | Same  |
+| 7   | Parent Attention          | **L0-required** |       |
+| 8   | Non Goals                 | **L2/L3 leak**  | Same  |
+| 9   | Completion                | **L0-required** |       |
 
 ### Verify — 9 sections
 
-| # | Section | Tag | Notes |
-|---|---------|-----|-------|
-| 1 | Role | **L0-required** | |
-| 2 | Operation Context | **L0-required** | |
-| 3 | Candidate Under Review | **L0-required** | |
-| 4 | Verification Lens | **L0-required** | |
-| 5 | Verdict Standard | **L0-required** | |
-| 6 | External Evidence Gate | **L0-required** | |
-| 7 | Governance Boundary | **L2/L3 leak** | Same |
-| 8 | Boundary | **L0-required** | (borderline — could merge with Verdict Standard) |
-| 9 | Completion | **L0-required** | |
+| #   | Section                | Tag             | Notes                                            |
+| --- | ---------------------- | --------------- | ------------------------------------------------ |
+| 1   | Role                   | **L0-required** |                                                  |
+| 2   | Operation Context      | **L0-required** |                                                  |
+| 3   | Candidate Under Review | **L0-required** |                                                  |
+| 4   | Verification Lens      | **L0-required** |                                                  |
+| 5   | Verdict Standard       | **L0-required** |                                                  |
+| 6   | External Evidence Gate | **L0-required** |                                                  |
+| 7   | Governance Boundary    | **L2/L3 leak**  | Same                                             |
+| 8   | Boundary               | **L0-required** | (borderline — could merge with Verdict Standard) |
+| 9   | Completion             | **L0-required** |                                                  |
 
 ---
 
 ## 2. Leak Summary
 
-| Leak Pattern | Operations Affected | Proposed Action |
-|---|---|---|
-| **Governance Boundary** | ALL 5 operations | **Delete from prompts entirely.** Governance is an engine-layer invariant, not agent instruction. The engine enforces gates via state machine and terminal tool decoding. Putting it in every prompt is L3 (durable design knowledge) projected into L0 (one run). The agent doesn't need to know gate IDs — it just needs to know which terminal tool completes the run. If the engine rejects an action, the agent retries. |
-| **Non Goals** | Specify, Plan, Combine | **Delete from prompts.** Defensive "do not" lists teach the model that forbidden things are expected fields. The terminal tool schema already defines what the agent CAN do; that implicitly defines what it cannot. `submit_specification` doesn't accept plan items, so the agent can't submit them. Adding prose is teaching, not constraining. |
-| **Teaching prose in Planning Lens, Divide And Attention, Planning Strategy** | Plan | **Merge/condense.** These three sections contain ~80% operation-specific guidance and ~20% teaching about "why divide and conquer works." Keep only the actionable guidance: group mode rules, item shape schema, recursion policy. Move explanatory prose to design docs. |
+| Leak Pattern                                                                 | Operations Affected    | Proposed Action                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Governance Boundary**                                                      | ALL 5 operations       | **Delete from prompts entirely.** Governance is an engine-layer invariant, not agent instruction. The engine enforces gates via state machine and terminal tool decoding. Putting it in every prompt is L3 (durable design knowledge) projected into L0 (one run). The agent doesn't need to know gate IDs — it just needs to know which terminal tool completes the run. If the engine rejects an action, the agent retries. |
+| **Non Goals**                                                                | Specify, Plan, Combine | **Delete from prompts.** Defensive "do not" lists teach the model that forbidden things are expected fields. The terminal tool schema already defines what the agent CAN do; that implicitly defines what it cannot. `submit_specification` doesn't accept plan items, so the agent can't submit them. Adding prose is teaching, not constraining.                                                                            |
+| **Teaching prose in Planning Lens, Divide And Attention, Planning Strategy** | Plan                   | **Merge/condense.** These three sections contain ~80% operation-specific guidance and ~20% teaching about "why divide and conquer works." Keep only the actionable guidance: group mode rules, item shape schema, recursion policy. Move explanatory prose to design docs.                                                                                                                                                    |
 
 ---
 
@@ -299,33 +300,33 @@
 
 ## 4. What To Delete (Summary)
 
-| Section | Reason | Operations |
-|---|---|---|
-| Governance Boundary | Durable design knowledge (L3) projected into every L0 run. Engine enforces gates deterministically. Agent does not need gate IDs or authority-layer names to execute. | All 5 |
-| Non Goals | Defensive "do not" pattern — teaches model forbidden fields exist. Terminal schema already defines what is possible. | Specify, Plan, Combine |
-| Tool Use Discipline (Specify) | Redundant with completion section and tool schema. Condensed into one constraint line. | Specify |
+| Section                       | Reason                                                                                                                                                                | Operations             |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| Governance Boundary           | Durable design knowledge (L3) projected into every L0 run. Engine enforces gates deterministically. Agent does not need gate IDs or authority-layer names to execute. | All 5                  |
+| Non Goals                     | Defensive "do not" pattern — teaches model forbidden fields exist. Terminal schema already defines what is possible.                                                  | Specify, Plan, Combine |
+| Tool Use Discipline (Specify) | Redundant with completion section and tool schema. Condensed into one constraint line.                                                                                | Specify                |
 
 ## 5. What To Merge/Consolidate
 
-| Current Sections | Proposed Section | Principle |
-|---|---|---|
-| Planning Lens + Divide And Attention + Planning Strategy | Group Rules | All three give rules for how to shape the child group. Merge into one actionable section. |
-| Plan Item Shape + Recursive Decomposition | Item Shape | Both describe plan item structure and depth policy. |
-| Self Contained Work + External Evidence + Execution Standard + Local Autonomy | Constraints | All are execution-time rules, not separate lenses. One constraint section is enough. |
-| Parent Attention | (into Constraints) | Same role guidance for Combine. |
-| Verification Lens + External Evidence Gate + Boundary | Constraints | Same kind of constraint rules. |
-| Evidence Surface Reading + Medium Versus Large | (into Size Selection) | Both disambiguate size choice. One section. |
-| Leverage Parent Context | (into Constraint) | Tool-use boundary for planning. |
+| Current Sections                                                              | Proposed Section      | Principle                                                                                 |
+| ----------------------------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------- |
+| Planning Lens + Divide And Attention + Planning Strategy                      | Group Rules           | All three give rules for how to shape the child group. Merge into one actionable section. |
+| Plan Item Shape + Recursive Decomposition                                     | Item Shape            | Both describe plan item structure and depth policy.                                       |
+| Self Contained Work + External Evidence + Execution Standard + Local Autonomy | Constraints           | All are execution-time rules, not separate lenses. One constraint section is enough.      |
+| Parent Attention                                                              | (into Constraints)    | Same role guidance for Combine.                                                           |
+| Verification Lens + External Evidence Gate + Boundary                         | Constraints           | Same kind of constraint rules.                                                            |
+| Evidence Surface Reading + Medium Versus Large                                | (into Size Selection) | Both disambiguate size choice. One section.                                               |
+| Leverage Parent Context                                                       | (into Constraint)     | Tool-use boundary for planning.                                                           |
 
 ## 6. Net Reduction
 
 | Operation | Current Sections | Proposed Sections | Reduction |
-|---|---|---|---|
-| Specify | 13 | 7 | -6 |
-| Plan | 13 | 8 | -5 |
-| Execute | 10 | 7 | -3 |
-| Combine | 9 | 7 | -2 |
-| Verify | 9 | 7 | -2 |
+| --------- | ---------------- | ----------------- | --------- |
+| Specify   | 13               | 7                 | -6        |
+| Plan      | 13               | 8                 | -5        |
+| Execute   | 10               | 7                 | -3        |
+| Combine   | 9                | 7                 | -2        |
+| Verify    | 9                | 7                 | -2        |
 
 Total: from 54 sections → 36 sections (33% reduction in prompt surface area).
 
@@ -337,6 +338,7 @@ The proposed scheme applies the core principle from `prompt-guidance.md`:
 > **"Prompt is for working, not teaching — agent only needs to know what to do for the current operation."**
 
 Every deleted section is either:
+
 - **Durable design knowledge** (Governance Boundary, explanatory prose about "why divide-and-conquer works") that belongs in L3 design docs, not in every L0 agent run.
 - **Defensive prohibition** (Non Goals) that the terminal schema already enforces. Teaching the model what NOT to do creates the Slots Problem: forbidden examples make the model believe those fields are expected.
 - **Redundant framing** (Tool Use Discipline) that duplicates information available in the Completion section and tool schema.
@@ -344,6 +346,7 @@ Every deleted section is either:
 The merged sections consolidate related rules into one place, reducing section scanning without losing information. The "Constraints" section in each operation replaces 2-4 scattered boundary sections with one named location, following the principle: stable section titles, clear boundaries, no surprises.
 
 The remaining sections map directly to the recommended order from prompt-guidance.md:
+
 1. Role
 2. Operation Context
 3. operation-specific content (Objective, Standard/Rubric)

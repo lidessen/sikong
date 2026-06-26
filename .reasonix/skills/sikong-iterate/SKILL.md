@@ -64,8 +64,9 @@ Request:
 <bounded task text>"
 ```
 
-Use `--wait-ms 0` when creating a background task. Use the default wait when
-you want the initial assistant response inline.
+`siko send` ensures the daemon is running before submitting the task. Use
+`--wait-ms 0` for background submission when the parent wants to inspect with
+`siko task inspect` instead of waiting inline.
 
 ### Inspection
 

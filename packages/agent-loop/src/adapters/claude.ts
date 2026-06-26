@@ -1002,6 +1002,7 @@ export function fillEstimatedOutput(
   streamState: { streamedText: string; streamedThinking: string },
 ): ClaudeUsage {
   const chars = streamState.streamedText.length + streamState.streamedThinking.length;
+  if (chars === 0) return usage;
 
   // DeepSeek's Anthropic-compatible endpoint reports token usage only in the
   // final result message. When the run stops before that (terminal tool call),

@@ -210,14 +210,17 @@ the task-run engine still applies `Specify`, `Plan`, `Execute`, `Combine`,
 
 ## Closed Development Loop
 
-A complete dogfood cycle is an operating loop around one accepted task-run
-artifact. It is deliberately reviewable instead of fully autonomous:
+A complete daily dogfood cycle is an operating loop around one accepted
+assistant task-board artifact. It is deliberately reviewable instead of fully
+autonomous:
 
 ```text
-name mainline and layer -> scope scenario -> run live eval
-  -> inspect transcript and artifact sidecars -> accept one bounded change
+name mainline and layer -> create bounded task with siko send
+  -> inspect task history and artifacts with siko task inspect
+  -> accept one bounded change
   -> apply in the main workspace -> run deterministic checks
-  -> build/update runtime when needed -> rerun focused live eval
+  -> build/update runtime when needed
+  -> rerun focused regression eval only when the changed surface needs it
   -> commit -> record learning
 ```
 
@@ -237,11 +240,15 @@ Use this when Sikong is analyzing, reviewing, or drafting design text.
 Example:
 
 ```bash
-SIKONG_RUN_LIVE_AGENT_TESTS=1 SIKONG_AGENT_HOST_PROVIDER=deepseek \
-SIKONG_AGENT_HOST_RUNTIME=claude-code RUST_LOG=siko=info \
-cargo run --quiet -- eval task-run-split \
-  --scenario-file evals/task-run/dogfood-doc-review.yaml \
-  --artifact-dir /tmp/siko-dogfood-artifacts --json
+siko send --no-allow-write "Sikong self-development task:
+Mainline: review one bounded Sikong design or implementation surface.
+Owning layer: design.
+Parent acceptance evidence: file-backed findings and explicit blocker text if the boundary cannot be preserved.
+Child autonomy boundary: investigate and propose; do not edit files.
+Upward artifact: review report or patch proposal.
+
+Request:
+<bounded review request>"
 ```
 
 ### Patch-Proposal Mode
@@ -257,9 +264,9 @@ mutation is not yet trusted for the slice.
 - Acceptance: the operator applies the accepted patch through the normal main
   agent/editor path, then runs deterministic checks.
 
-This is the current default for daily self-development. It lets Sikong do the
-local investigation and proposal work while the operator owns the final edit and
-commit decision.
+This is the current default for daily self-development through `siko send`. It
+lets Sikong do the local investigation and proposal work while the operator owns
+the final edit and commit decision.
 
 ### Apply Mode
 
@@ -316,11 +323,13 @@ rebuilt and exercised.
 
 Commit only after:
 
-- the accepted artifact or patch is retrievable from `--artifact-dir` or the
-  transcript;
+- the accepted artifact or patch is retrievable from `siko task inspect`; eval
+  sidecars under `--artifact-dir` are needed only for eval-based regression
+  runs;
 - deterministic checks pass for the touched surface;
 - runtime host is rebuilt when runtime code changed;
-- at least one focused live eval reruns the behavior that motivated the change;
+- at least one focused live eval reruns the behavior that motivated the change
+  when runtime, prompt, routing, or host behavior changed;
 - `development-log/YYYY-MM.md` records the command, result, and remaining risk.
 
 ## Runtime And Cost Policy
@@ -371,7 +380,9 @@ history replaces it.
 
 ## Live Eval Strategy
 
-Dogfood live eval should have two levels.
+Dogfood live eval is an internal regression and diagnostic surface, not the
+daily task intake path. Daily work should enter through `siko send` and be
+reviewed with `siko task inspect`. Live eval should have two levels.
 
 ### Cheap Routing Eval
 
@@ -400,11 +411,13 @@ cargo run --quiet -- eval task-run-split \
   --artifact-dir /tmp/siko-dogfood-artifacts --json
 ```
 
-Use `evals/task-run/dogfood-next-improvement.yaml` as the standing
-review-only entrypoint for deciding the next self-development slice. It should
-produce exactly one bounded patch proposal, not a broad roadmap. The operator
-can then accept that proposal, apply the bounded change in the main workspace,
-run deterministic checks, and rerun the focused live eval named by the artifact.
+Use `siko send` as the standing review-only entrypoint for deciding the next
+self-development slice. A task should produce exactly one bounded patch
+proposal, not a broad roadmap. The operator can then accept that proposal, apply
+the bounded change in the main workspace, run deterministic checks, and rerun a
+focused live eval only when the changed runtime or prompt behavior needs
+regression evidence. `evals/task-run/dogfood-next-improvement.yaml` remains a
+regression fixture for checking that behavior, not the normal intake path.
 
 Use `current-file-system` when the task must see uncommitted or untracked files
 in the current workspace. Use `current-git` when the task should inspect a clean
@@ -465,10 +478,10 @@ Sikong has a useful dogfood loop when:
 ## Implementation Sequence
 
 1. Treat this document as the dogfood design contract.
-2. Run review-only dogfood with artifact sidecars before editing broad design
-   or runtime surfaces.
-3. Use `evals/task-run/dogfood-next-improvement.yaml` to choose the next
-   bounded self-development slice from current dogfood evidence.
+2. Run review-only dogfood through `siko send` before editing broad design or
+   runtime surfaces.
+3. Use task-board evidence from `siko task inspect` to choose the next bounded
+   self-development slice.
 4. Add a route/plan-only dogfood eval for `sikong-project-analysis` and similar
    self-development requests. Initial support exists through
    `evals/task-run/dogfood-route-only.yaml` and `task-run-split --route-only`.

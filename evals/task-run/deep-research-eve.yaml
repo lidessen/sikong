@@ -31,7 +31,7 @@ expectation: |
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - "**/*"
   write_scope:
     - development-log/
   allow_write: true

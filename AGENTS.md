@@ -8,24 +8,24 @@ This repository contains a single Rust-based mainline implementation.
 
 - `src/` contains the Rust `siko` engine, assistant, task manager, single-task
   run harnesses/tools, workspace providers, and agent run scheduler.
-    - `src/main.rs` — binary entrypoint (parses CLI args, delegates to harness)
-    - `src/lib.rs` — public API surface re-exporting all modules
+  - `src/main.rs` — binary entrypoint (parses CLI args, delegates to harness)
+  - `src/lib.rs` — public API surface re-exporting all modules
 - `src/core/` contains the engine, task run, task board, and agent run:
-    - `src/core/task_run/` — recursive engine, operation harness, problem tree,
-      node plan/execute/combine/verify, resource bookkeeping, agent-run tools
-    - `src/core/task_board/` — assistant-facing task board types, stores,
-      queueing, cancellation, task-level dispatch
-    - `src/core/agent_run/` — agent run request/response, scheduler,
-      cancellation tokens
+  - `src/core/task_run/` — recursive engine, operation harness, problem tree,
+    node plan/execute/combine/verify, resource bookkeeping, agent-run tools
+  - `src/core/task_board/` — assistant-facing task board types, stores,
+    queueing, cancellation, task-level dispatch
+  - `src/core/agent_run/` — agent run request/response, scheduler,
+    cancellation tokens
 - `src/harness/` contains CLI, governance, and assistant loop harnesses:
-    - `src/harness/cli.rs` — CLI subcommand dispatch (run, assistant, eval, etc.)
-    - `src/harness/governance.rs` — governance gates and layers
-    - `src/harness/assistant/` — ACP server, session, assistant tools, context
+  - `src/harness/cli.rs` — CLI subcommand dispatch (run, assistant, eval, etc.)
+  - `src/harness/governance.rs` — governance gates and layers
+  - `src/harness/assistant/` — ACP server, session, assistant tools, context
 - `src/common/` contains shared primitives:
-    - `src/common/workspace/` — FileSystem, GitFileSystem, Memory, WorkspaceSurface
-    - `src/common/config.rs` — SikoConfig, per-provider config
-    - `src/common/metrics.rs` — MetricsCollection and recording
-    - `src/common/types.rs` — common type aliases (NodeId, ArtifactId)
+  - `src/common/workspace/` — FileSystem, GitFileSystem, Memory, WorkspaceSurface
+  - `src/common/config.rs` — SikoConfig, per-provider config
+  - `src/common/metrics.rs` — MetricsCollection and recording
+  - `src/common/types.rs` — common type aliases (NodeId, ArtifactId)
 - `crates/siko-macros/` contains Rust proc macros used by the new tool
   definition layer.
 - `packages/agent-host/` contains the current external agent process used by
@@ -154,19 +154,19 @@ driven.
 - For live evals, make the judge finish through a terminal judgement tool, but
   put the transcript/eval context in the prompt section. Prefer
   `passed/findings/evidence` over score-like outputs.
-- Use live eval as Sikong's dogfood loop: run realistic current-repo scenarios,
-  classify transcript evidence before trusting the agent-written report, make
-  one bounded improvement, re-run focused checks, and record reusable feedback
-  in `development-log/YYYY-MM.md`.
+- Use `siko send` plus `siko task inspect` as Sikong's daily dogfood loop: run
+  realistic current-repo tasks, classify task-event and artifact evidence before
+  trusting the agent-written report, make one bounded improvement, re-run
+  focused checks, and record reusable feedback in `development-log/YYYY-MM.md`.
 - Dogfood runs must follow the attention contract in `design/philosophy/dogfood.md`:
   name the mainline, owning layer, parent acceptance evidence, child autonomy
   boundary, and upward artifact before broad self-development work. Use child
   runs to own local evidence surfaces; the parent should integrate or reject
   compressed artifacts, not watch every local detail.
-- For dogfood tasks, prefer `eval task-run-split --scenario-file ... --artifact-dir ...`
-  when a human needs to review the accepted artifact. The JSON transcript is
-  intentionally compact; artifact sidecars are the review surface for reports,
-  proposed docs, and patch proposals.
+- Use `eval task-run-split --scenario-file ... --artifact-dir ...` only for
+  internal regression or diagnostic runs, not normal task intake. In those eval
+  runs, the JSON transcript is intentionally compact; artifact sidecars are the
+  review surface for reports, proposed docs, and patch proposals.
 - If dogfood work changes `packages/agent-host`, `packages/agent-loop`, or Rust
   launch/config behavior for the external host, rebuild the runtime host with
   `bun run build:agent-host` and rerun a focused live eval using the updated

@@ -28,7 +28,7 @@ expectation: |
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - "**/*"
   write_scope:
     - scripts/build-release-rust.sh
     - packages/agent-host/package.json

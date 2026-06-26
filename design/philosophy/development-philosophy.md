@@ -67,6 +67,7 @@ After (agent as node):
 ```
 
 The orchestration code is **deterministic, testable, and stable**. It defines:
+
 - what the problem is (goal);
 - what the agent may and may not do (boundary, tools, terminal contracts);
 - how to tell if the result is acceptable (verification gates).
@@ -90,6 +91,7 @@ complex heuristic code + brittle edge-case handling
 ```
 
 Because:
+
 - orchestration code has no edge cases — it delegates gray areas to the agent;
 - the agent has no special-case logic — it reasons about whatever it receives;
 - the boundary between them is explicit, typed, and testable (terminal tools,
@@ -111,6 +113,7 @@ gates before it becomes durable state. A hallucinated file path, a wrong
 analysis, or an invalid plan is rejected — not propagated.
 
 This means:
+
 - adding an agent does not weaken the system's guarantees;
 - the verification layer catches agent mistakes the same way it catches
   programmer mistakes;
@@ -140,6 +143,7 @@ configuration, more failure modes, more code paths — you are using it
 wrong. The agent should **replace** complex code, not sit alongside it.
 
 Signs of wrong integration:
+
 - the system has both an agent path AND a hard-coded heuristic path for
   the same decision;
 - there are prompt templates, configuration knobs, and fallback logic that
@@ -149,6 +153,7 @@ Signs of wrong integration:
 - verification is weak or absent, so agent output is trusted by default.
 
 The right integration signs:
+
 - the deterministic parts are smaller and more testable than before;
 - the agent's boundaries are defined by a few typed schemas and terminal
   tools;
@@ -160,14 +165,14 @@ The right integration signs:
 
 Sikong is a direct application of this principle:
 
-| Layer | Deterministic (Rust) | Intelligent (Bun agent) |
-|-------|---------------------|------------------------|
-| Task orchestration | Engine state machine, node scheduling, resource lifecycle | — |
-| Problem solving | — | Operation harnesses (Specify/Plan/Execute/Combine/Verify) |
-| Workspace | Snapshot, capture, merge, cleanup | — |
-| Agent execution | — | Tool calls, file reads/writes, shell commands, reasoning |
-| Verification | Scope gates, deterministic checks, protocol validation | Judge eval, verifier judgment |
-| Persistence | Task store, event log, artifact storage | — |
+| Layer              | Deterministic (Rust)                                      | Intelligent (Bun agent)                                   |
+| ------------------ | --------------------------------------------------------- | --------------------------------------------------------- |
+| Task orchestration | Engine state machine, node scheduling, resource lifecycle | —                                                         |
+| Problem solving    | —                                                         | Operation harnesses (Specify/Plan/Execute/Combine/Verify) |
+| Workspace          | Snapshot, capture, merge, cleanup                         | —                                                         |
+| Agent execution    | —                                                         | Tool calls, file reads/writes, shell commands, reasoning  |
+| Verification       | Scope gates, deterministic checks, protocol validation    | Judge eval, verifier judgment                             |
+| Persistence        | Task store, event log, artifact storage                   | —                                                         |
 
 The Rust-to-Bun boundary is the orchestration-to-agent boundary.
 Rust owns what is deterministic; the agent owns what requires judgment.

@@ -28,14 +28,14 @@ Every metrics-collecting run records the following computed metrics, derived fro
 
 ### Metric Definitions
 
-| # | Metric | Formula | Unit | Purpose |
-|---|--------|---------|------|---------|
-| M1 | **Token Efficiency** | `(total_input_tokens + total_output_tokens) / max(content_chars, 1)` | tokens/char | How many tokens the engine spends per character of final accepted artifact. Lower is better. |
-| M2 | **Time Efficiency** | `total_duration_ms / max(content_chars, 1)` | ms/char | Wall-clock speed per character of output. Lower is better. |
-| M3 | **Cost Efficiency** | `(input_tokens * input_price + output_tokens * output_price + cache_creation_tokens * cache_write_price) / max(content_chars, 1)` | $/char | Estimated monetary cost per output character. Uses configurable price constants (see §Price Constants). |
-| M4 | **Quality-Adjusted Efficiency** | `M3 * (1 - quality_bonus)` where `quality_bonus = 0.0` if judge fails, `0.25` if judge passes | $/char (adjusted) | Cost efficiency penalized when the judge rejects the result, or rewarded when it passes. |
-| M5 | **Cache Effectiveness** | `sum(cache_read_tokens) / max(sum(input_tokens) + sum(cache_read_tokens), 1) * 100` | % | What fraction of prompt tokens were served from cache. Higher means better reuse. |
-| M6 | **Comparative Baseline Delta** | `M1_current - M1_baseline` (similarly for M2, M3, M4) | varies | Absolute difference from a stored baseline for the same scenario + provider + runtime profile combination. |
+| #   | Metric                          | Formula                                                                                                                           | Unit              | Purpose                                                                                                    |
+| --- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| M1  | **Token Efficiency**            | `(total_input_tokens + total_output_tokens) / max(content_chars, 1)`                                                              | tokens/char       | How many tokens the engine spends per character of final accepted artifact. Lower is better.               |
+| M2  | **Time Efficiency**             | `total_duration_ms / max(content_chars, 1)`                                                                                       | ms/char           | Wall-clock speed per character of output. Lower is better.                                                 |
+| M3  | **Cost Efficiency**             | `(input_tokens * input_price + output_tokens * output_price + cache_creation_tokens * cache_write_price) / max(content_chars, 1)` | $/char            | Estimated monetary cost per output character. Uses configurable price constants (see §Price Constants).    |
+| M4  | **Quality-Adjusted Efficiency** | `M3 * (1 - quality_bonus)` where `quality_bonus = 0.0` if judge fails, `0.25` if judge passes                                     | $/char (adjusted) | Cost efficiency penalized when the judge rejects the result, or rewarded when it passes.                   |
+| M5  | **Cache Effectiveness**         | `sum(cache_read_tokens) / max(sum(input_tokens) + sum(cache_read_tokens), 1) * 100`                                               | %                 | What fraction of prompt tokens were served from cache. Higher means better reuse.                          |
+| M6  | **Comparative Baseline Delta**  | `M1_current - M1_baseline` (similarly for M2, M3, M4)                                                                             | varies            | Absolute difference from a stored baseline for the same scenario + provider + runtime profile combination. |
 
 ### Raw Data Sources
 
@@ -112,28 +112,28 @@ benchmark:
 
 ### Benchmark Fields
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `benchmark.category` | string | yes | Semantic category: `comprehension`, `code-gen`, `design`, `review`, `routing`, `planning` |
-| `benchmark.min_tolerance_tokens` | integer | no | Floor below which token count is suspiciously low (may indicate degenerate output). |
-| `benchmark.max_tolerance_tokens` | integer | no | Ceiling above which token count triggers a warning in reports. |
-| `benchmark.min_tolerance_ms` | integer | no | Suspiciously fast run floor. |
-| `benchmark.max_tolerance_ms` | integer | no | Suspiciously slow run ceiling. |
-| `benchmark.min_content_length` | integer | no | Minimum acceptable artifact character count. |
-| `benchmark.tags` | string[] | no | Free-form labels for filtering and grouping: `baseline`, `regression`, `smoke`, `nightly`, `provider-a-vs-b`. |
+| Field                            | Type     | Required | Description                                                                                                   |
+| -------------------------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `benchmark.category`             | string   | yes      | Semantic category: `comprehension`, `code-gen`, `design`, `review`, `routing`, `planning`                     |
+| `benchmark.min_tolerance_tokens` | integer  | no       | Floor below which token count is suspiciously low (may indicate degenerate output).                           |
+| `benchmark.max_tolerance_tokens` | integer  | no       | Ceiling above which token count triggers a warning in reports.                                                |
+| `benchmark.min_tolerance_ms`     | integer  | no       | Suspiciously fast run floor.                                                                                  |
+| `benchmark.max_tolerance_ms`     | integer  | no       | Suspiciously slow run ceiling.                                                                                |
+| `benchmark.min_content_length`   | integer  | no       | Minimum acceptable artifact character count.                                                                  |
+| `benchmark.tags`                 | string[] | no       | Free-form labels for filtering and grouping: `baseline`, `regression`, `smoke`, `nightly`, `provider-a-vs-b`. |
 
 ### Baseline Scenario Library
 
 The following built-in scenarios form the initial benchmark suite:
 
-| ID | Category | Task Shape | Expected Size |
-|----|----------|------------|---------------|
-| `bm-comprehend-design-doc` | comprehension | Summarize a design doc | small |
-| `bm-codegen-small-fn` | code-gen | Write a single Rust function from spec | small |
-| `bm-design-review` | review | Review a design doc for gaps | medium |
-| `bm-route-simple-qa` | routing | Route a simple Q&A task | tiny |
-| `bm-plan-medium-task` | planning | Plan a medium implementation task | medium |
-| `bm-execute-file-read` | comprehension | Read and report on a specific file | tiny |
+| ID                         | Category      | Task Shape                             | Expected Size |
+| -------------------------- | ------------- | -------------------------------------- | ------------- |
+| `bm-comprehend-design-doc` | comprehension | Summarize a design doc                 | small         |
+| `bm-codegen-small-fn`      | code-gen      | Write a single Rust function from spec | small         |
+| `bm-design-review`         | review        | Review a design doc for gaps           | medium        |
+| `bm-route-simple-qa`       | routing       | Route a simple Q&A task                | tiny          |
+| `bm-plan-medium-task`      | planning      | Plan a medium implementation task      | medium        |
+| `bm-execute-file-read`     | comprehension | Read and report on a specific file     | tiny          |
 
 ---
 
@@ -208,8 +208,12 @@ The following built-in scenarios form the initial benchmark suite:
     }
   },
   "required": [
-    "schema_version", "run", "judgement", "artifact",
-    "per_operation", "aggregate_metrics"
+    "schema_version",
+    "run",
+    "judgement",
+    "artifact",
+    "per_operation",
+    "aggregate_metrics"
   ],
   "$defs": {
     "MetricSet": {
@@ -218,12 +222,17 @@ The following built-in scenarios form the initial benchmark suite:
         "token_efficiency": { "type": "number", "description": "tokens per char (M1)" },
         "time_efficiency": { "type": "number", "description": "ms per char (M2)" },
         "cost_efficiency": { "type": "number", "description": "USD per char (M3)" },
-        "quality_adjusted_efficiency": { "type": "number", "description": "adj. USD per char (M4)" },
+        "quality_adjusted_efficiency": {
+          "type": "number",
+          "description": "adj. USD per char (M4)"
+        },
         "cache_effectiveness": { "type": "number", "description": "cache hit ratio (M5)" }
       },
       "required": [
-        "token_efficiency", "time_efficiency",
-        "cost_efficiency", "quality_adjusted_efficiency",
+        "token_efficiency",
+        "time_efficiency",
+        "cost_efficiency",
+        "quality_adjusted_efficiency",
         "cache_effectiveness"
       ]
     }
@@ -240,8 +249,8 @@ Cost efficiency depends on configurable per-provider price constants, stored in 
 metrics:
   price_constants:
     deepseek:
-      input_per_token: 0.000000014   # $0.014 / 1M input tokens
-      output_per_token: 0.000000028  # $0.028 / 1M output tokens
+      input_per_token: 0.000000014 # $0.014 / 1M input tokens
+      output_per_token: 0.000000028 # $0.028 / 1M output tokens
       cache_write_per_token: 0.000000011 # $0.011 / 1M cache creation tokens
     kimi:
       input_per_token: 0.000000016
@@ -259,25 +268,38 @@ metrics:
 For streaming or append-only logging (e.g., CI runs, development-log), use a compact JSONL format with one metrics record per line:
 
 ```jsonl
-{"ts":"2026-06-22T10:00:00Z","sid":"bm-comprehend-design-doc","ver":"abc1234","prov":"deepseek","prof":"general","passed":true,"clen":2450,"m1":2.1,"m2":8.3,"m3":0.000042,"m4":0.000031,"m5":67.0}
+{
+  "ts": "2026-06-22T10:00:00Z",
+  "sid": "bm-comprehend-design-doc",
+  "ver": "abc1234",
+  "prov": "deepseek",
+  "prof": "general",
+  "passed": true,
+  "clen": 2450,
+  "m1": 2.1,
+  "m2": 8.3,
+  "m3": 0.000042,
+  "m4": 0.000031,
+  "m5": 67
+}
 ```
 
 Fields:
 
-| Field | Alias | Source |
-|-------|-------|--------|
-| `ts` | timestamp | run.timestamp |
-| `sid` | scenario_id | run.scenario_id |
-| `ver` | engine_version | run.engine_version |
-| `prov` | provider | run.provider |
-| `prof` | runtime_profile | run.runtime_profile |
-| `passed` | — | judgement.passed |
-| `clen` | content_length | artifact.content_length |
-| `m1` | token_efficiency | aggregate_metrics.token_efficiency |
-| `m2` | time_efficiency | aggregate_metrics.time_efficiency |
-| `m3` | cost_efficiency | aggregate_metrics.cost_efficiency |
-| `m4` | quality_adjusted_efficiency | aggregate_metrics.quality_adjusted_efficiency |
-| `m5` | cache_effectiveness | aggregate_metrics.cache_effectiveness |
+| Field    | Alias                       | Source                                        |
+| -------- | --------------------------- | --------------------------------------------- |
+| `ts`     | timestamp                   | run.timestamp                                 |
+| `sid`    | scenario_id                 | run.scenario_id                               |
+| `ver`    | engine_version              | run.engine_version                            |
+| `prov`   | provider                    | run.provider                                  |
+| `prof`   | runtime_profile             | run.runtime_profile                           |
+| `passed` | —                           | judgement.passed                              |
+| `clen`   | content_length              | artifact.content_length                       |
+| `m1`     | token_efficiency            | aggregate_metrics.token_efficiency            |
+| `m2`     | time_efficiency             | aggregate_metrics.time_efficiency             |
+| `m3`     | cost_efficiency             | aggregate_metrics.cost_efficiency             |
+| `m4`     | quality_adjusted_efficiency | aggregate_metrics.quality_adjusted_efficiency |
+| `m5`     | cache_effectiveness         | aggregate_metrics.cache_effectiveness         |
 
 ---
 
@@ -316,16 +338,16 @@ SIKONG_RUN_LIVE_AGENT_TESTS=1 cargo run -- eval metrics bm-route-simple-qa --rou
 
 **Flags:**
 
-| Flag | Description |
-|------|-------------|
-| `--scenario` | Scenario ID (positional). |
-| `--all` | Run all built-in benchmark scenarios. |
-| `--tag` | Filter built-in benchmarks by tag. |
-| `--provider` | Provider override (`deepseek`, `kimi`). |
-| `--runtime` | Runtime profile override (`general`, `code`). |
-| `--json` | Print full structured JSON (IterationMetrics schema). |
-| `--log <path>` | Append compact JSONL to the given path. |
-| `--route-only` | Stop after root route decision (no execution). |
+| Flag              | Description                                                                 |
+| ----------------- | --------------------------------------------------------------------------- |
+| `--scenario`      | Scenario ID (positional).                                                   |
+| `--all`           | Run all built-in benchmark scenarios.                                       |
+| `--tag`           | Filter built-in benchmarks by tag.                                          |
+| `--provider`      | Provider override (`deepseek`, `kimi`).                                     |
+| `--runtime`       | Runtime profile override (`general`, `code`).                               |
+| `--json`          | Print full structured JSON (IterationMetrics schema).                       |
+| `--log <path>`    | Append compact JSONL to the given path.                                     |
+| `--route-only`    | Stop after root route decision (no execution).                              |
 | `--save-baseline` | Store aggregate metrics as the baseline for this scenario+provider+runtime. |
 
 #### `siko eval metrics-compare <scenario>`
@@ -347,15 +369,15 @@ SIKONG_RUN_LIVE_AGENT_TESTS=1 cargo run -- eval metrics-compare bm-codegen-small
 
 **Flags:**
 
-| Flag | Description |
-|------|-------------|
-| `--scenario` | Scenario ID (positional). |
-| `--baseline-dir` | Override baseline directory. |
-| `--from-log` | Read metrics from a JSONL log file instead of running live. |
-| `--entry-a`, `--entry-b` | Index entries in a log file to compare. |
-| `--providers` | Comma-separated provider list for comparison matrix. |
-| `--runtimes` | Comma-separated runtime profile list for comparison matrix. |
-| `--json` | Print structured comparison output. |
+| Flag                     | Description                                                 |
+| ------------------------ | ----------------------------------------------------------- |
+| `--scenario`             | Scenario ID (positional).                                   |
+| `--baseline-dir`         | Override baseline directory.                                |
+| `--from-log`             | Read metrics from a JSONL log file instead of running live. |
+| `--entry-a`, `--entry-b` | Index entries in a log file to compare.                     |
+| `--providers`            | Comma-separated provider list for comparison matrix.        |
+| `--runtimes`             | Comma-separated runtime profile list for comparison matrix. |
+| `--json`                 | Print structured comparison output.                         |
 
 #### `siko eval metrics-list`
 
@@ -374,11 +396,11 @@ cargo run -- eval metrics-list --log ~/.sikong/metrics-log.jsonl
 
 **Flags:**
 
-| Flag | Description |
-|------|-------------|
-| `--baselines` | Show stored baselines instead of scenario list. |
-| `--log <path>` | Summarize a metrics log file. |
-| `--json` | Print structured output. |
+| Flag           | Description                                     |
+| -------------- | ----------------------------------------------- |
+| `--baselines`  | Show stored baselines instead of scenario list. |
+| `--log <path>` | Summarize a metrics log file.                   |
+| `--json`       | Print structured output.                        |
 
 ### Integration with Existing Commands
 
@@ -552,13 +574,13 @@ src/
 
 ### Dependencies
 
-| Crate | Use |
-|-------|-----|
-| `clap` (existing) | CLI argument parsing |
-| `serde` / `serde_json` (existing) | JSON schema serialization |
-| `schemars` (existing) | JSON Schema generation |
-| `config` (existing) | YAML price constants loading |
-| `prettytable-rs` or custom `tabled` | Terminal table rendering |
+| Crate                               | Use                          |
+| ----------------------------------- | ---------------------------- |
+| `clap` (existing)                   | CLI argument parsing         |
+| `serde` / `serde_json` (existing)   | JSON schema serialization    |
+| `schemars` (existing)               | JSON Schema generation       |
+| `config` (existing)                 | YAML price constants loading |
+| `prettytable-rs` or custom `tabled` | Terminal table rendering     |
 
 ### Integration Points
 
@@ -586,15 +608,15 @@ src/
 
 ## Relationship to Existing Eval Framework
 
-| Aspect | Eval Framework (`eval-framework.md`) | Metrics Framework (this doc) |
-|--------|--------------------------------------|------------------------------|
-| Purpose | Functional correctness, execution shape | Quantitative performance, cost, speed |
-| Input | YAML scenario + judge rubric | Same YAML scenario + price constants |
-| Output | `TaskRunSplitJudgement { passed, findings, evidence }` | `IterationMetrics { aggregate, per_operation, baseline_delta }` |
-| Judge | Separate agent-loop agent with `finish_eval` | Reuses the same judge verdict for quality adjustment |
-| Storage | Artifact dir (optional), dev-log | Metrics log (JSONL), baseline dir (JSON) |
-| Cost | Token usage (raw) | Estimated dollar cost (priced) |
-| Command | `eval task-run-split` | `eval metrics`, `eval metrics-compare` |
+| Aspect  | Eval Framework (`eval-framework.md`)                   | Metrics Framework (this doc)                                    |
+| ------- | ------------------------------------------------------ | --------------------------------------------------------------- |
+| Purpose | Functional correctness, execution shape                | Quantitative performance, cost, speed                           |
+| Input   | YAML scenario + judge rubric                           | Same YAML scenario + price constants                            |
+| Output  | `TaskRunSplitJudgement { passed, findings, evidence }` | `IterationMetrics { aggregate, per_operation, baseline_delta }` |
+| Judge   | Separate agent-loop agent with `finish_eval`           | Reuses the same judge verdict for quality adjustment            |
+| Storage | Artifact dir (optional), dev-log                       | Metrics log (JSONL), baseline dir (JSON)                        |
+| Cost    | Token usage (raw)                                      | Estimated dollar cost (priced)                                  |
+| Command | `eval task-run-split`                                  | `eval metrics`, `eval metrics-compare`                          |
 
 The metrics framework **extends** rather than replaces the eval framework. A metrics run is an eval run plus post-processing. Metrics output is an optional sidecar on existing eval and dogfood commands.
 

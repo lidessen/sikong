@@ -116,23 +116,23 @@ workspace:
 
 ### Required Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Unique scenario identifier. Used for CLI selection and artifact directory naming. |
-| `task` | string | Natural task request sent to the engine. No decomposition hints — the engine must decide the execution shape. |
+| Field         | Type   | Description                                                                                                                             |
+| ------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`          | string | Unique scenario identifier. Used for CLI selection and artifact directory naming.                                                       |
+| `task`        | string | Natural task request sent to the engine. No decomposition hints — the engine must decide the execution shape.                           |
 | `expectation` | string | Judge rubric. Describes what a passing run looks like, including constraints on decomposition, evidence sourcing, and artifact quality. |
-| `workspace` | object | Workspace configuration (see below). |
+| `workspace`   | object | Workspace configuration (see below).                                                                                                    |
 
 ### Workspace Object
 
 ```yaml
 workspace:
-  provider: current-file-system    # memory | current-file-system | current-git
-  read_scope:                      # globs for readable paths
+  provider: current-file-system # memory | current-file-system | current-git
+  read_scope: # globs for readable paths
     - design/**/*.md
-  write_scope:                     # globs for writable paths (optional)
+  write_scope: # globs for writable paths (optional)
     - design/
-  allow_write: false               # required for write_scope to take effect
+  allow_write: false # required for write_scope to take effect
 ```
 
 ---
@@ -212,6 +212,7 @@ Specify → (optionally Plan → children → Combine) → Verify → Commit
 ```
 
 The engine runs the full task lifecycle. For broad tasks, this means:
+
 1. The root node runs `Specify` to assess scope.
 2. If scope is `large`/`xlarge`, the engine runs `Plan` to create child groups.
 3. Children execute in workspace isolation.
@@ -232,6 +233,7 @@ When `--route-only` is set, the engine stops after the root route decision
 `Planned` with child nodes but no execution has occurred.
 
 Use route-only mode for:
+
 - **Cheap routing validation** — verify that the engine selects the right
   execution shape without spending model tokens on execution.
 - **Scenario iteration** — test whether a new scenario produces the expected
@@ -283,13 +285,14 @@ fn eval_judgement_tool_spec() -> AgentToolSpec {
 
 The judge must call `finish_eval` with:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `passed` | boolean | Whether the scenario passed. |
-| `findings` | string[] | Concise finding descriptions (e.g., "Engine did not decompose broad task"). |
+| Field      | Type     | Description                                                                    |
+| ---------- | -------- | ------------------------------------------------------------------------------ |
+| `passed`   | boolean  | Whether the scenario passed.                                                   |
+| `findings` | string[] | Concise finding descriptions (e.g., "Engine did not decompose broad task").    |
 | `evidence` | string[] | Supporting evidence strings (e.g., "Status is Committed with no child nodes"). |
 
 If the judge fails to call `finish_eval`, the eval records a protocol failure:
+
 ```
 "judge did not call finish_eval"
 ```
@@ -358,30 +361,30 @@ The transcript is a structured JSON object produced after each task run:
 
 #### `TaskRunSplitTranscript`
 
-| Field | Description |
-|-------|-------------|
-| `scenario` | Scenario identifier from the eval definition. |
-| `task` | The original task prompt. |
-| `expectation` | The judge rubric for this scenario. |
-| `workspace` | Workspace type label (`memory`, `current-file-system`, `current-git`). |
-| `root` | Root node ID in the engine. |
-| `status` | Final engine status (`Committed`, `Planned`, `Failed`, etc.). |
-| `artifact` | Final artifact ID, if one was produced. |
-| `root_children` | Children of the root node (id, key, intent, plan, read/write scope). |
-| `agent_runs` | All agent-loop runs with timing, tools, and usage. |
-| `events` | Engine events with node_id, operation, and note. |
+| Field           | Description                                                            |
+| --------------- | ---------------------------------------------------------------------- |
+| `scenario`      | Scenario identifier from the eval definition.                          |
+| `task`          | The original task prompt.                                              |
+| `expectation`   | The judge rubric for this scenario.                                    |
+| `workspace`     | Workspace type label (`memory`, `current-file-system`, `current-git`). |
+| `root`          | Root node ID in the engine.                                            |
+| `status`        | Final engine status (`Committed`, `Planned`, `Failed`, etc.).          |
+| `artifact`      | Final artifact ID, if one was produced.                                |
+| `root_children` | Children of the root node (id, key, intent, plan, read/write scope).   |
+| `agent_runs`    | All agent-loop runs with timing, tools, and usage.                     |
+| `events`        | Engine events with node_id, operation, and note.                       |
 
 #### `TaskRunSplitAgentRun`
 
-| Field | Description |
-|-------|-------------|
-| `node_id` | The engine node this run served. |
-| `operation` | The operation (`Specify`, `Plan`, `Execute`, `Combine`, `Verify`). |
-| `terminal_tool` | The terminal tool that ended the agent loop. |
-| `terminal_payload` | Summarized tool arguments (long strings truncated to 2000 chars). |
-| `duration_ms` | Wall-clock duration of the agent loop run. |
-| `usage` | Token usage (input, output, cache, total). |
-| `report` | The raw report text from the agent loop. |
+| Field              | Description                                                        |
+| ------------------ | ------------------------------------------------------------------ |
+| `node_id`          | The engine node this run served.                                   |
+| `operation`        | The operation (`Specify`, `Plan`, `Execute`, `Combine`, `Verify`). |
+| `terminal_tool`    | The terminal tool that ended the agent loop.                       |
+| `terminal_payload` | Summarized tool arguments (long strings truncated to 2000 chars).  |
+| `duration_ms`      | Wall-clock duration of the agent loop run.                         |
+| `usage`            | Token usage (input, output, cache, total).                         |
+| `report`           | The raw report text from the agent loop.                           |
 
 ---
 
@@ -533,14 +536,14 @@ SIKONG_RUN_LIVE_AGENT_TESTS=1 cargo run -- eval task-run-split \
 
 **Flags:**
 
-| Flag | Description |
-|------|-------------|
-| `--task` | Natural task request (creates a custom scenario). |
-| `--scenario` | Scenario ID or `all` (default: `preview-runtime`). |
-| `--scenario-file` | External YAML scenario file path. |
-| `--artifact-dir` | Directory to write task-run artifacts for review. |
-| `--route-only` | Stop after root route decision (no execution). |
-| `--json` | Print full structured JSON output. |
+| Flag              | Description                                        |
+| ----------------- | -------------------------------------------------- |
+| `--task`          | Natural task request (creates a custom scenario).  |
+| `--scenario`      | Scenario ID or `all` (default: `preview-runtime`). |
+| `--scenario-file` | External YAML scenario file path.                  |
+| `--artifact-dir`  | Directory to write task-run artifacts for review.  |
+| `--route-only`    | Stop after root route decision (no execution).     |
+| `--json`          | Print full structured JSON output.                 |
 
 **Selection logic:**
 
@@ -571,21 +574,21 @@ SIKONG_RUN_LIVE_AGENT_TESTS=1 cargo run -- eval task-run-operation \
 
 **Flags:**
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                                                  |
+| ------------- | ---------------------------------------------------------------------------- |
 | `--operation` | Operation name (`specify`, `plan`, `execute`, `combine`, `verify`) or `all`. |
-| `--scenario` | Scenario ID or `all`. |
-| `--json` | Print full structured JSON output. |
+| `--scenario`  | Scenario ID or `all`.                                                        |
+| `--json`      | Print full structured JSON output.                                           |
 
 **Operation scenarios:**
 
-| Operation | Scenarios |
-|-----------|-----------|
+| Operation | Scenarios                                                                                                                |
+| --------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `Specify` | `execute`, `split`, `coherent-medium`, `independent-evidence-surfaces`, `git-redundancy-audit-surfaces`, `evidence-work` |
-| `Plan` | `stage`, `parallel`, `git-parallel-scoped` |
-| `Execute` | `simple-result`, `blocked-files` |
-| `Combine` | `normal`, `conflict` |
-| `Verify` | `accept`, `reject`, `uncertain` |
+| `Plan`    | `stage`, `parallel`, `git-parallel-scoped`                                                                               |
+| `Execute` | `simple-result`, `blocked-files`                                                                                         |
+| `Combine` | `normal`, `conflict`                                                                                                     |
+| `Verify`  | `accept`, `reject`, `uncertain`                                                                                          |
 
 ### `dogfood run`
 
@@ -600,8 +603,8 @@ cargo run -- dogfood run --scenario-file evals/task-run/dogfood-doc-review.yaml 
 
 **Additional flags (on top of `eval task-run-split` flags):**
 
-| Flag | Description |
-|------|-------------|
+| Flag    | Description                                           |
+| ------- | ----------------------------------------------------- |
 | `--log` | Write the outcome to `development-log/YYYY-MM-DD.md`. |
 
 ### Safety Gate

@@ -139,6 +139,7 @@ owns together:
 The engine layer that sits **above** the model and **below** the user interface.
 
 Existing tools fall into two camps:
+
 - **Chat-based coding assistants** (Claude Code, Cursor, GitHub Copilot): Tight
   model integration, single-conversation loop, weak orchestration, no durable
   state machine, no formal verification.
@@ -159,6 +160,7 @@ the problem is large, they either fail (context overflow), hallucinate (best-eff
 completion under pressure), or rely on brittle manual decomposition.
 
 Sikong's territory is **recursive decomposition with dynamic programming**:
+
 - The engine decides whether a problem is atomic or needs decomposition.
 - `Specify` assesses scope; the engine routes to `Execute` or `Plan`.
 - `Plan` creates exactly one child group (`stage` for ordered phases, `parallel`
@@ -186,6 +188,7 @@ name mainline and layer -> scope scenario -> run live eval
 
 This is not autonomous self-modification. It is a structured operating loop
 where:
+
 - The transcript is primary evidence; agent-written reports are candidate
   interpretations.
 - Each loop makes one bounded change.
@@ -241,6 +244,7 @@ result.
   "try again with different input."
 
 **Signals of completion:**
+
 - A first-time user can run `siko run "fix the bug in src/main.rs"` and get a
   correct, verified patch or a clear explanation of why it cannot be done.
 - The eval suite passes for the core operation matrix (Specify/Plan/Execute/
@@ -262,6 +266,7 @@ conflict.
   collide.
 
 **Signals of completion:**
+
 - Two independent tasks can execute concurrently in the same git repository
   without corrupting each other's state.
 - The engine detects write-scope conflicts and either serializes or escalates
@@ -286,6 +291,7 @@ producing one bounded improvement per cycle.
 - **Apply mode** (writable git workspace) applies verified patches directly.
 
 **Signals of completion:**
+
 - `siko dogfood run --scenario sikong-next-improvement` produces one bounded,
   verified improvement with retrievable evidence.
 - The development log shows a closed loop for each dogfood cycle.
@@ -305,6 +311,7 @@ producing one bounded improvement per cycle.
   dogfood procedures.
 
 **Signals of completion:**
+
 - An external developer can install Sikong, create a workspace, run a
   development task, and inspect the result without reading the design docs.
 - The assistant can maintain a task board across multiple sessions.
@@ -326,6 +333,7 @@ subproblems.
   planning strategy without adding kernel operations.
 
 **Signals of completion:**
+
 - A task like "design and implement a new CLI command" reliably produces a
   decomposed plan with ordered or parallel child work.
 - The judge passes cognitive-load evals that require multi-level decomposition.
@@ -401,13 +409,13 @@ decision rules for daily development:
 
 Every meaningful change starts by identifying the owning layer:
 
-| Layer | Question to ask |
-|-------|-----------------|
-| Arch | Is a protocol, contract, or governance rule ambiguous or missing? |
-| Plan | Are we splitting at the right evidence boundaries? |
-| Execute | Is the local change bounded and verifiable? |
-| Verify | Are the acceptance gates catching what they should? |
-| Meta | Is this a repeated finding that should become a design rule? |
+| Layer   | Question to ask                                                   |
+| ------- | ----------------------------------------------------------------- |
+| Arch    | Is a protocol, contract, or governance rule ambiguous or missing? |
+| Plan    | Are we splitting at the right evidence boundaries?                |
+| Execute | Is the local change bounded and verifiable?                       |
+| Verify  | Are the acceptance gates catching what they should?               |
+| Meta    | Is this a repeated finding that should become a design rule?      |
 
 **If the owning layer is unclear, do not implement. Route first.**
 
@@ -504,6 +512,7 @@ was observed.
 files it already read.
 
 **Analysis:**
+
 1. **Route:** This is a context-projection issue (L0/L1 boundary), not a
    protocol issue (Arch) or a routing issue (Plan). Owning layer: Execute
    harness or agent-run prompt.

@@ -139,14 +139,23 @@ async fn run_task_run_split_eval_async(
             write_task_run_artifacts(artifact_dir, &scenario, root, &engine, &report)?;
         let actor_usage = sum_agent_run_usage(&report.agent_runs);
 
-        let judge_launch = launch::resolve_agent_loop_launch(&debug, 6);
-        let mut judge = ProcessAgentRunScheduler::new(judge_launch.command, judge_launch.args);
-        let judge_response = judge
-            .run(judge_request(&transcript), CancellationToken::new())
-            .await;
-        let judge_usage = judge_response.usage.clone();
-        let judgement = decode_judgement(judge_response.terminal_call)?;
-        let total_usage = sum_usage(Some(&actor_usage), judge_usage.as_ref());
+        let (judge_usage, judgement, total_usage) = if route_only {
+            (
+                None,
+                route_only_judgement(&transcript),
+                sum_usage(Some(&actor_usage), None),
+            )
+        } else {
+            let judge_launch = launch::resolve_agent_loop_launch(&debug, 6);
+            let mut judge = ProcessAgentRunScheduler::new(judge_launch.command, judge_launch.args);
+            let judge_response = judge
+                .run(judge_request(&transcript), CancellationToken::new())
+                .await;
+            let judge_usage = judge_response.usage.clone();
+            let judgement = decode_judgement(judge_response.terminal_call)?;
+            let total_usage = sum_usage(Some(&actor_usage), judge_usage.as_ref());
+            (judge_usage, judgement, total_usage)
+        };
 
         results.push(TaskRunSplitEvalResult {
             scenario: scenario.id.clone(),
@@ -1560,6 +1569,71 @@ pub fn decode_judgement(
         return Err(format!("judge called unexpected terminal tool {}", call.name).into());
     }
     Ok(serde_json::from_value(call.arguments)?)
+}
+
+pub fn route_only_judgement(transcript: &TaskRunSplitTranscript) -> TaskRunSplitJudgement {
+    let has_specify = transcript.agent_runs.iter().any(|run| {
+        run.node_id == transcript.root
+            && run.operation == "Specify"
+            && run.terminal_tool.as_deref() == Some("submit_specification")
+    });
+    let has_plan = transcript.agent_runs.iter().any(|run| {
+        run.node_id == transcript.root
+            && run.operation == "Plan"
+            && run.terminal_tool.as_deref() == Some("submit_plan_group")
+    });
+    let stopped_after_plan = transcript
+        .events
+        .iter()
+        .any(|event| event.note.contains("stopped after plan"));
+    let has_children = !transcript.root_children.is_empty();
+    let scoped_children = transcript.root_children.iter().all(|child| {
+        transcript.workspace == "memory"
+            || !child.read_scope.is_empty()
+            || transcript.task.to_ascii_lowercase().contains("memory")
+    });
+
+    let mut findings = Vec::new();
+    let mut evidence = Vec::new();
+
+    if !has_specify {
+        findings.push("Root Specify did not finish through submit_specification.".to_string());
+    } else {
+        evidence.push("Root Specify finished through submit_specification.".to_string());
+    }
+
+    if !has_plan {
+        findings.push("Root Plan did not finish through submit_plan_group.".to_string());
+    } else {
+        evidence.push("Root Plan finished through submit_plan_group.".to_string());
+    }
+
+    if !stopped_after_plan {
+        findings.push("Route-only run did not stop after the root plan.".to_string());
+    } else {
+        evidence.push("Transcript includes a stop-after-plan event.".to_string());
+    }
+
+    if !has_children {
+        findings.push("Route-only plan did not create child work items.".to_string());
+    } else {
+        evidence.push(format!(
+            "Route-only plan created {} child work items.",
+            transcript.root_children.len()
+        ));
+    }
+
+    if !scoped_children {
+        findings.push("At least one non-memory child has an empty read_scope.".to_string());
+    } else if has_children {
+        evidence.push("Planned child read scopes are non-empty for non-memory work.".to_string());
+    }
+
+    TaskRunSplitJudgement {
+        passed: findings.is_empty(),
+        findings,
+        evidence,
+    }
 }
 
 pub fn decode_operation_judgement(

@@ -20,7 +20,7 @@ through natural conversation with the assistant agent.
 
 - **Protocol:** JSON-RPC 2.0
 - **Transport:** stdin/stdout (one JSON object per line, terminated by `\n`)
-- **Startup:** `siko assistant --acp`
+- **Startup:** `siko acp`
 - **Stderr:** reserved for logging; external agents should not parse stderr
 
 ## Methods
@@ -30,21 +30,27 @@ through natural conversation with the assistant agent.
 Initialize the server and get capabilities.
 
 **Request:**
+
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }
 ```
 
 **Response:**
+
 ```json
-{"jsonrpc":"2.0","id":1,"result":{
-  "protocolVersion": 1,
-  "agent": {"name": "siko"},
-  "capabilities": {
-    "sessions": true,
-    "prompt": true,
-    "cancel": true
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": 1,
+    "agent": { "name": "siko" },
+    "capabilities": {
+      "sessions": true,
+      "prompt": true,
+      "cancel": true
+    }
   }
-}}
+}
 ```
 
 ### `session/new`
@@ -52,13 +58,15 @@ Initialize the server and get capabilities.
 Create a new conversation session.
 
 **Request:**
+
 ```json
-{"jsonrpc":"2.0","id":2,"method":"session/new","params":{}}
+{ "jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {} }
 ```
 
 **Response:**
+
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"sessionId":"session_1"}}
+{ "jsonrpc": "2.0", "id": 2, "result": { "sessionId": "session_1" } }
 ```
 
 ### `session/prompt`
@@ -67,23 +75,35 @@ Send a user message to the assistant and get a response. The assistant
 may create tasks, inspect existing ones, or reply directly.
 
 **Request:**
+
 ```json
-{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{
-  "sessionId": "session_1",
-  "prompt": "analyze this project and find bugs"
-}}
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "session/prompt",
+  "params": {
+    "sessionId": "session_1",
+    "prompt": "analyze this project and find bugs"
+  }
+}
 ```
 
 **Response:**
+
 ```json
-{"jsonrpc":"2.0","id":3,"result":{
-  "stopReason": "end_turn",
-  "content": [{"type": "text", "text": "Creating task."}],
-  "metadata": {"taskId": "019eecc3-..."}
-}}
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "stopReason": "end_turn",
+    "content": [{ "type": "text", "text": "Creating task." }],
+    "metadata": { "taskId": "019eecc3-..." }
+  }
+}
 ```
 
 The `taskId` in metadata can be used with CLI commands:
+
 - `siko assistant logs <taskId>` — view task lifecycle events (text)
 - `siko assistant events <taskId>` — view structured agent-run events
 - `siko assistant events <taskId> --json` — raw JSON events
@@ -93,18 +113,29 @@ The `taskId` in metadata can be used with CLI commands:
 Cancel the currently running task.
 
 **Request:**
+
 ```json
-{"jsonrpc":"2.0","id":4,"method":"session/cancel","params":{
-  "sessionId": "session_1"
-}}
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "session/cancel",
+  "params": {
+    "sessionId": "session_1"
+  }
+}
 ```
 
 **Response:**
+
 ```json
-{"jsonrpc":"2.0","id":4,"result":{
-  "cancelled": true,
-  "content": [{"type": "text", "text": "Cancelled task ..."}]
-}}
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "cancelled": true,
+    "content": [{ "type": "text", "text": "Cancelled task ..." }]
+  }
+}
 ```
 
 ## CLI Commands
@@ -163,7 +194,7 @@ events = subprocess.check_output(["siko","assistant","events",task_id,"--json"])
 ```text
 External Agent (Claude Code / Codex / custom)
   │
-  ├── spawns: siko assistant --acp
+  ├── spawns: siko acp
   │         (JSON-RPC over stdio)
   │
   ▼

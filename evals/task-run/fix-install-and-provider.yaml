@@ -28,7 +28,7 @@ expectation: |
 workspace:
   provider: current-file-system
   read_scope:
-    - '**/*'
+    - "**/*"
   write_scope:
     - site/install.sh
     - scripts/install.sh

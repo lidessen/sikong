@@ -11,20 +11,21 @@
 
 The Rust crate is organized into seven top-level modules, re-exported through `src/lib.rs`:
 
-| Module | Responsibility | File Count |
-|--------|---------------|------------|
-| `agent_run` | Agent run request/response types + external process scheduler | 3 |
-| `assistant` | Assistant session, context, ACP server, tools, prompt packs | 6 |
-| `config` | Config loading (YAML + env), provider/backend resolution | 1 |
-| `metrics` | Counter/timing/cost collection with JSON snapshots | 1 |
-| `task_board` | Task queue, engine dispatch, task stores, event tracking | 3 |
-| `task_run` | Recursive engine, node operations, harness, types | 6 (excluding engine.rs) |
-| `workspace` | Memory, filesystem, git-filesystem workspace providers | 5 |
-| `main` + `lib` | Entry point and module wiring | 2 |
+| Module         | Responsibility                                                | File Count              |
+| -------------- | ------------------------------------------------------------- | ----------------------- |
+| `agent_run`    | Agent run request/response types + external process scheduler | 3                       |
+| `assistant`    | Assistant session, context, ACP server, tools, prompt packs   | 6                       |
+| `config`       | Config loading (YAML + env), provider/backend resolution      | 1                       |
+| `metrics`      | Counter/timing/cost collection with JSON snapshots            | 1                       |
+| `task_board`   | Task queue, engine dispatch, task stores, event tracking      | 3                       |
+| `task_run`     | Recursive engine, node operations, harness, types             | 6 (excluding engine.rs) |
+| `workspace`    | Memory, filesystem, git-filesystem workspace providers        | 5                       |
+| `main` + `lib` | Entry point and module wiring                                 | 2                       |
 
 ### ✅ Strength: Clean Module Boundaries
 
 The module boundaries respect the documented AGENTS.md architecture. Each module owns a clear slice:
+
 - `task_run` owns the recursive execution tree (plan → execute → combine → verify → commit)
 - `task_board` owns the assistant-facing task queue and dispatch
 - `assistant` owns the user-facing session and ACP protocol
@@ -49,15 +50,18 @@ Each module directory uses `mod.rs` for re-exports, keeping the module boundary 
 The codebase uses three distinct error patterns:
 
 **a) `thiserror`-derived enums** (best practice):
+
 - `ProcessAgentRunSchedulerError` — 16 variants with `#[error("...")]` and `#[source]` annotations
 - `WorkspaceError` — 3 variants with contextual fields (`operation`, `cwd`, `path`)
 - `EngineError` — 6 variants
 - `AgentRunDecodeError` — simple wrapper
 
 **b) Gateway type aliases**:
+
 - `WorkspaceResult<T>` = `Result<T, WorkspaceError>` — clean pattern
 
 **c) Ad-hoc String errors**:
+
 - `AssistantTurnError { message: String }` — used across the assistant session layer
 - `SessionReply { text: String, task_id: Option<TaskId> }` — dual-use as success/error
 - Several functions return plain `String` errors through `Result<(), String>`
@@ -119,6 +123,7 @@ The `ProcessAgentRunScheduler` struct has 7 fields, many optional (`Option<Child
 ### 4.1 Macro Use
 
 The custom `#[toolset]` proc macro in `crates/siko-macros/` is used in two places:
+
 - `assistant/tools.rs` — `#[siko_macros::toolset(enum_name = "AssistantTool")]` on a trait
 - `task_run/tools.rs` — `#[siko_macros::toolset(enum_name = "EngineTool", output = "...")]` on an impl block
 
@@ -131,6 +136,7 @@ The proc macro handles two different input shapes (trait and impl block) and opt
 ### 4.2 String Handling
 
 The codebase uses `String` extensively for:
+
 - Task IDs (also aliased as `TaskId`)
 - Error messages (string-based errors)
 - Prompt sections (title/content as strings)
@@ -142,6 +148,7 @@ This is appropriate for a domain that frequently serializes/deserializes across 
 ### 4.3 Async Pattern
 
 The codebase uses `async_trait` for the core traits:
+
 - `AgentRunScheduler` — `run(&mut self, input, cancellation) -> AgentRunResponse`
 - `AssistantLoop` — `run_turn(&mut self, context) -> Result<AssistantTurn, AssistantTurnError>`
 - `TaskEngineRunner` — `run_task(&mut self, task_id, request, cancellation) -> Result<...>`
@@ -160,6 +167,7 @@ The `CancellationToken::cancelled()` method uses a loop with `tokio::select!`-li
 ### 4.4 Test Coverage
 
 The codebase has excellent test coverage:
+
 - `config.rs`: 18 tests (expand_home, non_empty_env, config inheritance)
 - `agent_run/run.rs`: 17 tests (CancellationToken, token usage, serde roundtrips)
 - `agent_run/run_scheduler.rs`: 0 tests (external process boundary)
@@ -205,6 +213,7 @@ Each `NodeOperation` declares its `governance_layer()` and `active_hard_gates()`
 ### 5.2 Agent Protocol
 
 The agent protocol flows through:
+
 - `AgentRunRequest` → `ProcessAgentRunScheduler` → external process → `AgentRunResponse`
 - The assistant uses `AgentAssistantLoop` to wrap `AgentRunScheduler` into `AssistantLoop`
 
@@ -260,13 +269,12 @@ Both `FileSystemWorkspace` and `MemoryWorkspace` return empty change records. Th
 
 ## 7. Summary
 
-| Dimension | Rating | Key Finding |
-|-----------|--------|-------------|
-| Module Organization | ★★★★★ | Clean single-direction dependencies, well-documented boundaries |
-| Error Handling | ★★★★☆ | Excellent contextual errors in workspace layer; string errors in assistant layer |
-| Type Design | ★★★★★ | Well-modeled domain with discriminated unions; minor inconsistency in ID types |
-| Code Quality | ★★★★☆ | Strong test coverage, thoughtful async patterns; some state-machine complexity |
-| Architecture Adherence | ★★★★★ | Faithful implementation of recursive engine, governance, and agent protocol patterns |
+| Dimension              | Rating | Key Finding                                                                          |
+| ---------------------- | ------ | ------------------------------------------------------------------------------------ |
+| Module Organization    | ★★★★★  | Clean single-direction dependencies, well-documented boundaries                      |
+| Error Handling         | ★★★★☆  | Excellent contextual errors in workspace layer; string errors in assistant layer     |
+| Type Design            | ★★★★★  | Well-modeled domain with discriminated unions; minor inconsistency in ID types       |
+| Code Quality           | ★★★★☆  | Strong test coverage, thoughtful async patterns; some state-machine complexity       |
+| Architecture Adherence | ★★★★★  | Faithful implementation of recursive engine, governance, and agent protocol patterns |
 
 **Overall**: The codebase is well-structured and thoughtfully designed. The recursive engine pattern is consistently applied. The main improvement areas are in error type discipline (string errors in the assistant layer) and integration test coverage for the external process boundary.
-

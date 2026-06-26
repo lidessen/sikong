@@ -6,27 +6,27 @@ within the boundaries set by current (✓) documents.
 
 ## Status Legend
 
-| Mark | Status | Meaning |
-|------|--------|---------|
-| ✓ | Current | authoritative, implementation must follow |
-| ◐ | Needs Review | likely still valid but should be checked before use |
-| ✗ | Superseded | replaced by a newer document |
-| + | Draft | proposed, not yet authoritative |
+| Mark | Status       | Meaning                                             |
+| ---- | ------------ | --------------------------------------------------- |
+| ✓    | Current      | authoritative, implementation must follow           |
+| ◐    | Needs Review | likely still valid but should be checked before use |
+| ✗    | Superseded   | replaced by a newer document                        |
+| +    | Draft        | proposed, not yet authoritative                     |
 
 ## Document Registry
 
 ### Layer L3: Architecture & Philosophy (stable)
 
-| Status | Document | Governs | Last Reviewed |
-|--------|----------|---------|---------------|
-| ✓ | `philosophy/development-philosophy.md` | All layers — core philosophy, attention method, drift signals | 2026-06-21 (Agent As Intelligent Node added) |
-| ✓ | `philosophy/governance-model.md` | All layers — Arch/Plan/Execute/Verify authority, gates | 2026-06-21 |
-| ✓ | `philosophy/prompt-guidance.md` | All layers — attention boundary, context projection | 2026-06-21 |
-| ✓ | `philosophy/dogfood.md` | Self-development loop — doc-first, live eval gates | 2026-06-21 |
-| ✓ | `philosophy/development-theory.md` | All layers — development method, debt management, iteration cadence | 2026-06-22 |
-| ✓ | `philosophy/product-vision.md` | All layers — strategic direction, roadmap, iteration decisions | 2026-06-22 |
-| — | `philosophy/down-to-earth.md` | Practical methodology — plain-language principles | — |
-| — | `philosophy/practice-theory-unity.md` | Dogfood cycle principles — practical unity of theory and practice | — |
+| Status | Document                               | Governs                                                             | Last Reviewed                                |
+| ------ | -------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------- |
+| ✓      | `philosophy/development-philosophy.md` | All layers — core philosophy, attention method, drift signals       | 2026-06-21 (Agent As Intelligent Node added) |
+| ✓      | `philosophy/governance-model.md`       | All layers — Arch/Plan/Execute/Verify authority, gates              | 2026-06-21                                   |
+| ✓      | `philosophy/prompt-guidance.md`        | All layers — attention boundary, context projection                 | 2026-06-21                                   |
+| ✓      | `philosophy/dogfood.md`                | Self-development loop — doc-first, live eval gates                  | 2026-06-21                                   |
+| ✓      | `philosophy/development-theory.md`     | All layers — development method, debt management, iteration cadence | 2026-06-22                                   |
+| ✓      | `philosophy/product-vision.md`         | All layers — strategic direction, roadmap, iteration decisions      | 2026-06-22                                   |
+| —      | `philosophy/down-to-earth.md`          | Practical methodology — plain-language principles                   | —                                            |
+| —      | `philosophy/practice-theory-unity.md`  | Dogfood cycle principles — practical unity of theory and practice   | —                                            |
 
 ## Design Discipline
 

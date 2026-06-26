@@ -9,7 +9,7 @@ The Rust crate (`Cargo.toml` → `src/`) provides:
 - **`siko` binary** — recursive task engine with plan/resolve/specify/execute/verify/commit cycle
 - **Workspace providers** — `FileSystem`, `GitFileSystem`, `Memory` for sandboxed task execution
 - **Assistant loop** — LLM-driven agent with tool-calling and ACP JSON-RPC protocol
-- **CLI** — `siko assistant`, `siko run`, `siko eval`, `siko dogfood`, `siko setup`, `siko metrics`
+- **CLI** — `siko tui`, `siko send`, `siko task`, `siko acp`, `siko daemon`, `siko setup`, `siko metrics`
 
 ### Development
 
@@ -20,11 +20,22 @@ cargo build
 # Run tests
 cargo test
 
-# Run the CLI
-cargo run -- run "analyze this project"
+# Send a task through the daemon-owned assistant/task board
+cargo run -- send "analyze this project"
 
-# Run the assistant
-cargo run -- assistant
+# Open the daily terminal UI
+cargo run -- tui
+
+# Inspect task history and live progress
+cargo run -- task list
+cargo run -- task inspect <task-id>
+
+# Serve ACP over stdio for editor/external clients
+cargo run -- acp
+
+# Manage the daemon explicitly when needed
+cargo run -- daemon status
+cargo run -- daemon stop
 ```
 
 Release builds:
@@ -75,4 +86,12 @@ cargo fmt --check
 # TypeScript checks (using Bun workspace)
 bun run check
 bun run typecheck
+```
+
+Internal live evals are hidden from normal help output. They are for focused
+regression and diagnostic runs, not normal daily task intake:
+
+```bash
+SIKONG_DEV=1 SIKONG_RUN_LIVE_AGENT_TESTS=1 \
+  cargo run -- eval task-run-split --scenario sikong-project-analysis --route-only
 ```

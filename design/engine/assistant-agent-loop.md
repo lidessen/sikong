@@ -2,7 +2,7 @@
 
 > **Status:** ◐ Needs Review — Go/Bun Era (Transitional)  
 > **Reason:** This document describes the Rust assistant loop but still depends on the Bun agent-host bridge (`@sikong/agent-host`). The Bun dependency is transitional — the Rust mainline is progressively replacing the Bun runtime bridge with native Rust execution. The assistant architecture itself (packs, session, harness) is current Rust-era code.  
-> **Last reviewed:** 2026-06-22  
+> **Last reviewed:** 2026-06-22
 
 This document defines the Rust assistant agent loop for the new Sikong
 mainline. Memory/KB is intentionally out of scope until its protocol is stable.

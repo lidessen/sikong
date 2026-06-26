@@ -63,17 +63,17 @@ The following inventory names each Arch-owned contract and its current
 enforcement mechanism. Changes to these contracts must go through a design
 proposal and review before implementation.
 
-| Contract | Enforced by | First defined |
-| -------- | ----------- | ------------- |
-| `NodeOperation` enum (Specify/Plan/Execute/Combine/Verify/Commit) | Rust type system, `types.rs` | recursive-agent-engine.md |
-| `GovernanceLayer` / `GovernanceGate` types and gate ids | Rust type system, schema validation | governance-model.md |
-| Terminal tool schemas (`submit_*`, `finish_*`) | `#[toolset]` proc macro, JSON Schema generation | recursive-agent-engine.md |
-| Workspace provider semantics, resource lifecycle | `Workspace` trait, `WorkspaceResourceRegistry` | workspace-management.md |
-| Agent-run protocol (Run/Shutdown messages, socket transport) | `ProcessAgentRunScheduler` protocol encoding, `protocol.ts` | recursive-agent-engine.md |
-| Runtime profiles (`general`, `code`) and tool deny lists | `agent-loop-worker.ts` runtime options | prompt-guidance.md |
-| Prompt method (attention boundary, governance projection) | Harness prompt sections in `harness.rs` | prompt-guidance.md |
-| Dogfood acceptance rules | `dogfood.md`, judge eval prompts | dogfood.md |
-| Engine state machine (resolve/specify/plan/execute/combine/verify/commit) | `engine.rs` control flow | recursive-agent-engine.md |
+| Contract                                                                  | Enforced by                                                 | First defined             |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------- |
+| `NodeOperation` enum (Specify/Plan/Execute/Combine/Verify/Commit)         | Rust type system, `types.rs`                                | recursive-agent-engine.md |
+| `GovernanceLayer` / `GovernanceGate` types and gate ids                   | Rust type system, schema validation                         | governance-model.md       |
+| Terminal tool schemas (`submit_*`, `finish_*`)                            | `#[toolset]` proc macro, JSON Schema generation             | recursive-agent-engine.md |
+| Workspace provider semantics, resource lifecycle                          | `Workspace` trait, `WorkspaceResourceRegistry`              | workspace-management.md   |
+| Agent-run protocol (Run/Shutdown messages, socket transport)              | `ProcessAgentRunScheduler` protocol encoding, `protocol.ts` | recursive-agent-engine.md |
+| Runtime profiles (`general`, `code`) and tool deny lists                  | `agent-loop-worker.ts` runtime options                      | prompt-guidance.md        |
+| Prompt method (attention boundary, governance projection)                 | Harness prompt sections in `harness.rs`                     | prompt-guidance.md        |
+| Dogfood acceptance rules                                                  | `dogfood.md`, judge eval prompts                            | dogfood.md                |
+| Engine state machine (resolve/specify/plan/execute/combine/verify/commit) | `engine.rs` control flow                                    | recursive-agent-engine.md |
 
 Arch work should start as a design or proposal artifact, then be implemented as
 a bounded patch after review.
