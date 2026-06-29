@@ -468,6 +468,61 @@ fn acp_stdio_initializes_session_through_binary_entrypoint() {
 }
 
 #[test]
+fn acp_stdio_prompt_returns_update_and_stop_reason_without_wait_ms() {
+    let env = TempSikoData::new();
+    let mut child = env.spawn(&["acp"]);
+    {
+        let stdin = child.stdin.as_mut().expect("child stdin");
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":1,"clientInfo":{{"name":"Zed","version":"0.0.0-test"}}}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":2,"method":"session/new","params":{{"cwd":"/tmp/zed-workspace","mcpServers":[]}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{{"sessionId":"session_1","prompt":[{{"type":"text","text":"hi from zed smoke"}}]}}}}"#
+        )
+        .unwrap();
+    }
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait for acp process");
+    let (stdout, stderr, code) = output_parts(output);
+    assert_eq!(
+        code, 0,
+        "acp process should exit cleanly; stdout={stdout} stderr={stderr}"
+    );
+    let messages = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("jsonrpc line"))
+        .collect::<Vec<_>>();
+    assert!(
+        messages.iter().any(|message| {
+            message["method"] == "session/update"
+                && message["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
+                && message["params"]["update"]["content"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Task "))
+        }),
+        "missing session/update message: {stdout}"
+    );
+    let prompt_response = messages
+        .iter()
+        .find(|message| message["id"] == 3)
+        .expect("prompt response");
+    assert_eq!(prompt_response["result"]["stopReason"], "end_turn");
+    assert!(
+        prompt_response["result"].get("content").is_none(),
+        "prompt response should not carry ACP message content: {prompt_response}"
+    );
+}
+
+#[test]
 fn acp_install_zed_dry_run_prints_settings_without_writing() {
     let env = TempSikoData::new();
     let settings_path = env.path().join("zed").join("settings.json");

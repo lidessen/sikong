@@ -159,15 +159,17 @@ pub fn run_daemon_acp_proxy(
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<AcpRequest>(&line) {
+        let messages = match serde_json::from_str::<AcpRequest>(&line) {
             Ok(request) => {
                 handle_daemon_acp_request(debug, request, &mut initialized, &mut session_id)
             }
-            Err(err) => acp_error(None, -32700, format!("parse error: {err}")),
+            Err(err) => acp_messages(acp_error(None, -32700, format!("parse error: {err}"))),
         };
-        serde_json::to_writer(&mut output, &response)?;
-        output.write_all(b"\n")?;
-        output.flush()?;
+        for message in messages {
+            serde_json::to_writer(&mut output, &message)?;
+            output.write_all(b"\n")?;
+            output.flush()?;
+        }
     }
     Ok(())
 }
@@ -177,60 +179,77 @@ fn handle_daemon_acp_request(
     request: AcpRequest,
     initialized: &mut bool,
     session_id: &mut Option<String>,
-) -> AcpResponse {
+) -> Vec<serde_json::Value> {
     if request.jsonrpc != "2.0" {
-        return acp_error(request.id, -32600, "jsonrpc must be 2.0");
+        return acp_messages(acp_error(request.id, -32600, "jsonrpc must be 2.0"));
     }
 
     match request.method.as_str() {
         "initialize" => {
             *initialized = true;
-            acp_ok(request.id, acp_initialize_result("siko", 1))
+            acp_messages(acp_ok(request.id, acp_initialize_result("siko", 1)))
         }
         "session/new" => {
             if !*initialized {
-                return acp_error(request.id, -32002, "server is not initialized");
+                return acp_messages(acp_error(request.id, -32002, "server is not initialized"));
             }
             let id = "session_1".to_string();
             *session_id = Some(id.clone());
-            acp_ok(request.id, serde_json::json!({ "sessionId": id }))
+            acp_messages(acp_ok(request.id, serde_json::json!({ "sessionId": id })))
         }
         "session/prompt" => {
             if let Err(message) = require_acp_session(*initialized, session_id, &request.params) {
-                return acp_error(request.id, -32001, message);
+                return acp_messages(acp_error(request.id, -32001, message));
             }
+            let active_session_id = session_id.as_deref().unwrap_or("session_1");
             let Some(prompt) = acp_prompt_text(&request.params) else {
-                return acp_error(request.id, -32602, "prompt text is required");
+                return acp_messages(acp_error(request.id, -32602, "prompt text is required"));
             };
             let send_request = daemon_send_request_from_acp(&request.params, prompt);
             match daemon::send_json_to_daemon(debug, send_request) {
-                Ok(value) => acp_ok(
-                    request.id,
-                    serde_json::json!({
-                        "stopReason": "end_turn",
-                        "content": [
-                            { "type": "text", "text": acp_session_prompt_response_text(&value) }
-                        ],
-                        "metadata": {
-                            "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
-                            "status": value.get("status").cloned().unwrap_or(serde_json::Value::Null),
-                            "runningTasks": value.get("running_tasks").cloned().unwrap_or(serde_json::json!(0)),
-                            "queuedTasks": value.get("queued_tasks").cloned().unwrap_or(serde_json::json!(0)),
-                        },
-                    }),
-                ),
-                Err(error) => acp_error(request.id, -32003, error.to_string()),
+                Ok(value) => {
+                    let mut messages = vec![acp_session_update_text(
+                        active_session_id,
+                        acp_session_prompt_response_text(&value),
+                        value.get("task_id").and_then(serde_json::Value::as_str),
+                    )];
+                    messages.extend(acp_messages(acp_ok(
+                        request.id,
+                        serde_json::json!({
+                            "stopReason": "end_turn",
+                            "_meta": {
+                                "siko": {
+                                    "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
+                                    "status": value.get("status").cloned().unwrap_or(serde_json::Value::Null),
+                                    "runningTasks": value.get("running_tasks").cloned().unwrap_or(serde_json::json!(0)),
+                                    "queuedTasks": value.get("queued_tasks").cloned().unwrap_or(serde_json::json!(0)),
+                                }
+                            },
+                        }),
+                    )));
+                    messages
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    let mut messages = vec![acp_session_update_text(
+                        active_session_id,
+                        &format!("Sikong failed to submit this prompt: {message}"),
+                        None,
+                    )];
+                    messages.extend(acp_messages(acp_error(request.id, -32003, message)));
+                    messages
+                }
             }
         }
         "session/cancel" => {
             if let Err(message) = require_acp_session(*initialized, session_id, &request.params) {
-                return acp_error(request.id, -32001, message);
+                return acp_messages(acp_error(request.id, -32001, message));
             }
             match daemon::send_json_to_daemon(
                 debug,
                 serde_json::json!({"kind": "cancel", "id": "acp-cancel"}),
             ) {
-                Ok(value) => acp_ok(
+                Ok(value) => acp_messages(acp_ok(
                     request.id,
                     serde_json::json!({
                         "cancelled": true,
@@ -238,13 +257,13 @@ fn handle_daemon_acp_request(
                             { "type": "text", "text": value.get("text").and_then(serde_json::Value::as_str).unwrap_or_default() }
                         ],
                     }),
-                ),
-                Err(error) => acp_error(request.id, -32003, error.to_string()),
+                )),
+                Err(error) => acp_messages(acp_error(request.id, -32003, error.to_string())),
             }
         }
         "task/list" => {
             if !*initialized {
-                return acp_error(request.id, -32002, "server is not initialized");
+                return acp_messages(acp_error(request.id, -32002, "server is not initialized"));
             }
             match daemon::send_json_to_daemon(
                 debug,
@@ -254,19 +273,19 @@ fn handle_daemon_acp_request(
                     "limit": request.params.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(20),
                 }),
             ) {
-                Ok(value) => acp_ok(
+                Ok(value) => acp_messages(acp_ok(
                     request.id,
                     serde_json::json!({ "tasks": value.get("tasks").cloned().unwrap_or_else(|| serde_json::json!([])) }),
-                ),
-                Err(error) => acp_error(request.id, -32003, error.to_string()),
+                )),
+                Err(error) => acp_messages(acp_error(request.id, -32003, error.to_string())),
             }
         }
         "task/inspect" | "task/events" | "task/artifact" => {
             if !*initialized {
-                return acp_error(request.id, -32002, "server is not initialized");
+                return acp_messages(acp_error(request.id, -32002, "server is not initialized"));
             }
             let Some(task_id) = acp_task_ref(&request.params) else {
-                return acp_error(request.id, -32602, "taskId is required");
+                return acp_messages(acp_error(request.id, -32602, "taskId is required"));
             };
             let kind = match request.method.as_str() {
                 "task/inspect" => "task_inspect",
@@ -283,23 +302,23 @@ fn handle_daemon_acp_request(
                 Ok(value)
                     if value.get("kind").and_then(serde_json::Value::as_str) == Some("error") =>
                 {
-                    acp_error(
+                    acp_messages(acp_error(
                         request.id,
                         -32004,
                         value
                             .get("error")
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or("task request failed"),
-                    )
+                    ))
                 }
-                Ok(value) if request.method == "task/inspect" => acp_ok(
+                Ok(value) if request.method == "task/inspect" => acp_messages(acp_ok(
                     request.id,
                     value
                         .get("view")
                         .cloned()
                         .unwrap_or(serde_json::Value::Null),
-                ),
-                Ok(value) if request.method == "task/events" => acp_ok(
+                )),
+                Ok(value) if request.method == "task/events" => acp_messages(acp_ok(
                     request.id,
                     serde_json::json!({
                         "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
@@ -307,19 +326,19 @@ fn handle_daemon_acp_request(
                         "events": value.get("events").cloned().unwrap_or_else(|| serde_json::json!([])),
                         "cursor": value.get("cursor").cloned().unwrap_or(serde_json::Value::Null),
                     }),
-                ),
-                Ok(value) => acp_ok(
+                )),
+                Ok(value) => acp_messages(acp_ok(
                     request.id,
                     serde_json::json!({
                         "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
                         "status": value.get("status").cloned().unwrap_or(serde_json::Value::Null),
                         "artifact": value.get("artifact").cloned().unwrap_or(serde_json::Value::Null),
                     }),
-                ),
-                Err(error) => acp_error(request.id, -32003, error.to_string()),
+                )),
+                Err(error) => acp_messages(acp_error(request.id, -32003, error.to_string())),
             }
         }
-        _ => acp_error(request.id, -32601, "method not found"),
+        _ => acp_messages(acp_error(request.id, -32601, "method not found")),
     }
 }
 
@@ -478,7 +497,7 @@ fn daemon_send_request_from_acp(params: &serde_json::Value, prompt: String) -> s
         .get("waitMs")
         .or_else(|| params.get("wait_ms"))
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or(300_000);
+        .unwrap_or(0);
     let workspace = params
         .get("workspace")
         .and_then(serde_json::Value::as_str)
@@ -528,6 +547,38 @@ fn acp_session_prompt_response_text(value: &serde_json::Value) -> &str {
         })
         .or_else(|| value.get("text").and_then(serde_json::Value::as_str))
         .unwrap_or_default()
+}
+
+fn acp_messages(response: AcpResponse) -> Vec<serde_json::Value> {
+    if response.id.is_none() {
+        return Vec::new();
+    }
+    vec![serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({}))]
+}
+
+fn acp_session_update_text(
+    session_id: &str,
+    text: &str,
+    task_id: Option<&str>,
+) -> serde_json::Value {
+    let message_id = task_id
+        .map(|task_id| format!("siko_{task_id}"))
+        .unwrap_or_else(|| "siko_message".to_string());
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "messageId": message_id,
+                "content": {
+                    "type": "text",
+                    "text": text,
+                },
+            },
+        },
+    })
 }
 
 fn acp_ok(id: Option<serde_json::Value>, result: serde_json::Value) -> AcpResponse {
@@ -905,17 +956,17 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn acp_send_request_waits_for_completion_by_default() {
+    fn acp_send_request_returns_immediately_by_default() {
         let request = daemon_send_request_from_acp(&json!({}), "hi".to_string());
 
-        assert_eq!(request["wait_ms"], 300_000);
+        assert_eq!(request["wait_ms"], 0);
     }
 
     #[test]
-    fn acp_send_request_allows_explicit_background_mode() {
-        let request = daemon_send_request_from_acp(&json!({"waitMs": 0}), "hi".to_string());
+    fn acp_send_request_allows_explicit_wait_mode() {
+        let request = daemon_send_request_from_acp(&json!({"waitMs": 300_000}), "hi".to_string());
 
-        assert_eq!(request["wait_ms"], 0);
+        assert_eq!(request["wait_ms"], 300_000);
     }
 
     #[test]
