@@ -506,8 +506,9 @@ const SEND_AFTER_HELP: &str = r#"Examples:
 
 Behavior:
   - `send` is the normal daily intake command.
-  - It ensures the daemon is running, creates a durable task, and prints the final artifact when it finishes within --wait-ms.
-  - With --wait-ms 0 it returns after enqueueing; use `siko task inspect <task-id>` or `siko tui` to follow progress.
+  - It ensures the daemon is running, creates a durable task, and returns after enqueueing by default.
+  - Use `siko task inspect <task-id>` or `siko tui` to follow progress.
+  - With a positive --wait-ms it waits up to that many milliseconds and prints the final artifact if the task finishes in time.
   - Writes are allowed by default inside the current file-system workspace. Use --no-allow-write for read-only review.
   - Use --write-scope to narrow writable paths when allowing edits."#;
 
@@ -632,8 +633,8 @@ enum Command {
         #[arg(required = true, trailing_var_arg = true)]
         task: Vec<String>,
 
-        /// Wait time in milliseconds for agent response timeout (default 30000 = 30 sec).
-        #[arg(long, default_value_t = 30_000)]
+        /// Milliseconds to wait for task completion. Default 0 returns after enqueueing.
+        #[arg(long, default_value_t = 0)]
         wait_ms: u64,
 
         /// Print structured JSON output.
@@ -1077,6 +1078,21 @@ mod tests {
                 no_allow_write: true,
                 write_scope,
             }) if task == ["read", "only"] && write_scope.is_empty()
+        ));
+    }
+
+    #[test]
+    fn send_defaults_to_background_enqueue() {
+        let cli = Cli::try_parse_from(["siko", "send", "hello"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Command::Send {
+                task,
+                wait_ms: 0,
+                json: false,
+                ..
+            }) if task == ["hello"]
         ));
     }
 
