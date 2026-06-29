@@ -20,6 +20,10 @@ use tracing::{debug, info, warn};
 
 use super::run::{AgentRunEventSink, AgentRunRequest, AgentRunResponse, CancellationToken};
 
+const AGENT_HOST_CONNECT_ATTEMPTS: usize = 300;
+const AGENT_HOST_CONNECT_INTERVAL: Duration = Duration::from_millis(50);
+const AGENT_HOST_STDERR_TAIL_BYTES: usize = 4096;
+
 #[async_trait]
 pub trait AgentRunScheduler: Send {
     async fn run(
@@ -80,8 +84,19 @@ pub enum ProcessAgentRunSchedulerError {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("failed to spawn agent host: {0}")]
-    Spawn(#[source] std::io::Error),
+    #[error("failed to spawn agent host {command} {args:?}: {source}")]
+    Spawn {
+        command: String,
+        args: Vec<String>,
+        source: std::io::Error,
+    },
+    #[error("failed to create agent host stderr log {path}: {source}")]
+    StderrLog {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Startup(Box<AgentHostStartupFailure>),
     #[error("failed to connect agent host socket {path}: {source}")]
     Connect {
         path: PathBuf,
@@ -111,6 +126,19 @@ pub enum ProcessAgentRunSchedulerError {
     Host(String),
     #[error("agent host run was cancelled")]
     Cancelled,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "agent host did not become ready after launch: command={command} args={args:?} socket={socket_path}; {source}; process_status={status}; stderr_tail={stderr_tail}"
+)]
+pub struct AgentHostStartupFailure {
+    command: String,
+    args: Vec<String>,
+    socket_path: PathBuf,
+    status: String,
+    stderr_tail: String,
+    source: Box<ProcessAgentRunSchedulerError>,
 }
 
 #[derive(Serialize)]
@@ -215,21 +243,55 @@ impl ProcessAgentRunScheduler {
         let mut args = self.args.clone();
         args.push("--socket".to_string());
         args.push(self.socket_path.to_string_lossy().to_string());
+        let stderr_path = self.socket_path.with_extension("stderr.log");
+        let stderr_log = fs::File::create(&stderr_path).map_err(|source| {
+            ProcessAgentRunSchedulerError::StderrLog {
+                path: stderr_path.clone(),
+                source,
+            }
+        })?;
 
-        let child = Command::new(&self.command)
+        let mut child = Command::new(&self.command)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(stderr_log))
             .spawn()
-            .map_err(ProcessAgentRunSchedulerError::Spawn)?;
+            .map_err(|source| ProcessAgentRunSchedulerError::Spawn {
+                command: self.command.clone(),
+                args: args.clone(),
+                source,
+            })?;
         debug!(
             command = %self.command,
             socket = %self.socket_path.display(),
             "spawned agent host"
         );
 
-        let stream = self.connect_socket().await?;
+        let mut early_status = None;
+        let stream = match self
+            .connect_socket(Some(&mut child), &mut early_status)
+            .await
+        {
+            Ok(stream) => stream,
+            Err(source) => {
+                let status = match early_status {
+                    Some(status) => status,
+                    None => stop_unready_child(&mut child).await,
+                };
+                let stderr_tail = read_file_tail(&stderr_path, AGENT_HOST_STDERR_TAIL_BYTES);
+                return Err(ProcessAgentRunSchedulerError::Startup(Box::new(
+                    AgentHostStartupFailure {
+                        command: self.command.clone(),
+                        args,
+                        socket_path: self.socket_path.clone(),
+                        status,
+                        stderr_tail,
+                        source: Box::new(source),
+                    },
+                )));
+            }
+        };
         let (reader, writer) = stream.into_split();
 
         self.child = Some(child);
@@ -238,9 +300,13 @@ impl ProcessAgentRunScheduler {
         Ok(())
     }
 
-    async fn connect_socket(&self) -> Result<UnixStream, ProcessAgentRunSchedulerError> {
+    async fn connect_socket(
+        &self,
+        mut child: Option<&mut Child>,
+        early_status: &mut Option<String>,
+    ) -> Result<UnixStream, ProcessAgentRunSchedulerError> {
         let mut last_error = None;
-        for _ in 0..100 {
+        for _ in 0..AGENT_HOST_CONNECT_ATTEMPTS {
             match UnixStream::connect(&self.socket_path).await {
                 Ok(stream) => {
                     debug!(socket = %self.socket_path.display(), "connected agent host socket");
@@ -248,7 +314,21 @@ impl ProcessAgentRunScheduler {
                 }
                 Err(error) => {
                     last_error = Some(error);
-                    sleep(Duration::from_millis(20)).await;
+                    if let Some(child) = child.as_deref_mut() {
+                        match child.try_wait() {
+                            Ok(Some(status)) => {
+                                *early_status = Some(status.to_string());
+                                break;
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                *early_status =
+                                    Some(format!("failed to inspect process status: {error}"));
+                                break;
+                            }
+                        }
+                    }
+                    sleep(AGENT_HOST_CONNECT_INTERVAL).await;
                 }
             }
         }
@@ -456,7 +536,9 @@ impl ProcessAgentRunSchedulerError {
             Self::TempDir(_) => "startup",
             Self::Unavailable(_) => "startup",
             Self::RemoveSocket { .. } => "startup",
-            Self::Spawn(_) => "startup",
+            Self::Spawn { .. } => "startup",
+            Self::StderrLog { .. } => "startup",
+            Self::Startup { .. } => "startup",
             Self::Connect { .. } => "startup",
             Self::ConnectTimeout { .. } => "startup",
             Self::CloneSocket(_) => "transport",
@@ -608,6 +690,31 @@ fn merge_streamed_events(mut streamed: Vec<Value>, result_events: Vec<Value>) ->
         }
     }
     streamed
+}
+
+async fn stop_unready_child(child: &mut Child) -> String {
+    match child.try_wait() {
+        Ok(Some(status)) => status.to_string(),
+        Ok(None) => {
+            let _ = child.start_kill();
+            match child.wait().await {
+                Ok(status) => format!("killed after readiness timeout: {status}"),
+                Err(error) => format!("failed to wait after readiness timeout: {error}"),
+            }
+        }
+        Err(error) => format!("failed to inspect process status: {error}"),
+    }
+}
+
+fn read_file_tail(path: &Path, max_bytes: usize) -> String {
+    match fs::read(path) {
+        Ok(bytes) if bytes.is_empty() => "<empty>".to_string(),
+        Ok(bytes) => {
+            let start = bytes.len().saturating_sub(max_bytes);
+            String::from_utf8_lossy(&bytes[start..]).trim().to_string()
+        }
+        Err(error) => format!("<failed to read log: {error}>"),
+    }
 }
 
 async fn remove_socket_if_exists(path: &Path) -> Result<(), ProcessAgentRunSchedulerError> {

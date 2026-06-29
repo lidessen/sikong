@@ -1,5 +1,8 @@
 use serde_json::json;
 use siko::*;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -86,6 +89,33 @@ async fn agent_run_scheduler_reports_structured_startup_failure() {
         event.get("event").and_then(serde_json::Value::as_str) == Some("agent_run_failure")
             && event.get("class").and_then(serde_json::Value::as_str) == Some("startup")
     }));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_run_scheduler_reports_agent_host_stderr_on_startup_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("bad-agent-host.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\necho 'agent host boot failed from test' >&2\nexit 42\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+
+    let mut worker =
+        ProcessAgentRunScheduler::new(script.to_string_lossy().to_string(), Vec::<String>::new());
+
+    let result = worker
+        .run(request("submit_work"), CancellationToken::new())
+        .await;
+
+    assert!(result.terminal_call.is_none());
+    assert!(result.report.contains("agent host failure (startup)"));
+    assert!(result.report.contains("exit status: 42"));
+    assert!(result.report.contains("agent host boot failed from test"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

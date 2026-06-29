@@ -221,7 +221,7 @@ impl TaskStore for FileTaskStore {
 
 fn new_task_id(existing: &BTreeMap<TaskId, AssistantTask>) -> TaskId {
     loop {
-        let id = nanoid!(8);
+        let id = format!("t{}", nanoid!(7));
         if !existing.contains_key(&id) {
             return id;
         }
@@ -333,6 +333,10 @@ mod tests {
         let id = store.create_task("short id".to_string());
 
         assert!(id.chars().count() == 8, "task id should stay compact: {id}");
+        assert!(
+            id.starts_with(|value: char| value.is_ascii_alphabetic()),
+            "task id should be safe as a CLI positional argument: {id}"
+        );
         let task = store.get_task(&id).expect("task should exist");
         assert!(task.created_at_ms > 0);
         assert!(store.get_task(&id).is_some());
