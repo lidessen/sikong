@@ -179,6 +179,40 @@ fn top_level_help_exposes_daily_entrypoints() {
 }
 
 #[test]
+fn json_help_includes_configuration_and_subcommand_details() {
+    let (stdout, stderr, code) = run_siko(&["--json", "--help"]);
+
+    eprint!("{}", stderr);
+    assert_eq!(code, 0, "siko --json --help should exit with code 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("json help should be valid JSON");
+    let help = parsed["data"]["help"]
+        .as_str()
+        .expect("json help should include data.help");
+    assert!(help.contains("Daily workflow:"), "help was: {help}");
+    assert!(help.contains("~/.sikong/config.yaml"), "help was: {help}");
+    assert!(help.contains("SIKONG_CONFIG_FILE"), "help was: {help}");
+
+    let (stdout, stderr, code) = run_siko(&["send", "--json", "--help"]);
+
+    eprint!("{}", stderr);
+    assert_eq!(code, 0, "siko send --json --help should exit with code 0");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("send json help should be valid JSON");
+    let help = parsed["data"]["help"]
+        .as_str()
+        .expect("send json help should include data.help");
+    assert!(
+        help.contains("creates a durable task"),
+        "send help was: {help}"
+    );
+    assert!(
+        help.contains("siko send --wait-ms 0"),
+        "send help was: {help}"
+    );
+}
+
+#[test]
 fn send_auto_starts_daemon_and_task_surfaces_read_created_task() {
     let env = TempSikoData::new();
 

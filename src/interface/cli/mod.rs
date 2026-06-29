@@ -89,7 +89,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
             return 0;
         }
         if args_vec.iter().any(|a| a == "--help" || a == "-h") {
-            let help_text = Cli::command().render_help().to_string();
+            let help_text = render_long_help_for_args(&args_vec);
             print_json_data(serde_json::json!({"help": help_text}));
             return 0;
         }
@@ -232,7 +232,7 @@ fn run_cli(cli: Cli) -> i32 {
             command: None,
         })
         | None => {
-            eprintln!("{}", Cli::command().render_help());
+            eprintln!("{}", Cli::command().render_long_help());
             0
         }
         Some(Command::Eval { command }) => {
@@ -432,9 +432,170 @@ fn run_daemon_command(command: Option<DaemonCommand>, json: bool) -> i32 {
     }
 }
 
+fn render_long_help_for_args(args: &[String]) -> String {
+    let mut command = Cli::command();
+    let subcommand_path = args
+        .iter()
+        .filter(|arg| !arg.starts_with('-'))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    render_command_long_help(&mut command, &subcommand_path)
+}
+
+fn render_command_long_help(command: &mut clap::Command, path: &[&str]) -> String {
+    if let Some((name, rest)) = path.split_first()
+        && let Some(subcommand) = command.find_subcommand_mut(name)
+    {
+        return render_command_long_help(subcommand, rest);
+    }
+    command.render_long_help().to_string()
+}
+
+const TOP_LEVEL_AFTER_HELP: &str = r#"Daily workflow:
+  siko setup
+      Interactive first-time setup. Writes ~/.sikong/config.yaml by default.
+  siko send "describe the task"
+      Primary day-to-day entrypoint. Starts the daemon if needed, creates a durable task, and returns the result.
+  siko tui
+      Opens the terminal task board for repeated daily work.
+  siko task inspect <task-id>
+      Replays task history, then follows live events until the task finishes.
+
+ACP/editor workflow:
+  siko acp
+      Runs an ACP JSON-RPC server over stdio. Editor clients should launch this command.
+  siko acp install zed
+      Writes Zed's agent_servers.siko config so Zed can launch `siko acp`.
+
+Configuration:
+  Default data dir: ~/.sikong
+  Default config:   ~/.sikong/config.yaml
+  Override config:  SIKONG_CONFIG_FILE=/path/to/config.yaml
+  Override data:    SIKONG_DATA_DIR=/path/to/data
+
+Minimal config example:
+  version: 1
+  provider: deepseek
+  backend: ai-sdk
+  providers:
+    deepseek:
+      model: deepseek-v4-flash
+      env:
+        DEEPSEEK_API_KEY: "sk-..."
+  assistant:
+    max_parallel_tasks: 2
+
+Provider/backend overrides:
+  SIKONG_PROVIDER=deepseek
+  SIKONG_BACKEND=ai-sdk
+  SIKONG_CONFIG__ASSISTANT__MAX_PARALLEL_TASKS=4
+
+Runtime overrides for development:
+  SIKONG_BUN_COMMAND=/path/to/bun
+  SIKONG_AGENT_HOST_COMMAND=/path/to/siko-agent-host
+  SIKONG_AGENT_HOST_SCRIPT=/path/to/runtime-host.js
+
+Use `siko <command> --help` for command-specific examples."#;
+
+const SEND_AFTER_HELP: &str = r#"Examples:
+  siko send "summarize this repository"
+  siko send --no-allow-write "review the task timeline design"
+  siko send --write-scope 'src/**' --write-scope 'tests/**' "fix the CLI help"
+  siko send --wait-ms 0 "start this in the background"
+  siko send --json "return machine-readable status"
+
+Behavior:
+  - `send` is the normal daily intake command.
+  - It ensures the daemon is running, creates a durable task, and prints the final artifact when it finishes within --wait-ms.
+  - With --wait-ms 0 it returns after enqueueing; use `siko task inspect <task-id>` or `siko tui` to follow progress.
+  - Writes are allowed by default inside the current file-system workspace. Use --no-allow-write for read-only review.
+  - Use --write-scope to narrow writable paths when allowing edits."#;
+
+const TASK_AFTER_HELP: &str = r#"Task commands:
+  siko task list
+      Show recent durable tasks and statuses.
+  siko task inspect <task-id>
+      Replay history, then follow live task and agent events until terminal status.
+  siko task inspect <task-id> --no-follow
+      Replay current history once and exit.
+  siko task show <task-id>
+      Show final artifact/result when available.
+  siko task logs <task-id> --full
+      Show the full persisted task record.
+  siko task events <task-id> --json
+      Show raw task/agent events for UI or debugging.
+
+Task ids:
+  Short ids from `siko task list` are accepted directly.
+  Long legacy ids may be referenced by any unique prefix."#;
+
+const ACP_AFTER_HELP: &str = r#"ACP usage:
+  siko acp
+      Serve ACP JSON-RPC over stdio. This is the command editor clients launch.
+      It uses the daemon as the runtime owner and starts it if needed.
+
+Editor setup:
+  siko acp install zed
+      Register Sikong as a Zed custom agent server.
+  siko acp install zed --dry-run
+      Print the merged Zed settings without writing.
+  siko acp install zed --settings-path /path/to/settings.json --command /path/to/siko
+      Install with explicit paths.
+
+Default Zed settings path:
+  macOS/Linux: ~/.config/zed/settings.json
+  Windows:     %APPDATA%/Zed/settings.json"#;
+
+const SETUP_AFTER_HELP: &str = r#"Setup writes Sikong's config file and can store provider env values.
+
+Default config path:
+  ~/.sikong/config.yaml
+
+Override paths:
+  SIKONG_CONFIG_FILE=/path/to/config.yaml
+  SIKONG_DATA_DIR=/path/to/data
+
+Supported provider/backend shapes:
+  provider: deepseek | kimi | claude | codex | cursor
+  backend:  ai-sdk | claude-code | codex | cursor
+
+API key environment variables:
+  deepseek: DEEPSEEK_API_KEY
+  kimi:     KIMI_CODE_API_KEY
+  claude/codex/cursor: use the local CLI login/subscription for that backend.
+
+Manual minimal config:
+  version: 1
+  provider: deepseek
+  backend: ai-sdk
+  providers:
+    deepseek:
+      model: deepseek-v4-flash
+      env:
+        DEEPSEEK_API_KEY: "sk-..."
+  assistant:
+    max_parallel_tasks: 2"#;
+
+const DAEMON_AFTER_HELP: &str = r#"Daemon behavior:
+  siko daemon start
+      Start the daemon in the foreground. Usually not needed; `siko send`, `siko tui`, and `siko acp` ensure it is running.
+  siko daemon status
+      Check the daemon socket and process readiness.
+  siko daemon stop
+      Stop the current daemon.
+
+Default socket:
+  ~/.sikong/daemon.sock
+
+Related state:
+  ~/.sikong/tasks.json stores durable task records.
+  ~/.sikong/config.yaml stores provider/backend configuration.
+  Set SIKONG_DATA_DIR to move both state and socket paths."#;
+
 #[derive(Debug, Parser)]
 #[command(name = "siko")]
 #[command(about = "Recursive agent engine prototype")]
+#[command(after_long_help = TOP_LEVEL_AFTER_HELP)]
 #[command(version = concat!(
     env!("SIKO_BUILD_VERSION"),
     " (",
@@ -458,12 +619,14 @@ enum Command {
         acp: bool,
     },
     /// Serve ACP JSON-RPC over stdio, using the daemon as the runtime owner.
+    #[command(after_long_help = ACP_AFTER_HELP)]
     Acp {
         #[command(subcommand)]
         command: Option<AcpCommand>,
     },
     /// Send a task through the assistant. This is the primary user-facing command.
     /// Use the assistant layer to understand requests, create tasks, and return results.
+    #[command(after_long_help = SEND_AFTER_HELP)]
     Send {
         /// Task description. Example: "analyze this project", "fix the bug in src/main.rs"
         #[arg(required = true, trailing_var_arg = true)]
@@ -492,6 +655,7 @@ enum Command {
         write_scope: Vec<String>,
     },
     /// Inspect assistant task records.
+    #[command(after_long_help = TASK_AFTER_HELP)]
     Task {
         #[command(subcommand)]
         command: TaskCommand,
@@ -505,6 +669,7 @@ enum Command {
         command: EvalCommand,
     },
     /// Interactive first-time setup: configure provider, backend, and API keys.
+    #[command(after_long_help = SETUP_AFTER_HELP)]
     Setup {
         /// Print structured JSON output.
         #[arg(long)]
@@ -517,6 +682,7 @@ enum Command {
         json: bool,
     },
     /// Manage the persistent daemon for background task processing.
+    #[command(after_long_help = DAEMON_AFTER_HELP)]
     Daemon {
         #[command(subcommand)]
         command: Option<DaemonCommand>,
@@ -610,6 +776,83 @@ mod tests {
             }) if settings_path == Path::new("/tmp/zed-settings.json")
                 && command == Path::new("/tmp/siko")
         ));
+    }
+
+    #[test]
+    fn top_level_help_documents_daily_workflow_and_config() {
+        let help = Cli::command().render_long_help().to_string();
+
+        for expected in [
+            "Daily workflow:",
+            "siko setup",
+            "siko send \"describe the task\"",
+            "siko task inspect <task-id>",
+            "siko acp install zed",
+            "~/.sikong/config.yaml",
+            "SIKONG_CONFIG_FILE",
+            "SIKONG_CONFIG__ASSISTANT__MAX_PARALLEL_TASKS",
+            "DEEPSEEK_API_KEY",
+        ] {
+            assert!(
+                help.contains(expected),
+                "top-level help should contain {expected:?}; got:\n{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_help_documents_daily_usage_without_external_docs() {
+        let mut command = Cli::command();
+
+        let send_help = command
+            .find_subcommand_mut("send")
+            .expect("send subcommand")
+            .render_long_help()
+            .to_string();
+        for expected in [
+            "siko send --no-allow-write",
+            "siko send --wait-ms 0",
+            "--write-scope",
+            "creates a durable task",
+        ] {
+            assert!(
+                send_help.contains(expected),
+                "send help should contain {expected:?}; got:\n{send_help}"
+            );
+        }
+
+        let setup_help = command
+            .find_subcommand_mut("setup")
+            .expect("setup subcommand")
+            .render_long_help()
+            .to_string();
+        for expected in [
+            "Default config path:",
+            "provider: deepseek | kimi | claude | codex | cursor",
+            "backend:  ai-sdk | claude-code | codex | cursor",
+            "Manual minimal config:",
+        ] {
+            assert!(
+                setup_help.contains(expected),
+                "setup help should contain {expected:?}; got:\n{setup_help}"
+            );
+        }
+
+        let acp_help = command
+            .find_subcommand_mut("acp")
+            .expect("acp subcommand")
+            .render_long_help()
+            .to_string();
+        for expected in [
+            "siko acp",
+            "siko acp install zed",
+            "Default Zed settings path:",
+        ] {
+            assert!(
+                acp_help.contains(expected),
+                "acp help should contain {expected:?}; got:\n{acp_help}"
+            );
+        }
     }
 
     #[test]
