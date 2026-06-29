@@ -16,9 +16,9 @@ mkdir -p "$RELEASE_DIR"
 echo "  -> building siko (Rust CLI)..."
 # Build with version tag if provided
 VERSION_FLAG=""
-if [ -n "$GITHUB_REF_NAME" ]; then
+if [ -n "${GITHUB_REF_NAME:-}" ]; then
   VERSION_FLAG="$GITHUB_REF_NAME"
-elif [ -n "$1" ]; then
+elif [ -n "${1:-}" ]; then
   VERSION_FLAG="$1"
 fi
 if [ -n "$VERSION_FLAG" ]; then

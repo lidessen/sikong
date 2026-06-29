@@ -87,6 +87,10 @@ pub enum TaskCommand {
         #[arg(long, default_value_t = 1_000)]
         interval_ms: u64,
 
+        /// Replay the current task history once and exit without following live updates.
+        #[arg(long)]
+        no_follow: bool,
+
         /// Print newline-delimited structured JSON records.
         #[arg(long)]
         json: bool,
@@ -120,8 +124,9 @@ pub fn run_task_command(command: TaskCommand) -> Result<(), Box<dyn std::error::
         TaskCommand::Inspect {
             task_id,
             interval_ms,
+            no_follow,
             json,
-        } => inspect_task_stream(&task_id, interval_ms, json),
+        } => inspect_task_stream(&task_id, interval_ms, no_follow, json),
     }
 }
 
@@ -321,6 +326,7 @@ pub fn print_assistant_logs(
 fn inspect_task_stream(
     task_id: &str,
     interval_ms: u64,
+    no_follow: bool,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let debug = DebugConfig::from_env();
@@ -421,6 +427,9 @@ fn inspect_task_stream(
         io::stdout().flush().ok();
 
         if !task_is_active(&task.status) {
+            return Ok(());
+        }
+        if no_follow {
             return Ok(());
         }
 

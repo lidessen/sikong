@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -12,8 +12,8 @@ use tracing::{Level, error, info};
 use crate::{
     AgentRunRequest, AgentRunResponse, AgentRunScheduler, AssistantTaskEventRecord,
     AssistantTaskStatus, BranchProgressEvent, Budget, CancellationToken, CapabilityProfile, Engine,
-    EngineError, EngineProgressEvent, EngineReport, NodeId, NodePlan, NodePolicy, NodeTemplate,
-    ProblemKey, TaskId, TaskStore, TaskType, WorkSize, Workspaces,
+    EngineError, EngineProgressEvent, EngineReport, NodeId, NodePlan, NodePolicy, NodeStatus,
+    NodeTemplate, ProblemKey, TaskId, TaskStore, TaskType, WorkSize, Workspaces,
 };
 
 type WorkerFactory = dyn Fn() -> Box<dyn AgentRunScheduler + Send> + Send + Sync;
@@ -532,7 +532,18 @@ impl TaskBoard {
             } => {
                 self.running.remove(&task_id);
                 record_engine_report_logs(store, &task_id, root, &report);
+                let terminal_status = report.status;
+                let artifact = report.artifact;
+                let artifact_available = report.artifact_text.is_some();
                 store.apply_task_report(&task_id, root, report);
+                record_task_finished_event(
+                    store,
+                    &task_id,
+                    root,
+                    terminal_status,
+                    artifact,
+                    artifact_available,
+                );
             }
             TaskRunEvent::Failed { task_id, error } => {
                 self.running.remove(&task_id);
@@ -553,6 +564,7 @@ impl TaskBoard {
                         payload,
                     },
                 );
+                record_task_failed_event(store, &task_id, format!("{error:?}"));
             }
             TaskRunEvent::Cancelled { task_id } => {
                 self.running.remove(&task_id);
@@ -588,6 +600,77 @@ fn mark_cancelled(store: &mut impl TaskStore, task_id: &str, message: &str) {
             payload: serde_json::Value::Null,
         },
     );
+}
+
+fn record_task_finished_event(
+    store: &mut impl TaskStore,
+    task_id: &str,
+    root: NodeId,
+    status: NodeStatus,
+    artifact: Option<u64>,
+    artifact_available: bool,
+) {
+    let (kind, message, level) = match status {
+        NodeStatus::Committed => ("task.completed", "task completed", Level::INFO),
+        NodeStatus::WaitingForInfo => (
+            "task.waiting_for_input",
+            "task is waiting for input",
+            Level::INFO,
+        ),
+        NodeStatus::Rejected | NodeStatus::Pruned => ("task.failed", "task failed", Level::ERROR),
+        _ => ("task.finished", "task finished", Level::INFO),
+    };
+    store.record_task_event(
+        task_id,
+        AssistantTaskEventRecord {
+            level,
+            kind: kind.to_string(),
+            source: "task.board".to_string(),
+            message: message.to_string(),
+            node_id: Some(root),
+            operation: None,
+            payload: json!({
+                "root": root,
+                "status": status,
+                "artifact": artifact,
+                "artifact_available": artifact_available,
+                "duration_ms": task_duration_ms(store, task_id),
+            }),
+        },
+    );
+}
+
+fn record_task_failed_event(store: &mut impl TaskStore, task_id: &str, error: String) {
+    store.record_task_event(
+        task_id,
+        AssistantTaskEventRecord {
+            level: Level::ERROR,
+            kind: "task.failed".to_string(),
+            source: "task.board".to_string(),
+            message: "task failed".to_string(),
+            node_id: None,
+            operation: None,
+            payload: json!({
+                "error": error,
+                "duration_ms": task_duration_ms(store, task_id),
+            }),
+        },
+    );
+}
+
+fn task_duration_ms(store: &impl TaskStore, task_id: &str) -> Option<u64> {
+    let created_at_ms = store.get_task(task_id)?.created_at_ms;
+    if created_at_ms == 0 {
+        return None;
+    }
+    Some(now_ms().saturating_sub(created_at_ms))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn record_engine_report_logs(

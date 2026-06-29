@@ -768,6 +768,12 @@ async fn file_task_store_persists_task_status_and_report() {
     assert!(
         task.events
             .iter()
+            .any(|event| event.kind == "task.completed"
+                && event.payload["artifact_available"].is_boolean())
+    );
+    assert!(
+        task.events
+            .iter()
             .any(|event| event.kind == "engine.operation")
     );
     assert!(task.events.iter().any(|event| event.kind == "agent.run"));
@@ -831,6 +837,63 @@ async fn acp_initialize_session_and_prompt_returns_started_task() {
             .unwrap()
             .contains("Task ")
     );
+    assert!(prompt.result.as_ref().unwrap()["metadata"]["taskId"].is_string());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_accepts_zed_style_initialize_and_prompt_blocks() {
+    let store = MemoryTaskStore::new();
+    let session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
+    let mut server = AcpServer::new(store, session);
+
+    let init = server
+        .handle_request(request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "protocolVersion": 1,
+                "clientInfo": { "name": "Zed", "version": "0.0.0-test" },
+            }),
+        ))
+        .await;
+    assert!(init.error.is_none());
+    let init_result = init.result.as_ref().unwrap();
+    assert_eq!(init_result["protocolVersion"], 1);
+    assert_eq!(init_result["agentInfo"]["name"], "siko");
+    assert_eq!(init_result["agentCapabilities"]["loadSession"], false);
+    assert!(init_result["authMethods"].is_array());
+
+    let new_session = server
+        .handle_request(request(
+            2,
+            "session/new",
+            serde_json::json!({
+                "cwd": "/tmp/zed-workspace",
+                "mcpServers": [],
+            }),
+        ))
+        .await;
+    let session_id = new_session.result.as_ref().unwrap()["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let prompt = server
+        .handle_request(request(
+            3,
+            "session/prompt",
+            serde_json::json!({
+                "sessionId": session_id,
+                "prompt": [
+                    { "type": "text", "text": "ship Zed ACP support" },
+                    { "type": "resource_link", "name": "workspace", "uri": "file:///tmp/zed-workspace" }
+                ]
+            }),
+        ))
+        .await;
+
+    assert!(prompt.error.is_none());
+    assert_eq!(prompt.result.as_ref().unwrap()["stopReason"], "end_turn");
     assert!(prompt.result.as_ref().unwrap()["metadata"]["taskId"].is_string());
 }
 
@@ -903,7 +966,29 @@ async fn acp_task_methods_expose_inspection_events_and_artifact() {
             .as_array()
             .unwrap()
             .iter()
+            .any(|event| event["event"]["kind"] == "task.completed")
+    );
+    assert!(
+        inspect_result["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"]["kind"] == "task.created"
+                && event["event"]["payload"]["client"] == "acp")
+    );
+    assert!(
+        inspect_result["events"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|event| event["event"]["kind"] == "agent.run")
+    );
+    assert!(
+        inspect_result["timeline"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["title"] == "task completed" && item["status"] == "completed")
     );
 
     let cursor = inspect_result["cursor"].clone();

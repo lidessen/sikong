@@ -15,6 +15,7 @@ use crate::{
 };
 
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
+const AGENT_NAME: &str = "siko";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AcpRequest {
@@ -51,7 +52,7 @@ pub struct AcpServerConfig {
 impl Default for AcpServerConfig {
     fn default() -> Self {
         Self {
-            agent_name: "siko".to_string(),
+            agent_name: AGENT_NAME.to_string(),
             protocol_version: 1,
         }
     }
@@ -102,16 +103,7 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
                 self.initialized = true;
                 ok(
                     request.id,
-                    json!({
-                        "protocolVersion": self.config.protocol_version,
-                        "agent": { "name": self.config.agent_name },
-                        "capabilities": {
-                            "sessions": true,
-                            "prompt": true,
-                            "cancel": true,
-                            "tasks": true,
-                        },
-                    }),
+                    initialize_result(&self.config.agent_name, self.config.protocol_version),
                 )
             }
             "session/new" => {
@@ -131,7 +123,7 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
                 };
                 let reply = self
                     .session
-                    .handle_task_message(&mut self.store, prompt)
+                    .handle_task_message_with_client(&mut self.store, prompt, "acp")
                     .await;
                 ok(
                     request.id,
@@ -206,6 +198,7 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
                                 "taskId": task.id,
                                 "status": task.status,
                                 "events": view.events,
+                                "timeline": view.timeline,
                                 "cursor": view.cursor,
                             }),
                         )
@@ -283,6 +276,38 @@ fn task_event_cursor(params: &Value) -> TaskEventCursor {
     }
 }
 
+pub(crate) fn initialize_result(agent_name: &str, protocol_version: u32) -> Value {
+    json!({
+        "protocolVersion": protocol_version,
+        "agentInfo": {
+            "name": agent_name,
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+        "agentCapabilities": {
+            "loadSession": false,
+            "promptCapabilities": {
+                "image": false,
+                "audio": false,
+                "embeddedContext": false,
+            },
+            "mcpCapabilities": {
+                "http": false,
+                "sse": false,
+            },
+            "sessionCapabilities": {},
+            "auth": {},
+        },
+        "authMethods": [],
+        "agent": { "name": agent_name },
+        "capabilities": {
+            "sessions": true,
+            "prompt": true,
+            "cancel": true,
+            "tasks": true,
+        },
+    })
+}
+
 pub async fn run_acp_stdio_server<S, L>(
     mut server: AcpServer<S, L>,
     input: impl BufRead,
@@ -309,24 +334,43 @@ where
     Ok(())
 }
 
-fn prompt_text(params: &Value) -> Option<String> {
+pub(crate) fn prompt_text(params: &Value) -> Option<String> {
     if let Some(text) = params.get("prompt").and_then(Value::as_str) {
         return Some(text.to_string());
     }
     params
-        .get("content")
+        .get("prompt")
+        .or_else(|| params.get("content"))
         .and_then(Value::as_array)
-        .and_then(|content| {
-            content.iter().find_map(|part| {
-                if part.get("type").and_then(Value::as_str) == Some("text") {
-                    part.get("text")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string)
-                } else {
-                    None
-                }
-            })
-        })
+        .map(|blocks| prompt_blocks_to_text(blocks))
+        .filter(|text| !text.trim().is_empty())
+}
+
+fn prompt_blocks_to_text(blocks: &[Value]) -> String {
+    blocks
+        .iter()
+        .filter_map(prompt_block_text)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn prompt_block_text(block: &Value) -> Option<String> {
+    match block.get("type").and_then(Value::as_str) {
+        Some("text") => block
+            .get("text")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        Some("resource_link") => {
+            let uri = block.get("uri").and_then(Value::as_str)?;
+            let name = block
+                .get("name")
+                .or_else(|| block.get("title"))
+                .and_then(Value::as_str)
+                .unwrap_or("resource");
+            Some(format!("Referenced {name}: {uri}"))
+        }
+        _ => None,
+    }
 }
 
 fn ok(id: Option<Value>, result: Value) -> AcpResponse {

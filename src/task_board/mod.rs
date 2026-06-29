@@ -16,9 +16,9 @@ pub use board::{
 pub use store::{FileTaskStore, MemoryTaskStore, TaskStore};
 pub use view::{
     AgentEventEntry, AgentEventFilter, TaskArtifactView, TaskEventCursor, TaskInspectView,
-    TaskSummaryView, TaskTimelineRecord, assistant_agent_events, inspect_task_view,
-    legacy_uuid_v7_timestamp_ms, parse_node_operation, resolve_task_ref, sort_tasks_newest_first,
-    task_artifact, task_list_id, task_summary,
+    TaskSummaryView, TaskTimelineItem, TaskTimelineRecord, assistant_agent_events,
+    inspect_task_view, legacy_uuid_v7_timestamp_ms, parse_node_operation, resolve_task_ref,
+    sort_tasks_newest_first, task_artifact, task_list_id, task_summary, task_timeline_items,
 };
 
 pub type TaskId = String;

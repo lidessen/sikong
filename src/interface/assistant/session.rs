@@ -357,6 +357,16 @@ impl<L: AssistantLoop> AssistantSession<L> {
         store: &mut impl TaskStore,
         message: impl Into<String>,
     ) -> SessionReply {
+        self.handle_task_message_with_client(store, message, "cli")
+            .await
+    }
+
+    pub async fn handle_task_message_with_client(
+        &mut self,
+        store: &mut impl TaskStore,
+        message: impl Into<String>,
+        client: impl Into<String>,
+    ) -> SessionReply {
         let message = message.into();
         let request = message.trim().to_string();
         if request.is_empty() {
@@ -378,7 +388,12 @@ impl<L: AssistantLoop> AssistantSession<L> {
 
         self.task_board.drain(store).await;
         let reply = self
-            .create_task_with_source(store, request, TaskCreationSource::DirectIntake)
+            .create_task_with_source(
+                store,
+                request,
+                TaskCreationSource::DirectIntake,
+                client.into(),
+            )
             .await;
         self.record_turn(message, &reply);
         reply
@@ -432,7 +447,12 @@ impl<L: AssistantLoop> AssistantSession<L> {
                         Err(error) => return tool_sequence_error(error),
                     };
                     if let Some(task_id) = self
-                        .create_task_with_source(store, request, TaskCreationSource::AssistantTool)
+                        .create_task_with_source(
+                            store,
+                            request,
+                            TaskCreationSource::AssistantTool,
+                            "assistant",
+                        )
                         .await
                         .task_id
                     {
@@ -554,8 +574,10 @@ impl<L: AssistantLoop> AssistantSession<L> {
         store: &mut impl TaskStore,
         request: String,
         source: TaskCreationSource,
+        client: impl Into<String>,
     ) -> SessionReply {
         let task_id = store.create_task(request.clone());
+        let client = client.into();
         store.record_task_event(
             &task_id,
             AssistantTaskEventRecord {
@@ -567,6 +589,9 @@ impl<L: AssistantLoop> AssistantSession<L> {
                 operation: None,
                 payload: json!({
                     "source": source.payload_source(),
+                    "route": source.route(),
+                    "client": client,
+                    "request_length": request.chars().count(),
                 }),
             },
         );
@@ -649,6 +674,13 @@ impl TaskCreationSource {
     }
 
     fn payload_source(self) -> &'static str {
+        match self {
+            Self::AssistantTool => "assistant_tool",
+            Self::DirectIntake => "direct_intake",
+        }
+    }
+
+    fn route(self) -> &'static str {
         match self {
             Self::AssistantTool => "assistant_tool",
             Self::DirectIntake => "direct_intake",

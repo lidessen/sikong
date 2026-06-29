@@ -3,6 +3,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use serde::Serialize;
 use tracing::error;
 
+pub mod acp;
+pub use acp::AcpCommand;
 pub mod launch;
 pub mod metrics;
 pub mod setup;
@@ -132,11 +134,21 @@ fn run_cli(cli: Cli) -> i32 {
             acp: true,
             command: None,
         })
-        | Some(Command::Acp) => match assistant::run_assistant_acp() {
+        | Some(Command::Acp { command: None }) => match assistant::run_assistant_acp() {
             Ok(()) => 0,
             Err(error) => {
                 error!(%error, "failed to run assistant ACP server");
                 eprintln!("failed to run ACP server: {error}");
+                1
+            }
+        },
+        Some(Command::Acp {
+            command: Some(command),
+        }) => match acp::run_acp_command(command) {
+            Ok(()) => 0,
+            Err(error) => {
+                error!(%error, "failed to run ACP command");
+                eprintln!("failed to run ACP command: {error}");
                 1
             }
         },
@@ -446,7 +458,10 @@ enum Command {
         acp: bool,
     },
     /// Serve ACP JSON-RPC over stdio, using the daemon as the runtime owner.
-    Acp,
+    Acp {
+        #[command(subcommand)]
+        command: Option<AcpCommand>,
+    },
     /// Send a task through the assistant. This is the primary user-facing command.
     /// Use the assistant layer to understand requests, create tasks, and return results.
     Send {
@@ -563,7 +578,38 @@ mod tests {
     #[test]
     fn parses_top_level_acp_command() {
         let cli = Cli::try_parse_from(["siko", "acp"]).unwrap();
-        assert!(matches!(cli.command, Some(Command::Acp)));
+        assert!(matches!(cli.command, Some(Command::Acp { command: None })));
+    }
+
+    #[test]
+    fn parses_acp_install_zed_command() {
+        let cli = Cli::try_parse_from([
+            "siko",
+            "acp",
+            "install",
+            "zed",
+            "--settings-path",
+            "/tmp/zed-settings.json",
+            "--command",
+            "/tmp/siko",
+            "--dry-run",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Acp {
+                command: Some(AcpCommand::Install {
+                    target: acp::AcpInstallCommand::Zed {
+                        settings_path: Some(settings_path),
+                        command: Some(command),
+                        dry_run: true,
+                        json: true,
+                    }
+                })
+            }) if settings_path == Path::new("/tmp/zed-settings.json")
+                && command == Path::new("/tmp/siko")
+        ));
     }
 
     #[test]
@@ -748,6 +794,7 @@ mod tests {
             "task_1",
             "--interval-ms",
             "250",
+            "--no-follow",
             "--json",
         ])
         .unwrap();
@@ -757,6 +804,7 @@ mod tests {
                 command: TaskCommand::Inspect {
                     task_id,
                     interval_ms: 250,
+                    no_follow: true,
                     json: true
                 }
             }) if task_id == "task_1"

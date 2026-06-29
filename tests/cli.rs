@@ -267,29 +267,19 @@ fn send_auto_starts_daemon_and_task_surfaces_read_created_task() {
 #[test]
 fn task_inspect_replays_completed_task_without_following() {
     let env = TempSikoData::new();
-    let store_path = env.path().join("assistant").join("tasks.json");
-    let mut store = FileTaskStore::open(&store_path).expect("open task store");
-    let task_id = store.create_task("completed inspect smoke".to_string());
-    store.record_task_event(
-        &task_id,
-        AssistantTaskEventRecord {
-            level: Level::INFO,
-            kind: "task.smoke".to_string(),
-            source: "cli.test".to_string(),
-            message: "inspect can replay completed records".to_string(),
-            node_id: None,
-            operation: None,
-            payload: serde_json::json!({"surface": "task.inspect"}),
-        },
+    let task_id = create_task_with_status(
+        &env,
+        "completed inspect smoke",
+        AssistantTaskStatus::Completed,
+        "task.smoke",
     );
-    store.set_task_status(&task_id, AssistantTaskStatus::Completed);
-    drop(store);
 
     let inspect = env.run(&[
         "task",
         "inspect",
         &task_id,
         "--json",
+        "--no-follow",
         "--interval-ms",
         "100",
     ]);
@@ -314,6 +304,92 @@ fn task_inspect_replays_completed_task_without_following() {
 }
 
 #[test]
+fn task_inspect_no_follow_replays_active_task_without_blocking() {
+    let env = TempSikoData::new();
+    let task_id = create_task_with_status(
+        &env,
+        "active inspect smoke",
+        AssistantTaskStatus::Running,
+        "task.smoke",
+    );
+
+    let inspect = env.run(&["task", "inspect", &task_id, "--json", "--no-follow"]);
+    let (stdout, stderr, code) = output_parts(inspect);
+    assert_eq!(
+        code, 0,
+        "task inspect --no-follow should exit for active task; stdout={stdout} stderr={stderr}"
+    );
+
+    let records = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("inspect JSONL record"))
+        .collect::<Vec<_>>();
+    assert!(records.iter().any(|record| {
+        record["type"].as_str() == Some("task_status")
+            && record["status"].as_str() == Some("Running")
+    }));
+    assert!(records.iter().any(|record| {
+        record["type"].as_str() == Some("task_event")
+            && record["event"]["kind"].as_str() == Some("task.smoke")
+    }));
+}
+
+#[test]
+fn daemon_startup_recovery_is_observable_through_inspect_without_retrying_task() {
+    let env = TempSikoData::new();
+    let interrupted_id = create_task_with_status(
+        &env,
+        "interrupted before daemon restart",
+        AssistantTaskStatus::Running,
+        "task.smoke",
+    );
+
+    let send = env.run(&[
+        "send",
+        "--wait-ms",
+        "0",
+        "--json",
+        "--no-allow-write",
+        "Sikong CLI smoke task: create a new task after startup recovery.",
+    ]);
+    let (stdout, stderr, code) = output_parts(send);
+    assert_eq!(
+        code, 0,
+        "send should start daemon and create a separate task; stdout={stdout} stderr={stderr}"
+    );
+    let send_json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("send should print JSON");
+    assert_ne!(
+        send_json["task_id"].as_str(),
+        Some(interrupted_id.as_str()),
+        "send should create a new task instead of reviving the interrupted one"
+    );
+
+    let inspect = env.run(&["task", "inspect", &interrupted_id, "--json", "--no-follow"]);
+    let (stdout, stderr, code) = output_parts(inspect);
+    assert_eq!(
+        code, 0,
+        "recovered task should be inspectable; stdout={stdout} stderr={stderr}"
+    );
+
+    let records = stdout
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("inspect JSONL record"))
+        .collect::<Vec<_>>();
+    assert!(records.iter().any(|record| {
+        record["type"].as_str() == Some("task_status")
+            && record["status"].as_str() == Some("Failed")
+    }));
+    assert!(records.iter().any(|record| {
+        record["type"].as_str() == Some("task_event")
+            && record["event"]["kind"].as_str() == Some("task.recovered")
+            && record["event"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("interrupted active task"))
+    }));
+}
+
+#[test]
 fn acp_stdio_initializes_session_through_binary_entrypoint() {
     let env = TempSikoData::new();
     let mut child = env.spawn(&["acp"]);
@@ -321,12 +397,12 @@ fn acp_stdio_initializes_session_through_binary_entrypoint() {
         let stdin = child.stdin.as_mut().expect("child stdin");
         writeln!(
             stdin,
-            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":1,"clientInfo":{{"name":"Zed","version":"0.0.0-test"}}}}}}"#
         )
         .unwrap();
         writeln!(
             stdin,
-            r#"{{"jsonrpc":"2.0","id":2,"method":"session/new","params":{{}}}}"#
+            r#"{{"jsonrpc":"2.0","id":2,"method":"session/new","params":{{"cwd":"/tmp/zed-workspace","mcpServers":[]}}}}"#
         )
         .unwrap();
     }
@@ -343,8 +419,146 @@ fn acp_stdio_initializes_session_through_binary_entrypoint() {
         "missing initialize response: {stdout}"
     );
     assert!(
+        stdout.contains("agentInfo"),
+        "missing ACP v1 agent info: {stdout}"
+    );
+    assert!(
+        stdout.contains("agentCapabilities"),
+        "missing ACP v1 capabilities: {stdout}"
+    );
+    assert!(
         stdout.contains(r#""id":2"#),
         "missing session response: {stdout}"
     );
     assert!(stdout.contains("sessionId"), "missing session id: {stdout}");
+}
+
+#[test]
+fn acp_install_zed_dry_run_prints_settings_without_writing() {
+    let env = TempSikoData::new();
+    let settings_path = env.path().join("zed").join("settings.json");
+    let command_path = env.path().join("bin").join("siko");
+    let settings_arg = settings_path.to_string_lossy().to_string();
+    let command_arg = command_path.to_string_lossy().to_string();
+
+    let install = env.run(&[
+        "acp",
+        "install",
+        "zed",
+        "--settings-path",
+        &settings_arg,
+        "--command",
+        &command_arg,
+        "--dry-run",
+        "--json",
+    ]);
+    let (stdout, stderr, code) = output_parts(install);
+    assert_eq!(
+        code, 0,
+        "acp install zed --dry-run should succeed; stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        !settings_path.exists(),
+        "dry-run must not write Zed settings"
+    );
+    let output: serde_json::Value =
+        serde_json::from_str(&stdout).expect("dry-run should print JSON");
+    assert_eq!(output["status"], "ok");
+    assert_eq!(output["data"]["client"], "zed");
+    assert_eq!(output["data"]["dry_run"], true);
+    assert_eq!(
+        output["data"]["settings"]["agent_servers"]["siko"]["command"],
+        command_arg
+    );
+    assert_eq!(
+        output["data"]["settings"]["agent_servers"]["siko"]["args"],
+        serde_json::json!(["acp"])
+    );
+}
+
+#[test]
+fn acp_install_zed_merges_existing_settings() {
+    let env = TempSikoData::new();
+    let settings_path = env.path().join("zed").join("settings.json");
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings_path,
+        serde_json::json!({
+            "theme": "Ayu Dark",
+            "agent_servers": {
+                "other": {
+                    "type": "custom",
+                    "command": "other-agent"
+                },
+                "siko": {
+                    "env": {
+                        "SIKONG_DATA_DIR": "/tmp/sikong-data"
+                    }
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let command_path = env.path().join("bin").join("siko");
+    let settings_arg = settings_path.to_string_lossy().to_string();
+    let command_arg = command_path.to_string_lossy().to_string();
+
+    let install = env.run(&[
+        "acp",
+        "install",
+        "zed",
+        "--settings-path",
+        &settings_arg,
+        "--command",
+        &command_arg,
+        "--json",
+    ]);
+    let (stdout, stderr, code) = output_parts(install);
+    assert_eq!(
+        code, 0,
+        "acp install zed should succeed; stdout={stdout} stderr={stderr}"
+    );
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&settings_path).expect("read updated Zed settings"),
+    )
+    .expect("updated Zed settings should be JSON");
+    assert_eq!(settings["theme"], "Ayu Dark");
+    assert_eq!(settings["agent_servers"]["other"]["command"], "other-agent");
+    assert_eq!(settings["agent_servers"]["siko"]["type"], "custom");
+    assert_eq!(settings["agent_servers"]["siko"]["command"], command_arg);
+    assert_eq!(
+        settings["agent_servers"]["siko"]["args"],
+        serde_json::json!(["acp"])
+    );
+    assert_eq!(
+        settings["agent_servers"]["siko"]["env"]["SIKONG_DATA_DIR"],
+        "/tmp/sikong-data"
+    );
+}
+
+fn create_task_with_status(
+    env: &TempSikoData,
+    request: &str,
+    status: AssistantTaskStatus,
+    event_kind: &str,
+) -> String {
+    let store_path = env.path().join("assistant").join("tasks.json");
+    let mut store = FileTaskStore::open(&store_path).expect("open task store");
+    let task_id = store.create_task(request.to_string());
+    store.record_task_event(
+        &task_id,
+        AssistantTaskEventRecord {
+            level: Level::INFO,
+            kind: event_kind.to_string(),
+            source: "cli.test".to_string(),
+            message: "inspect can replay stored task records".to_string(),
+            node_id: None,
+            operation: None,
+            payload: serde_json::json!({"surface": "task.inspect"}),
+        },
+    );
+    store.set_task_status(&task_id, status);
+    task_id
 }

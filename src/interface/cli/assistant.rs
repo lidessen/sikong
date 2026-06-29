@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use super::launch;
 use super::task;
+use crate::interface::assistant::{acp_initialize_result, acp_prompt_text};
 use crate::interface::daemon;
 
 /// Assistant command subcommands.
@@ -184,19 +185,7 @@ fn handle_daemon_acp_request(
     match request.method.as_str() {
         "initialize" => {
             *initialized = true;
-            acp_ok(
-                request.id,
-                serde_json::json!({
-                    "protocolVersion": 1,
-                    "agent": { "name": "siko" },
-                    "capabilities": {
-                        "sessions": true,
-                        "prompt": true,
-                        "cancel": true,
-                        "tasks": true,
-                    },
-                }),
-            )
+            acp_ok(request.id, acp_initialize_result("siko", 1))
         }
         "session/new" => {
             if !*initialized {
@@ -220,7 +209,7 @@ fn handle_daemon_acp_request(
                     serde_json::json!({
                         "stopReason": "end_turn",
                         "content": [
-                            { "type": "text", "text": value.get("text").and_then(serde_json::Value::as_str).unwrap_or_default() }
+                            { "type": "text", "text": acp_session_prompt_response_text(&value) }
                         ],
                         "metadata": {
                             "taskId": value.get("task_id").cloned().unwrap_or(serde_json::Value::Null),
@@ -476,26 +465,6 @@ fn require_acp_session(
     Ok(())
 }
 
-fn acp_prompt_text(params: &serde_json::Value) -> Option<String> {
-    if let Some(text) = params.get("prompt").and_then(serde_json::Value::as_str) {
-        return Some(text.to_string());
-    }
-    params
-        .get("content")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|content| {
-            content.iter().find_map(|part| {
-                if part.get("type").and_then(serde_json::Value::as_str) == Some("text") {
-                    part.get("text")
-                        .and_then(serde_json::Value::as_str)
-                        .map(ToString::to_string)
-                } else {
-                    None
-                }
-            })
-        })
-}
-
 fn acp_task_ref(params: &serde_json::Value) -> Option<String> {
     params
         .get("taskId")
@@ -509,7 +478,7 @@ fn daemon_send_request_from_acp(params: &serde_json::Value, prompt: String) -> s
         .get("waitMs")
         .or_else(|| params.get("wait_ms"))
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
+        .unwrap_or(300_000);
     let workspace = params
         .get("workspace")
         .and_then(serde_json::Value::as_str)
@@ -537,12 +506,28 @@ fn daemon_send_request_from_acp(params: &serde_json::Value, prompt: String) -> s
     serde_json::json!({
         "kind": "send",
         "id": "acp-send",
+        "client": "acp",
         "message": prompt,
         "wait_ms": wait_ms,
         "workspace": workspace,
         "allow_write": allow_write,
         "write_scope": write_scope,
     })
+}
+
+fn acp_session_prompt_response_text(value: &serde_json::Value) -> &str {
+    value
+        .get("artifact")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .or_else(|| {
+            value
+                .get("final_artifact")
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.is_empty())
+        })
+        .or_else(|| value.get("text").and_then(serde_json::Value::as_str))
+        .unwrap_or_default()
 }
 
 fn acp_ok(id: Option<serde_json::Value>, result: serde_json::Value) -> AcpResponse {
@@ -912,4 +897,37 @@ fn current_git_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         return Err("git did not report a repository root".into());
     }
     Ok(PathBuf::from(root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn acp_send_request_waits_for_completion_by_default() {
+        let request = daemon_send_request_from_acp(&json!({}), "hi".to_string());
+
+        assert_eq!(request["wait_ms"], 300_000);
+    }
+
+    #[test]
+    fn acp_send_request_allows_explicit_background_mode() {
+        let request = daemon_send_request_from_acp(&json!({"waitMs": 0}), "hi".to_string());
+
+        assert_eq!(request["wait_ms"], 0);
+    }
+
+    #[test]
+    fn acp_prompt_response_prefers_completed_artifact_over_start_text() {
+        let response = json!({
+            "text": "Task abc Running. 1 running, 0 queued.",
+            "artifact": "Hello from the completed task.",
+        });
+
+        assert_eq!(
+            acp_session_prompt_response_text(&response),
+            "Hello from the completed task."
+        );
+    }
 }

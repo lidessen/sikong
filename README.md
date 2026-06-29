@@ -38,6 +38,54 @@ cargo run -- daemon status
 cargo run -- daemon stop
 ```
 
+### Zed ACP
+
+Sikong's first editor ACP target is Zed. Build or install `siko`, then install
+the Zed custom agent configuration:
+
+```bash
+siko acp install zed
+```
+
+The installer writes `agent_servers.siko` in the platform Zed settings file
+(`~/.config/zed/settings.json` on macOS/Linux) and points it at the current
+`siko` binary with `args: ["acp"]`. During local
+development, prefer the exact binary you just built:
+
+```bash
+target/debug/siko acp install zed --command "$(pwd)/target/debug/siko"
+```
+
+Use `--dry-run --json` to preview the merged settings without writing them:
+
+```bash
+siko acp install zed --dry-run --json
+```
+
+The installed settings entry is:
+
+```json
+{
+  "agent_servers": {
+    "siko": {
+      "type": "custom",
+      "command": "/absolute/path/to/siko",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+Smoke-test the same command before opening Zed:
+
+```bash
+siko acp
+```
+
+The process should wait on stdio. Stop it with `Ctrl+C`, then open Zed's agent
+panel and select `siko`.
+
 Release builds:
 
 ```bash

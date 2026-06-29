@@ -54,6 +54,7 @@ pub fn send_via_daemon(
     let request = serde_json::json!({
         "kind": "send",
         "id": "cli-send",
+        "client": "cli",
         "message": message,
         "wait_ms": wait_ms,
         "workspace": workspace.as_daemon_value(),
@@ -231,7 +232,13 @@ pub async fn run_daemon(
                             let mut session = session.lock().await;
                             let mut store = store.lock().await;
                             session.set_task_root(send_config.workspace, send_config.capabilities);
-                            let reply = session.handle_task_message(&mut *store, message).await;
+                            let client = request
+                                .get("client")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("cli");
+                            let reply = session
+                                .handle_task_message_with_client(&mut *store, message, client)
+                                .await;
                             let snapshot = session.drain(&mut *store).await;
                             (reply, snapshot)
                         };
@@ -357,6 +364,7 @@ pub async fn run_daemon(
                                     "task_id": task.id,
                                     "status": task.status,
                                     "events": view.events,
+                                    "timeline": view.timeline,
                                     "cursor": view.cursor,
                                 })
                             }
