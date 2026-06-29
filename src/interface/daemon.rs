@@ -165,6 +165,20 @@ pub async fn run_daemon(
         },
     )));
 
+    {
+        let session = session.clone();
+        let store = store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+                let mut session = session.lock().await;
+                let mut store = store.lock().await;
+                session.drain(&mut *store).await;
+            }
+        });
+    }
+
     // Accept connections concurrently — each connection gets its own tokio task.
     // If a client disconnects mid-request, only that task is cancelled; the
     // daemon keeps accepting new connections.
@@ -238,6 +252,104 @@ pub async fn run_daemon(
                                 .unwrap_or("cli");
                             let reply = session
                                 .handle_task_message_with_client(&mut *store, message, client)
+                                .await;
+                            let snapshot = session.drain(&mut *store).await;
+                            (reply, snapshot)
+                        };
+
+                        if send_config.wait_ms > 0 {
+                            let deadline =
+                                Instant::now() + Duration::from_millis(send_config.wait_ms);
+                            loop {
+                                if snapshot.running_tasks == 0 && snapshot.queued_tasks == 0 {
+                                    break;
+                                }
+                                if Instant::now() >= deadline {
+                                    let mut session = session.lock().await;
+                                    let mut store = store.lock().await;
+                                    snapshot = session.drain(&mut *store).await;
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                let mut session = session.lock().await;
+                                let mut store = store.lock().await;
+                                snapshot = session.drain(&mut *store).await;
+                            }
+                        }
+
+                        let (task_info, persist_error) = {
+                            let store = store.lock().await;
+                            let task_info = reply.task_id.as_deref().and_then(|tid| {
+                                store.get_task(tid).map(|t| {
+                                    (
+                                        tid.to_string(),
+                                        t.status.clone(),
+                                        t.last_report
+                                            .as_ref()
+                                            .and_then(|r| r.artifact_text.clone()),
+                                    )
+                                })
+                            });
+                            let persist_error = store.last_persist_error().map(ToString::to_string);
+                            (task_info, persist_error)
+                        };
+
+                        let resp = if let Some((tid, status, artifact)) = task_info {
+                            serde_json::json!({
+                                "kind": "result",
+                                "id": req_id,
+                                "text": reply.text,
+                                "task_id": tid,
+                                "status": status,
+                                "artifact": artifact,
+                                "running_tasks": snapshot.running_tasks,
+                                "queued_tasks": snapshot.queued_tasks,
+                                "persist_error": persist_error,
+                            })
+                            .to_string()
+                        } else {
+                            serde_json::json!({
+                                "kind": "result",
+                                "id": req_id,
+                                "text": reply.text,
+                                "running_tasks": snapshot.running_tasks,
+                                "queued_tasks": snapshot.queued_tasks,
+                                "persist_error": persist_error,
+                            })
+                            .to_string()
+                        };
+
+                        let _ = reader.get_mut().write_all(resp.as_bytes()).await;
+                        let _ = reader.get_mut().write_all(b"\n").await;
+                    }
+
+                    "assistant_turn" => {
+                        let message = request["message"].as_str().unwrap_or("").to_string();
+                        if message.is_empty() {
+                            let _ = writeresp(&mut reader, &req_id, "error", "message is required")
+                                .await;
+                            continue;
+                        }
+                        let send_config = match daemon_send_config(&debug, &request)
+                            .map_err(|error| error.to_string())
+                        {
+                            Ok(config) => config,
+                            Err(message) => {
+                                let _ = writeresp(&mut reader, &req_id, "error", &message).await;
+                                continue;
+                            }
+                        };
+
+                        let (reply, mut snapshot) = {
+                            let mut session = session.lock().await;
+                            let mut store = store.lock().await;
+                            session.set_task_root(send_config.workspace, send_config.capabilities);
+                            let client = request
+                                .get("client")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("cli");
+                            let reply = session
+                                .handle_message_with_client(&mut *store, message, client)
                                 .await;
                             let snapshot = session.drain(&mut *store).await;
                             (reply, snapshot)

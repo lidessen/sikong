@@ -123,7 +123,7 @@ impl<S: TaskStore, L: AssistantLoop> AcpServer<S, L> {
                 };
                 let reply = self
                     .session
-                    .handle_task_message_with_client(&mut self.store, prompt, "acp")
+                    .handle_message_with_client(&mut self.store, prompt, "acp")
                     .await;
                 ok(
                     request.id,
@@ -281,7 +281,7 @@ pub(crate) fn initialize_result(agent_name: &str, protocol_version: u32) -> Valu
         "protocolVersion": protocol_version,
         "agentInfo": {
             "name": agent_name,
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": env!("SIKO_BUILD_VERSION"),
         },
         "agentCapabilities": {
             "loadSession": false,

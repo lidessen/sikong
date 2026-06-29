@@ -6,6 +6,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use siko::{AssistantTaskEventRecord, AssistantTaskStatus, FileTaskStore, TaskStore};
 use tracing::Level;
@@ -36,15 +37,40 @@ impl TempSikoData {
     }
 
     fn spawn(&self, args: &[&str]) -> std::process::Child {
-        Command::new(&self.binary)
+        self.spawn_with_env(args, &[])
+    }
+
+    fn spawn_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> std::process::Child {
+        let mut command = Command::new(&self.binary);
+        command
             .args(args)
             .env("SIKONG_DATA_DIR", self.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("failed to spawn siko binary")
+            .stderr(Stdio::piped());
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command.spawn().expect("failed to spawn siko binary")
     }
+}
+
+fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Output {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if child.try_wait().expect("poll child process").is_some() {
+            return child.wait_with_output().expect("wait for child process");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let _ = child.kill();
+    let output = child.wait_with_output().expect("wait for killed child");
+    panic!(
+        "siko child process timed out; stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 impl Drop for TempSikoData {
@@ -442,7 +468,7 @@ fn acp_stdio_initializes_session_through_binary_entrypoint() {
     }
     drop(child.stdin.take());
 
-    let output = child.wait_with_output().expect("wait for acp process");
+    let output = wait_with_timeout(child, Duration::from_secs(5));
     let (stdout, stderr, code) = output_parts(output);
     assert_eq!(
         code, 0,
@@ -470,7 +496,8 @@ fn acp_stdio_initializes_session_through_binary_entrypoint() {
 #[test]
 fn acp_stdio_prompt_returns_update_and_stop_reason_without_wait_ms() {
     let env = TempSikoData::new();
-    let mut child = env.spawn(&["acp"]);
+    let mut child =
+        env.spawn_with_env(&["acp"], &[("SIKONG_AGENT_HOST_COMMAND", "/usr/bin/false")]);
     {
         let stdin = child.stdin.as_mut().expect("child stdin");
         writeln!(
@@ -491,7 +518,7 @@ fn acp_stdio_prompt_returns_update_and_stop_reason_without_wait_ms() {
     }
     drop(child.stdin.take());
 
-    let output = child.wait_with_output().expect("wait for acp process");
+    let output = wait_with_timeout(child, Duration::from_secs(5));
     let (stdout, stderr, code) = output_parts(output);
     assert_eq!(
         code, 0,
@@ -507,7 +534,7 @@ fn acp_stdio_prompt_returns_update_and_stop_reason_without_wait_ms() {
                 && message["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
                 && message["params"]["update"]["content"]["text"]
                     .as_str()
-                    .is_some_and(|text| text.contains("Task "))
+                    .is_some_and(|text| text.contains("Assistant turn failed"))
         }),
         "missing session/update message: {stdout}"
     );

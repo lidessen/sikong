@@ -331,6 +331,26 @@ async fn direct_task_message_creates_durable_task_without_assistant_turn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn assistant_turn_records_prompt_client_when_creating_task() {
+    let mut store = MemoryTaskStore::new();
+    let mut session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
+
+    let reply = session
+        .handle_message_with_client(&mut store, "write a concise design", "acp")
+        .await;
+
+    let task_id = reply.task_id.expect("task id");
+    let task = store.get_task(&task_id).expect("task");
+    let created = task
+        .events
+        .iter()
+        .find(|event| event.kind == "task.created")
+        .expect("created event");
+    assert_eq!(created.payload["source"], "assistant_tool");
+    assert_eq!(created.payload["client"], "acp");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assistant_prefers_replayed_task_id_over_model_synthetic_task_id() {
     let mut store = MemoryTaskStore::new();
     let mut session = AssistantSession::new(SyntheticTaskIdAssistantLoop, TestAgentRunScheduler);
@@ -799,7 +819,7 @@ fn file_task_store_records_persist_errors_without_panicking() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acp_initialize_session_and_prompt_returns_started_task() {
+async fn acp_initialize_session_and_prompt_returns_assistant_turn_with_task_metadata() {
     let store = MemoryTaskStore::new();
     let session = AssistantSession::new(TestAssistantLoop, TestAgentRunScheduler);
     let mut server = AcpServer::new(store, session);
@@ -831,11 +851,9 @@ async fn acp_initialize_session_and_prompt_returns_started_task() {
 
     assert!(prompt.error.is_none());
     assert_eq!(prompt.result.as_ref().unwrap()["stopReason"], "end_turn");
-    assert!(
-        prompt.result.as_ref().unwrap()["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Task ")
+    assert_eq!(
+        prompt.result.as_ref().unwrap()["content"][0]["text"],
+        "Creating task."
     );
     assert!(prompt.result.as_ref().unwrap()["metadata"]["taskId"].is_string());
 }
@@ -860,6 +878,10 @@ async fn acp_accepts_zed_style_initialize_and_prompt_blocks() {
     let init_result = init.result.as_ref().unwrap();
     assert_eq!(init_result["protocolVersion"], 1);
     assert_eq!(init_result["agentInfo"]["name"], "siko");
+    assert_eq!(
+        init_result["agentInfo"]["version"],
+        env!("SIKO_BUILD_VERSION")
+    );
     assert_eq!(init_result["agentCapabilities"]["loadSession"], false);
     assert!(init_result["authMethods"].is_array());
 

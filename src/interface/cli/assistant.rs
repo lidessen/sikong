@@ -205,8 +205,8 @@ fn handle_daemon_acp_request(
             let Some(prompt) = acp_prompt_text(&request.params) else {
                 return acp_messages(acp_error(request.id, -32602, "prompt text is required"));
             };
-            let send_request = daemon_send_request_from_acp(&request.params, prompt);
-            match daemon::send_json_to_daemon(debug, send_request) {
+            let turn_request = daemon_assistant_turn_request_from_acp(&request.params, prompt);
+            match daemon::send_json_to_daemon(debug, turn_request) {
                 Ok(value) => {
                     let mut messages = vec![acp_session_update_text(
                         active_session_id,
@@ -492,7 +492,10 @@ fn acp_task_ref(params: &serde_json::Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn daemon_send_request_from_acp(params: &serde_json::Value, prompt: String) -> serde_json::Value {
+fn daemon_assistant_turn_request_from_acp(
+    params: &serde_json::Value,
+    prompt: String,
+) -> serde_json::Value {
     let wait_ms = params
         .get("waitMs")
         .or_else(|| params.get("wait_ms"))
@@ -523,8 +526,8 @@ fn daemon_send_request_from_acp(params: &serde_json::Value, prompt: String) -> s
         write_scope.push("**/*".to_string());
     }
     serde_json::json!({
-        "kind": "send",
-        "id": "acp-send",
+        "kind": "assistant_turn",
+        "id": "acp-assistant-turn",
         "client": "acp",
         "message": prompt,
         "wait_ms": wait_ms,
@@ -956,15 +959,17 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn acp_send_request_returns_immediately_by_default() {
-        let request = daemon_send_request_from_acp(&json!({}), "hi".to_string());
+    fn acp_assistant_turn_request_returns_immediately_by_default() {
+        let request = daemon_assistant_turn_request_from_acp(&json!({}), "hi".to_string());
 
+        assert_eq!(request["kind"], "assistant_turn");
         assert_eq!(request["wait_ms"], 0);
     }
 
     #[test]
-    fn acp_send_request_allows_explicit_wait_mode() {
-        let request = daemon_send_request_from_acp(&json!({"waitMs": 300_000}), "hi".to_string());
+    fn acp_assistant_turn_request_allows_explicit_wait_mode() {
+        let request =
+            daemon_assistant_turn_request_from_acp(&json!({"waitMs": 300_000}), "hi".to_string());
 
         assert_eq!(request["wait_ms"], 300_000);
     }

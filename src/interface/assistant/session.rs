@@ -326,7 +326,17 @@ impl<L: AssistantLoop> AssistantSession<L> {
         store: &mut impl TaskStore,
         message: impl Into<String>,
     ) -> SessionReply {
+        self.handle_message_with_client(store, message, "cli").await
+    }
+
+    pub async fn handle_message_with_client(
+        &mut self,
+        store: &mut impl TaskStore,
+        message: impl Into<String>,
+        client: impl Into<String>,
+    ) -> SessionReply {
         let message = message.into();
+        let client = client.into();
         if self.task_board_enabled {
             self.task_board.drain(store).await;
         }
@@ -347,7 +357,7 @@ impl<L: AssistantLoop> AssistantSession<L> {
                 return reply;
             }
         };
-        let reply = self.apply_turn(store, turn).await;
+        let reply = self.apply_turn(store, turn, client).await;
         self.record_turn(message, &reply);
         reply
     }
@@ -403,6 +413,7 @@ impl<L: AssistantLoop> AssistantSession<L> {
         &mut self,
         store: &mut impl TaskStore,
         turn: AssistantTurn,
+        client: String,
     ) -> SessionReply {
         let mut touched_task_ids = Vec::new();
         let mut saw_terminal = false;
@@ -451,7 +462,7 @@ impl<L: AssistantLoop> AssistantSession<L> {
                             store,
                             request,
                             TaskCreationSource::AssistantTool,
-                            "assistant",
+                            client.clone(),
                         )
                         .await
                         .task_id
